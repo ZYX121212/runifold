@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
             ~/.cargo/registry
@@ -46,7 +46,33 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Test
-        run: cargo test --workspace --all-features --locked
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace --all-features --locked 2>&1 | tee test-output.log
+          test_status="${PIPESTATUS[0]}"
+          set -e
+          if [[ "$test_status" != "0" ]]; then
+            details="$(
+              grep -n -E -C 12 'panicked at|FAILED|error: test failed' test-output.log |
+                tail -n 160 || true
+            )"
+            [[ -n "$details" ]] || details="$(tail -n 160 test-output.log)"
+            details="${details//'%'/'%25'}"
+            details="${details//$'\r'/'%0D'}"
+            details="${details//$'\n'/'%0A'}"
+            echo "::error title=Rust test failure::$details"
+            exit "$test_status"
+          fi
+
+      - name: Upload failed test log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-test-output
+          path: test-output.log
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Check documentation
         env:
@@ -64,7 +90,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Cache Cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
             ~/.cargo/registry
@@ -86,7 +112,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Cache Cargo tools
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
             ~/.cargo/bin
@@ -116,7 +142,7 @@ jobs:
           fetch-depth: 0
 
       - name: Cache cargo-semver-checks
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
             ~/.cargo/bin
