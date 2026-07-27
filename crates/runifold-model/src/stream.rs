@@ -1,0 +1,608 @@
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::{
+    ContentPart, FinishReason, ModelError, ModelErrorKind, ModelRef, ModelResponse, ModelUsage,
+    ModelWarning, ProviderData, ReasoningPart, ToolCall,
+};
+
+/// The type and initial metadata of a streamed content block.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ContentBlockKind {
+    /// Text output.
+    Text,
+    /// Reasoning or thinking output.
+    Reasoning {
+        /// Initial signature or continuation token.
+        signature: Option<String>,
+        /// Whether the provider redacted the reasoning body.
+        redacted: bool,
+    },
+    /// A streamed tool call.
+    ToolCall {
+        /// Provider- or runtime-assigned call identity.
+        id: String,
+        /// Tool name.
+        name: String,
+    },
+    /// A streamed refusal.
+    Refusal,
+}
+
+/// A provider event retained without normalization.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ProviderEvent {
+    /// Provider namespace.
+    pub provider: String,
+    /// Provider event name.
+    pub name: String,
+    /// Original structured payload.
+    pub payload: Value,
+}
+
+/// Canonical events emitted by a streaming model call.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ModelStreamEvent {
+    /// The provider accepted the request and started a response.
+    ResponseStarted {
+        /// Provider response identity.
+        id: Option<String>,
+        /// Actual model serving the request.
+        model: ModelRef,
+    },
+    /// A delta-capable content block started.
+    ContentBlockStarted {
+        /// Stable output ordering index.
+        index: u32,
+        /// Block type and initial metadata.
+        kind: ContentBlockKind,
+    },
+    /// A text delta.
+    TextDelta {
+        /// Target block index.
+        index: u32,
+        /// Appended text.
+        text: String,
+    },
+    /// A reasoning-text delta.
+    ReasoningDelta {
+        /// Target block index.
+        index: u32,
+        /// Appended reasoning text.
+        text: String,
+    },
+    /// A reasoning-signature delta.
+    ReasoningSignatureDelta {
+        /// Target block index.
+        index: u32,
+        /// Appended signature data.
+        signature: String,
+    },
+    /// A raw JSON fragment for tool arguments.
+    ToolArgumentsDelta {
+        /// Target block index.
+        index: u32,
+        /// Appended raw JSON text.
+        json: String,
+    },
+    /// A refusal-text delta.
+    RefusalDelta {
+        /// Target block index.
+        index: u32,
+        /// Appended refusal text.
+        text: String,
+    },
+    /// A delta-capable block completed.
+    ContentBlockCompleted {
+        /// Completed block index.
+        index: u32,
+    },
+    /// A complete non-delta content part arrived.
+    ContentPartCompleted {
+        /// Stable output ordering index.
+        index: u32,
+        /// Completed content.
+        part: ContentPart,
+    },
+    /// A cumulative usage snapshot.
+    UsageUpdated {
+        /// Latest cumulative model usage.
+        usage: ModelUsage,
+    },
+    /// A translation or feature-degradation warning.
+    Warning {
+        /// Visible warning.
+        warning: ModelWarning,
+    },
+    /// A provider heartbeat without model content.
+    Heartbeat,
+    /// An unknown or provider-specific event.
+    Provider {
+        /// Retained provider event.
+        event: ProviderEvent,
+    },
+    /// The response completed.
+    ResponseCompleted {
+        /// Normalized terminal reason.
+        finish_reason: FinishReason,
+        /// Namespaced terminal provider metadata.
+        provider_metadata: BTreeMap<String, Value>,
+    },
+}
+
+#[derive(Debug)]
+enum PartialBlock {
+    Text(String),
+    Reasoning {
+        text: String,
+        signature: Option<String>,
+        redacted: bool,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: String,
+    },
+    Refusal(String),
+}
+
+impl PartialBlock {
+    fn from_kind(kind: ContentBlockKind) -> Self {
+        match kind {
+            ContentBlockKind::Text => Self::Text(String::new()),
+            ContentBlockKind::Reasoning {
+                signature,
+                redacted,
+            } => Self::Reasoning {
+                text: String::new(),
+                signature,
+                redacted,
+            },
+            ContentBlockKind::ToolCall { id, name } => Self::ToolCall {
+                id,
+                name,
+                arguments: String::new(),
+            },
+            ContentBlockKind::Refusal => Self::Refusal(String::new()),
+        }
+    }
+
+    fn complete(self) -> Result<ContentPart, ModelError> {
+        match self {
+            Self::Text(text) => Ok(ContentPart::Text { text }),
+            Self::Reasoning {
+                text,
+                signature,
+                redacted,
+            } => Ok(ContentPart::Reasoning(ReasoningPart {
+                text: (!text.is_empty()).then_some(text),
+                signature,
+                redacted,
+                provider_data: Vec::new(),
+            })),
+            Self::ToolCall {
+                id,
+                name,
+                arguments,
+            } => {
+                let parsed = if arguments.trim().is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_str(&arguments).map_err(|error| {
+                        ModelError::local(
+                            ModelErrorKind::MalformedToolArguments,
+                            format!("tool call {id} returned invalid JSON arguments: {error}"),
+                        )
+                    })?
+                };
+                Ok(ContentPart::ToolCall(ToolCall {
+                    id,
+                    name,
+                    arguments: parsed,
+                    raw_arguments: Some(arguments),
+                    metadata: BTreeMap::new(),
+                }))
+            }
+            Self::Refusal(text) => Ok(ContentPart::Refusal { text }),
+        }
+    }
+}
+
+/// Strictly reconstructs a canonical response from model stream events.
+#[derive(Debug, Default)]
+pub struct ModelStreamAccumulator {
+    started: bool,
+    completed: bool,
+    id: Option<String>,
+    model: Option<ModelRef>,
+    open_blocks: BTreeMap<u32, PartialBlock>,
+    content: BTreeMap<u32, ContentPart>,
+    usage: ModelUsage,
+    warnings: Vec<ModelWarning>,
+    provider_events: Vec<ProviderData>,
+}
+
+impl ModelStreamAccumulator {
+    /// Creates an empty accumulator.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Applies one event and returns the response when the terminal event arrives.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError`] when event order is invalid, a delta targets the
+    /// wrong block type, indices collide, a response completes with open
+    /// blocks, or tool arguments contain malformed JSON.
+    pub fn push(&mut self, event: ModelStreamEvent) -> Result<Option<ModelResponse>, ModelError> {
+        if self.completed {
+            return Err(state_error("received an event after response completion"));
+        }
+
+        match event {
+            ModelStreamEvent::ResponseStarted { id, model } => self.start(id, model),
+            ModelStreamEvent::ContentBlockStarted { index, kind } => self.start_block(index, kind),
+            ModelStreamEvent::TextDelta { index, text } => {
+                match self.open_block_mut(index)? {
+                    PartialBlock::Text(current) => current.push_str(&text),
+                    _ => return Err(wrong_delta(index, "text")),
+                }
+                Ok(None)
+            }
+            ModelStreamEvent::ReasoningDelta { index, text } => {
+                match self.open_block_mut(index)? {
+                    PartialBlock::Reasoning { text: current, .. } => current.push_str(&text),
+                    _ => return Err(wrong_delta(index, "reasoning")),
+                }
+                Ok(None)
+            }
+            ModelStreamEvent::ReasoningSignatureDelta { index, signature } => {
+                match self.open_block_mut(index)? {
+                    PartialBlock::Reasoning {
+                        signature: current, ..
+                    } => current.get_or_insert_with(String::new).push_str(&signature),
+                    _ => return Err(wrong_delta(index, "reasoning signature")),
+                }
+                Ok(None)
+            }
+            ModelStreamEvent::ToolArgumentsDelta { index, json } => {
+                match self.open_block_mut(index)? {
+                    PartialBlock::ToolCall { arguments, .. } => arguments.push_str(&json),
+                    _ => return Err(wrong_delta(index, "tool arguments")),
+                }
+                Ok(None)
+            }
+            ModelStreamEvent::RefusalDelta { index, text } => {
+                match self.open_block_mut(index)? {
+                    PartialBlock::Refusal(current) => current.push_str(&text),
+                    _ => return Err(wrong_delta(index, "refusal")),
+                }
+                Ok(None)
+            }
+            ModelStreamEvent::ContentBlockCompleted { index } => self.complete_block(index),
+            ModelStreamEvent::ContentPartCompleted { index, part } => {
+                self.complete_part(index, part)
+            }
+            ModelStreamEvent::UsageUpdated { usage } => {
+                self.require_started()?;
+                self.usage = usage;
+                Ok(None)
+            }
+            ModelStreamEvent::Warning { warning } => {
+                self.require_started()?;
+                self.warnings.push(warning);
+                Ok(None)
+            }
+            ModelStreamEvent::Heartbeat => {
+                self.require_started()?;
+                Ok(None)
+            }
+            ModelStreamEvent::Provider { event } => {
+                self.require_started()?;
+                self.provider_events.push(ProviderData {
+                    provider: event.provider,
+                    kind: event.name,
+                    value: event.payload,
+                });
+                Ok(None)
+            }
+            ModelStreamEvent::ResponseCompleted {
+                finish_reason,
+                provider_metadata,
+            } => self.complete(finish_reason, provider_metadata),
+        }
+    }
+
+    fn start(
+        &mut self,
+        id: Option<String>,
+        model: ModelRef,
+    ) -> Result<Option<ModelResponse>, ModelError> {
+        if self.started {
+            return Err(state_error("received more than one response-start event"));
+        }
+        self.started = true;
+        self.id = id;
+        self.model = Some(model);
+        Ok(None)
+    }
+
+    fn start_block(
+        &mut self,
+        index: u32,
+        kind: ContentBlockKind,
+    ) -> Result<Option<ModelResponse>, ModelError> {
+        self.require_started()?;
+        self.require_unused_index(index)?;
+        self.open_blocks
+            .insert(index, PartialBlock::from_kind(kind));
+        Ok(None)
+    }
+
+    fn complete_block(&mut self, index: u32) -> Result<Option<ModelResponse>, ModelError> {
+        self.require_started()?;
+        let block = self
+            .open_blocks
+            .remove(&index)
+            .ok_or_else(|| state_error(format!("content block {index} is not open")))?;
+        self.content.insert(index, block.complete()?);
+        Ok(None)
+    }
+
+    fn complete_part(
+        &mut self,
+        index: u32,
+        part: ContentPart,
+    ) -> Result<Option<ModelResponse>, ModelError> {
+        self.require_started()?;
+        self.require_unused_index(index)?;
+        self.content.insert(index, part);
+        Ok(None)
+    }
+
+    fn complete(
+        &mut self,
+        finish_reason: FinishReason,
+        provider_metadata: BTreeMap<String, Value>,
+    ) -> Result<Option<ModelResponse>, ModelError> {
+        self.require_started()?;
+        if !self.open_blocks.is_empty() {
+            let open = self
+                .open_blocks
+                .keys()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(state_error(format!(
+                "response completed with open content blocks: {open}"
+            )));
+        }
+        self.completed = true;
+        let model = self
+            .model
+            .clone()
+            .ok_or_else(|| state_error("response model is missing"))?;
+        Ok(Some(ModelResponse {
+            id: self.id.clone(),
+            model,
+            content: std::mem::take(&mut self.content).into_values().collect(),
+            finish_reason,
+            usage: self.usage,
+            warnings: std::mem::take(&mut self.warnings),
+            provider_metadata,
+            provider_events: std::mem::take(&mut self.provider_events),
+        }))
+    }
+
+    fn require_started(&self) -> Result<(), ModelError> {
+        if self.started {
+            Ok(())
+        } else {
+            Err(state_error("received content before response start"))
+        }
+    }
+
+    fn require_unused_index(&self, index: u32) -> Result<(), ModelError> {
+        if self.open_blocks.contains_key(&index) || self.content.contains_key(&index) {
+            Err(state_error(format!(
+                "content block index {index} was already used"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn open_block_mut(&mut self, index: u32) -> Result<&mut PartialBlock, ModelError> {
+        self.require_started()?;
+        self.open_blocks
+            .get_mut(&index)
+            .ok_or_else(|| state_error(format!("content block {index} is not open")))
+    }
+}
+
+fn wrong_delta(index: u32, delta: &str) -> ModelError {
+    state_error(format!(
+        "{delta} delta does not match content block {index}"
+    ))
+}
+
+fn state_error(message: impl Into<String>) -> ModelError {
+    ModelError::local(ModelErrorKind::StreamState, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{ContentBlockKind, ModelStreamAccumulator, ModelStreamEvent, ProviderEvent};
+    use crate::{
+        ContentPart, FinishReason, ModelErrorKind, ModelRef, ModelUsage, ModelWarning, ToolCall,
+    };
+
+    fn started() -> ModelStreamEvent {
+        ModelStreamEvent::ResponseStarted {
+            id: Some("response-1".into()),
+            model: ModelRef::new("test", "model"),
+        }
+    }
+
+    fn completed() -> ModelStreamEvent {
+        ModelStreamEvent::ResponseCompleted {
+            finish_reason: FinishReason::Stop,
+            provider_metadata: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn accumulates_ordered_text_and_tool_calls() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        let events = [
+            started(),
+            ModelStreamEvent::ContentBlockStarted {
+                index: 1,
+                kind: ContentBlockKind::ToolCall {
+                    id: "call-1".into(),
+                    name: "search".into(),
+                },
+            },
+            ModelStreamEvent::ToolArgumentsDelta {
+                index: 1,
+                json: "{\"query\":".into(),
+            },
+            ModelStreamEvent::ContentBlockStarted {
+                index: 0,
+                kind: ContentBlockKind::Text,
+            },
+            ModelStreamEvent::TextDelta {
+                index: 0,
+                text: "I will search.".into(),
+            },
+            ModelStreamEvent::ToolArgumentsDelta {
+                index: 1,
+                json: "\"rust\"}".into(),
+            },
+            ModelStreamEvent::ContentBlockCompleted { index: 0 },
+            ModelStreamEvent::ContentBlockCompleted { index: 1 },
+            ModelStreamEvent::UsageUpdated {
+                usage: ModelUsage {
+                    input_tokens: 5,
+                    output_tokens: 3,
+                    ..ModelUsage::default()
+                },
+            },
+            completed(),
+        ];
+
+        let response = events
+            .into_iter()
+            .find_map(|event| accumulator.push(event).unwrap())
+            .unwrap();
+
+        assert_eq!(response.content[0], ContentPart::text("I will search."));
+        assert_eq!(
+            response.content[1],
+            ContentPart::ToolCall(ToolCall {
+                id: "call-1".into(),
+                name: "search".into(),
+                arguments: serde_json::json!({"query": "rust"}),
+                raw_arguments: Some("{\"query\":\"rust\"}".into()),
+                metadata: BTreeMap::new(),
+            })
+        );
+        assert_eq!(response.usage.input_tokens, 5);
+    }
+
+    #[test]
+    fn preserves_provider_events_and_warnings() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        accumulator.push(started()).unwrap();
+        accumulator
+            .push(ModelStreamEvent::Provider {
+                event: ProviderEvent {
+                    provider: "test".into(),
+                    name: "ping".into(),
+                    payload: serde_json::json!({"alive": true}),
+                },
+            })
+            .unwrap();
+        accumulator
+            .push(ModelStreamEvent::Warning {
+                warning: ModelWarning {
+                    code: "emulated".into(),
+                    message: "structured output was emulated".into(),
+                    metadata: BTreeMap::new(),
+                },
+            })
+            .unwrap();
+        let response = accumulator.push(completed()).unwrap().unwrap();
+
+        assert_eq!(response.provider_events.len(), 1);
+        assert_eq!(response.provider_events[0].kind, "ping");
+        assert_eq!(response.warnings.len(), 1);
+    }
+
+    #[test]
+    fn rejects_delta_without_matching_open_block() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        accumulator.push(started()).unwrap();
+
+        let error = accumulator
+            .push(ModelStreamEvent::TextDelta {
+                index: 4,
+                text: "orphan".into(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.kind, ModelErrorKind::StreamState);
+    }
+
+    #[test]
+    fn rejects_completion_with_open_blocks() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        accumulator.push(started()).unwrap();
+        accumulator
+            .push(ModelStreamEvent::ContentBlockStarted {
+                index: 0,
+                kind: ContentBlockKind::Text,
+            })
+            .unwrap();
+
+        let error = accumulator.push(completed()).unwrap_err();
+
+        assert_eq!(error.kind, ModelErrorKind::StreamState);
+    }
+
+    #[test]
+    fn rejects_malformed_tool_arguments() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        accumulator.push(started()).unwrap();
+        accumulator
+            .push(ModelStreamEvent::ContentBlockStarted {
+                index: 0,
+                kind: ContentBlockKind::ToolCall {
+                    id: "bad".into(),
+                    name: "tool".into(),
+                },
+            })
+            .unwrap();
+        accumulator
+            .push(ModelStreamEvent::ToolArgumentsDelta {
+                index: 0,
+                json: "{invalid".into(),
+            })
+            .unwrap();
+
+        let error = accumulator
+            .push(ModelStreamEvent::ContentBlockCompleted { index: 0 })
+            .unwrap_err();
+
+        assert_eq!(error.kind, ModelErrorKind::MalformedToolArguments);
+    }
+}

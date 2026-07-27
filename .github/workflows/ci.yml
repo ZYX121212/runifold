@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-quality-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Rust components
+        run: rustup component add clippy rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check all targets and features
+        run: cargo check --workspace --all-targets --all-features --locked
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --all-features --locked
+
+      - name: Check documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps --locked
+
+      - name: Verify distributable packages
+        run: cargo package --workspace --locked
+
+  msrv:
+    name: MSRV 1.85
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-msrv-1.85-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Rust 1.85
+        run: rustup toolchain install 1.85.0 --profile minimal
+
+      - name: Check declared MSRV
+        run: cargo +1.85.0 check --workspace --all-targets --all-features --locked
+
+  supply-chain:
+    name: Supply-chain policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Cache Cargo tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-security-tools-${{ runner.os }}-audit-0.22.2-deny-0.20.2
+
+      - name: Install audit tools
+        run: |
+          command -v cargo-audit >/dev/null || cargo install cargo-audit --version 0.22.2 --locked
+          command -v cargo-deny >/dev/null || cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Audit RustSec advisories
+        run: cargo audit --deny warnings
+
+      - name: Enforce dependency policy
+        run: cargo deny check advisories licenses sources
+
+  semver:
+    name: Public API compatibility
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+
+      - name: Cache cargo-semver-checks
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-semver-checks-${{ runner.os }}-0.49.0
+
+      - name: Install cargo-semver-checks
+        run: command -v cargo-semver-checks >/dev/null || cargo install cargo-semver-checks --version 0.49.0 --locked
+
+      - name: Compare public APIs with latest release
+        run: scripts/semver-check.sh

@@ -1,0 +1,29 @@
+[package]
+name = "runifold-model"
+description = "Provider-neutral model protocol and streaming primitives for Runifold"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-stream.workspace = true
+futures-core.workspace = true
+futures-timer.workspace = true
+futures-util.workspace = true
+runifold-core.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+futures-executor.workspace = true
+
+[lints]
+workspace = true

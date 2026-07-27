@@ -1,0 +1,79 @@
+[workspace]
+members = [
+    "crates/runifold-agent",
+    "crates/runifold",
+    "crates/runifold-core",
+    "crates/runifold-effect",
+    "crates/runifold-eval-cli",
+    "crates/runifold-model",
+    "crates/runifold-macros",
+    "crates/runifold-mcp",
+    "crates/runifold-observability-otel",
+    "crates/runifold-provider-anthropic",
+    "crates/runifold-provider-gemini",
+    "crates/runifold-provider-ollama",
+    "crates/runifold-provider-openai",
+    "crates/runifold-provider-testkit",
+    "crates/runifold-store-sqlite",
+    "crates/runifold-testkit",
+    "crates/runifold-tool",
+    "crates/runifold-workflow",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/runifold/runifold"
+homepage = "https://github.com/runifold/runifold"
+authors = ["ZYX121212 <2636915543@qq.com>"]
+readme = "README.md"
+publish = ["crates-io"]
+
+[workspace.dependencies]
+async-stream = "0.3"
+event-listener = "5"
+eventsource-stream = "0.2"
+futures-executor = "0.3"
+futures-core = "0.3"
+futures-timer = "3"
+futures-util = "0.3"
+httpdate = "1"
+proc-macro2 = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+quote = "1"
+rusqlite = { version = "0.39.0", default-features = false }
+schemars = "1.2.1"
+runifold-core = { version = "0.1.0", path = "crates/runifold-core" }
+runifold-effect = { version = "0.1.0", path = "crates/runifold-effect" }
+runifold-agent = { version = "0.1.0", path = "crates/runifold-agent" }
+runifold-model = { version = "0.1.0", path = "crates/runifold-model" }
+runifold-macros = { version = "0.1.0", path = "crates/runifold-macros" }
+runifold-provider-anthropic = { version = "0.1.0", path = "crates/runifold-provider-anthropic" }
+runifold-provider-gemini = { version = "0.1.0", path = "crates/runifold-provider-gemini" }
+runifold-provider-ollama = { version = "0.1.0", path = "crates/runifold-provider-ollama" }
+runifold-provider-openai = { version = "0.1.0", path = "crates/runifold-provider-openai" }
+runifold-provider-testkit = { version = "0.1.0", path = "crates/runifold-provider-testkit" }
+runifold-store-sqlite = { version = "0.1.0", path = "crates/runifold-store-sqlite" }
+runifold-testkit = { version = "0.1.0", path = "crates/runifold-testkit" }
+runifold-tool = { version = "0.1.0", path = "crates/runifold-tool" }
+runifold-workflow = { version = "0.1.0", path = "crates/runifold-workflow" }
+secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+syn = { version = "2", features = ["full", "parsing"] }
+url = "2"
+uuid = { version = "1", features = ["serde", "v7"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

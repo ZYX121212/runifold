@@ -1,0 +1,210 @@
+name: Runifold evaluation
+
+on:
+  workflow_call:
+    inputs:
+      dataset:
+        description: JSONL evaluation dataset path
+        required: true
+        type: string
+      dataset-name:
+        description: Stable dataset name
+        required: true
+        type: string
+      dataset-version:
+        description: Immutable dataset version
+        required: true
+        type: string
+      candidate-version:
+        description: Candidate model, prompt, Agent, or application version
+        required: true
+        type: string
+      candidate-command:
+        description: Trusted shell command implementing the Candidate protocol
+        required: true
+        type: string
+      candidate-build-command:
+        description: Optional trusted shell command that builds the Candidate once
+        required: false
+        default: ""
+        type: string
+      samples:
+        description: Independent repetitions per case
+        required: false
+        default: 5
+        type: number
+      seed:
+        description: Deterministic experiment base seed
+        required: false
+        default: 0
+        type: number
+      concurrency:
+        description: Concurrent Candidate processes
+        required: false
+        default: 4
+        type: number
+      min-confidence-lower-bound:
+        description: Optional minimum 95 percent score lower bound
+        required: false
+        default: ""
+        type: string
+      max-flaky-case-rate:
+        description: Maximum flaky case fraction
+        required: false
+        default: "1.0"
+        type: string
+      max-p95-latency-ms:
+        description: Optional maximum p95 Candidate latency
+        required: false
+        default: ""
+        type: string
+      max-total-tokens:
+        description: Optional maximum total input plus output tokens
+        required: false
+        default: ""
+        type: string
+      max-total-cost-usd:
+        description: Optional maximum total Candidate-reported cost
+        required: false
+        default: ""
+        type: string
+      artifact-name:
+        description: Uploaded evaluation artifact name
+        required: false
+        default: runifold-evaluation
+        type: string
+    secrets:
+      candidate-api-key:
+        description: Optional generic Candidate credential
+        required: false
+      openai-api-key:
+        description: Optional OpenAI-compatible credential
+        required: false
+      anthropic-api-key:
+        description: Optional Anthropic credential
+        required: false
+      google-api-key:
+        description: Optional Gemini credential
+        required: false
+      dashscope-api-key:
+        description: Optional Qwen credential
+        required: false
+      ark-api-key:
+        description: Optional Volcengine Ark credential
+        required: false
+    outputs:
+      artifact-name:
+        description: Name of the uploaded JSON, JUnit, and Markdown artifact
+        value: ${{ jobs.evaluate.outputs.artifact-name }}
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      artifact-name: ${{ inputs.artifact-name }}
+    env:
+      RUNIFOLD_EVAL_API_KEY: ${{ secrets.candidate-api-key }}
+      OPENAI_API_KEY: ${{ secrets.openai-api-key }}
+      ANTHROPIC_API_KEY: ${{ secrets.anthropic-api-key }}
+      GOOGLE_API_KEY: ${{ secrets.google-api-key }}
+      DASHSCOPE_API_KEY: ${{ secrets.dashscope-api-key }}
+      ARK_API_KEY: ${{ secrets.ark-api-key }}
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install stable Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Restore evaluation checkpoints
+        id: cache-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .runifold/eval-cache
+          key: runifold-eval-${{ runner.os }}-${{ inputs.candidate-version }}-${{ hashFiles(inputs.dataset) }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            runifold-eval-${{ runner.os }}-${{ inputs.candidate-version }}-${{ hashFiles(inputs.dataset) }}-
+
+      - name: Build evaluation CLI
+        shell: bash
+        run: |
+          mkdir -p artifacts .runifold/eval-cache
+          cargo build --locked --release -p runifold-eval-cli
+
+      - name: Build Candidate
+        if: inputs.candidate-build-command != ''
+        shell: bash
+        env:
+          CANDIDATE_BUILD_COMMAND: ${{ inputs.candidate-build-command }}
+        run: bash -euo pipefail -c "$CANDIDATE_BUILD_COMMAND"
+
+      - name: Run quality and resource gates
+        shell: bash
+        env:
+          CANDIDATE_COMMAND: ${{ inputs.candidate-command }}
+          DATASET: ${{ inputs.dataset }}
+          DATASET_NAME: ${{ inputs.dataset-name }}
+          DATASET_VERSION: ${{ inputs.dataset-version }}
+          CANDIDATE_VERSION: ${{ inputs.candidate-version }}
+          SAMPLES: ${{ inputs.samples }}
+          BASE_SEED: ${{ inputs.seed }}
+          EVAL_CONCURRENCY: ${{ inputs.concurrency }}
+          MIN_CONFIDENCE: ${{ inputs.min-confidence-lower-bound }}
+          MAX_FLAKY: ${{ inputs.max-flaky-case-rate }}
+          MAX_P95_LATENCY: ${{ inputs.max-p95-latency-ms }}
+          MAX_TOTAL_TOKENS: ${{ inputs.max-total-tokens }}
+          MAX_TOTAL_COST: ${{ inputs.max-total-cost-usd }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts .runifold/eval-cache
+          args=(
+            --dataset "$DATASET"
+            --dataset-name "$DATASET_NAME"
+            --dataset-version "$DATASET_VERSION"
+            --candidate-version "$CANDIDATE_VERSION"
+            --samples "$SAMPLES"
+            --seed "$BASE_SEED"
+            --concurrency "$EVAL_CONCURRENCY"
+            --cache-dir .runifold/eval-cache
+            --max-flaky-case-rate "$MAX_FLAKY"
+            --output artifacts/experiment.json
+            --junit artifacts/experiment.xml
+            --markdown artifacts/experiment.md
+          )
+          [[ -n "$MIN_CONFIDENCE" ]] && args+=(--min-confidence-lower-bound "$MIN_CONFIDENCE")
+          [[ -n "$MAX_P95_LATENCY" ]] && args+=(--max-p95-latency-ms "$MAX_P95_LATENCY")
+          [[ -n "$MAX_TOTAL_TOKENS" ]] && args+=(--max-total-tokens "$MAX_TOTAL_TOKENS")
+          [[ -n "$MAX_TOTAL_COST" ]] && args+=(--max-total-cost-usd "$MAX_TOTAL_COST")
+          target/release/runifold-eval experiment "${args[@]}" -- \
+            bash -euo pipefail -c "$CANDIDATE_COMMAND"
+
+      - name: Publish Markdown job summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f artifacts/experiment.md ]]; then
+            cat artifacts/experiment.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Save evaluation checkpoints
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .runifold/eval-cache
+          key: runifold-eval-${{ runner.os }}-${{ inputs.candidate-version }}-${{ hashFiles(inputs.dataset) }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload evaluation reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: artifacts/
+          if-no-files-found: error

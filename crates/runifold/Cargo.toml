@@ -1,0 +1,49 @@
+[package]
+name = "runifold"
+description = "Typed and observable runtime for models, tools, agents, and workflows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+anthropic = ["dep:runifold-provider-anthropic"]
+gemini = ["dep:runifold-provider-gemini"]
+ollama = ["dep:runifold-provider-ollama"]
+openai = ["dep:runifold-provider-openai"]
+otel = ["dep:runifold-observability-otel"]
+mcp = ["dep:runifold-mcp"]
+sqlite = ["dep:runifold-store-sqlite"]
+sqlite-bundled = ["sqlite", "runifold-store-sqlite/bundled"]
+
+[dependencies]
+runifold-agent.workspace = true
+runifold-core.workspace = true
+runifold-effect.workspace = true
+runifold-mcp = { version = "0.1.0", path = "../runifold-mcp", optional = true }
+runifold-model.workspace = true
+runifold-macros.workspace = true
+runifold-observability-otel = { version = "0.1.0", path = "../runifold-observability-otel", optional = true }
+runifold-provider-anthropic = { workspace = true, optional = true }
+runifold-provider-gemini = { workspace = true, optional = true }
+runifold-provider-ollama = { workspace = true, optional = true }
+runifold-provider-openai = { workspace = true, optional = true }
+runifold-store-sqlite = { workspace = true, optional = true }
+runifold-tool.workspace = true
+runifold-workflow.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+anyhow = "1.0.104"
+futures-executor.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

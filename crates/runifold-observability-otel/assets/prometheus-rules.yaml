@@ -1,0 +1,74 @@
+# Assumes the OpenTelemetry Prometheus exporter uses its default name and unit
+# translation. Override these expressions if the exporter disables suffixes.
+groups:
+  - name: runifold-slo-recording
+    interval: 30s
+    rules:
+      - record: runifold:agent_runs:rate5m
+        expr: sum(rate(runifold_agent_operation_duration_seconds_count[5m]))
+      - record: runifold:agent_error_ratio:rate5m
+        expr: sum(rate(runifold_agent_errors_total[5m])) / clamp_min(sum(rate(runifold_agent_operation_duration_seconds_count[5m])), 0.000001)
+      - record: runifold:agent_error_ratio:rate30m
+        expr: sum(rate(runifold_agent_errors_total[30m])) / clamp_min(sum(rate(runifold_agent_operation_duration_seconds_count[30m])), 0.000001)
+      - record: runifold:agent_error_ratio:rate1h
+        expr: sum(rate(runifold_agent_errors_total[1h])) / clamp_min(sum(rate(runifold_agent_operation_duration_seconds_count[1h])), 0.000001)
+      - record: runifold:agent_error_ratio:rate6h
+        expr: sum(rate(runifold_agent_errors_total[6h])) / clamp_min(sum(rate(runifold_agent_operation_duration_seconds_count[6h])), 0.000001)
+      - record: runifold:agent_budget_exhaustion_ratio:rate15m
+        expr: sum(rate(runifold_agent_budget_exhaustions_total[15m])) / clamp_min(sum(rate(runifold_agent_operation_duration_seconds_count[15m])), 0.000001)
+      - record: runifold:agent_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(runifold_agent_operation_duration_seconds_bucket[5m])))
+      - record: runifold:sampling_failure_ratio:rate5m
+        expr: sum(rate(runifold_mcp_sampling_failures_total[5m])) / clamp_min(sum(rate(runifold_mcp_sampling_requests_total[5m])), 0.000001)
+      - record: runifold:sampling_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(runifold_mcp_sampling_duration_seconds_bucket[5m])))
+
+  - name: runifold-slo-alerts
+    rules:
+      - alert: RunifoldAgentErrorBudgetFastBurn
+        expr: runifold:agent_error_ratio:rate5m > 0.144 and runifold:agent_error_ratio:rate1h > 0.144
+        for: 5m
+        labels:
+          severity: critical
+          service: runifold
+        annotations:
+          summary: Runifold Agent error budget is burning rapidly
+          description: The 99% success SLO is burning above 14.4x over both 5m and 1h windows.
+          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md
+      - alert: RunifoldAgentErrorBudgetSlowBurn
+        expr: runifold:agent_error_ratio:rate30m > 0.06 and runifold:agent_error_ratio:rate6h > 0.06
+        for: 30m
+        labels:
+          severity: warning
+          service: runifold
+        annotations:
+          summary: Runifold Agent error budget is burning persistently
+          description: The 99% success SLO is burning above 6x over both 30m and 6h windows.
+          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md
+      - alert: RunifoldAgentP95LatencyHigh
+        expr: runifold:agent_duration_seconds:p95_5m > 30
+        for: 15m
+        labels:
+          severity: warning
+          service: runifold
+        annotations:
+          summary: Runifold Agent P95 latency exceeds 30 seconds
+          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md
+      - alert: RunifoldAgentBudgetExhaustionHigh
+        expr: runifold:agent_budget_exhaustion_ratio:rate15m > 0.02
+        for: 15m
+        labels:
+          severity: warning
+          service: runifold
+        annotations:
+          summary: More than 2% of Agent runs are exhausting their budget
+          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md
+      - alert: RunifoldSamplingFailureRateHigh
+        expr: runifold:sampling_failure_ratio:rate5m > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: runifold
+        annotations:
+          summary: MCP Sampling failure ratio exceeds 5%
+          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md

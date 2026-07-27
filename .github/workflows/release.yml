@@ -1,0 +1,82 @@
+name: GitHub Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Verify and create release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+
+      - name: Reject non-tag manual runs
+        if: github.ref_type != 'tag'
+        run: |
+          echo "Run this workflow from an existing vX.Y.Z tag." >&2
+          exit 1
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-release-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install release tools
+        run: |
+          command -v cargo-audit >/dev/null || cargo install cargo-audit --version 0.22.2 --locked
+          command -v cargo-deny >/dev/null || cargo install cargo-deny --version 0.20.2 --locked
+          command -v cargo-cyclonedx >/dev/null || cargo install cargo-cyclonedx --version 0.5.9 --locked
+
+      - name: Run complete release verification
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: scripts/release-check.sh
+
+      - name: Audit release dependencies
+        run: |
+          cargo audit --deny warnings
+          cargo deny check advisories licenses sources
+
+      - name: Build packages, SBOMs, and checksums
+        run: scripts/build-release-assets.sh
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: runifold-${{ github.ref_name }}
+          path: target/release-assets/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            target/release-assets/crates/*.crate \
+            target/release-assets/sbom/*.json \
+            target/release-assets/SHA256SUMS \
+            --verify-tag \
+            --generate-notes \
+            --title "Runifold $GITHUB_REF_NAME"

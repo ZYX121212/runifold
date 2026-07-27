@@ -1,0 +1,58 @@
+use runifold_core::{BudgetExceeded, CheckpointError, JournalError};
+use runifold_effect::EffectExecutorError;
+use runifold_model::ModelError;
+use runifold_tool::ToolError;
+use thiserror::Error;
+
+use crate::GatewayError;
+
+/// Failure of an agent run.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum AgentError {
+    /// Model invocation failed.
+    #[error("model invocation failed: {0}")]
+    Model(#[from] ModelError),
+    /// Tool execution failed.
+    #[error("tool execution failed: {0}")]
+    Tool(#[from] ToolError),
+    /// A shared run-tree budget was exceeded.
+    #[error("agent budget exceeded: {0}")]
+    Budget(#[from] BudgetExceeded),
+    /// Agent delegation failed.
+    #[error("agent delegation failed: {0}")]
+    Gateway(#[from] GatewayError),
+    /// Structured event recording failed.
+    #[error("agent observability failed: {0}")]
+    Journal(#[from] JournalError),
+    /// Checkpoint persistence or validation failed.
+    #[error("agent checkpoint failed: {0}")]
+    Checkpoint(#[from] CheckpointError),
+    /// Write-ahead effect coordination failed.
+    #[error("agent effect failed: {0}")]
+    Effect(#[from] EffectExecutorError),
+    /// Recovery would silently retry a possibly partial external turn.
+    #[error("checkpoint contains an ambiguous in-flight turn {turn}")]
+    AmbiguousCheckpoint {
+        /// One-based interrupted turn number.
+        turn: u32,
+    },
+    /// Agent configuration is invalid.
+    #[error("invalid agent configuration: {0}")]
+    InvalidConfig(String),
+    /// Model output violated the agent-loop protocol.
+    #[error("agent protocol error: {0}")]
+    Protocol(String),
+    /// The configured local turn bound was reached.
+    #[error("agent exceeded its local maximum of {max_turns} turns")]
+    MaxTurns {
+        /// Configured local turn bound.
+        max_turns: u32,
+    },
+    /// A tool produced output that policy forbids exposing to the model.
+    #[error("tool `{tool}` returned host-only output")]
+    ToolOutputNotVisible {
+        /// Tool name.
+        tool: String,
+    },
+}
