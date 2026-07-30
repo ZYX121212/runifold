@@ -116,3 +116,71 @@ pub struct ModelResponse {
     /// Provider stream events retained without normalization.
     pub provider_events: Vec<ProviderData>,
 }
+
+impl ModelResponse {
+    /// Collects model-visible text in canonical content order.
+    ///
+    /// Reasoning, refusals, Tool calls, citations, and provider-specific
+    /// payloads remain available through [`Self::content`] and are not mixed
+    /// into the returned text.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Consumes the response and collects model-visible text in canonical
+    /// content order.
+    ///
+    /// Use this when the remaining response metadata and provider events are
+    /// no longer needed.
+    #[must_use]
+    pub fn into_text(self) -> String {
+        self.content
+            .into_iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::{FinishReason, ModelResponse, ModelUsage};
+    use crate::{ContentPart, ModelRef};
+    use std::collections::BTreeMap;
+
+    fn response(content: Vec<ContentPart>) -> ModelResponse {
+        ModelResponse {
+            id: Some("response-1".into()),
+            model: ModelRef::new("test", "scripted"),
+            content,
+            finish_reason: FinishReason::Stop,
+            usage: ModelUsage::default(),
+            warnings: Vec::new(),
+            provider_metadata: BTreeMap::new(),
+            provider_events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn text_collects_only_model_visible_text_in_order() {
+        let response = response(vec![
+            ContentPart::text("hello"),
+            ContentPart::Refusal {
+                text: "not included".into(),
+            },
+            ContentPart::text(" world"),
+        ]);
+
+        assert_eq!(response.text(), "hello world");
+        assert_eq!(response.into_text(), "hello world");
+    }
+}

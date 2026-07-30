@@ -12,8 +12,45 @@ use super::{
     ModelStreamAccumulator, NoopObserver, ResumePolicy, Role, RunContext, RunEventKind, StreamExt,
     ToolCall, Usage, emit_agent_event, select,
 };
+use crate::conversation::{
+    AgentConversationError, AgentConversationOutcome, AutomaticConversationSummary,
+    ConversationAppend, ConversationContextPolicy, ConversationId, ConversationStore,
+    ConversationSummaryCommit, ConversationSummaryRequest, MemoryNamespace, SemanticMemoryQuery,
+    is_transient_context, semantic_memory_message, summary_message,
+};
+use runifold_retrieval::RetrievalContext;
 
 impl Agent {
+    /// Runs a user text turn with a default root context.
+    ///
+    /// This is the ergonomic surface for one-off prompts. It grants only
+    /// callables registered on this Agent and applies no hard budget limit.
+    /// Use [`Self::run`] when the caller must provide explicit authority,
+    /// budget, deadline, observability, or run-tree identity.
+    pub fn prompt<'a>(
+        &'a self,
+        input: impl Into<String> + Send + 'a,
+    ) -> AgentFuture<'a, Result<AgentOutcome, AgentError>> {
+        let input = input.into();
+        Box::pin(async move {
+            let run = self.default_run_context();
+            self.run(input, &run).await
+        })
+    }
+
+    /// Runs an ergonomic prompt and returns only model-visible text.
+    ///
+    /// Rich content, usage, warnings, the canonical transcript, and provider
+    /// events are intentionally discarded. Use [`Self::prompt`] when that
+    /// information matters.
+    pub fn prompt_text<'a>(
+        &'a self,
+        input: impl Into<String> + Send + 'a,
+    ) -> AgentFuture<'a, Result<String, AgentError>> {
+        let input = input.into();
+        Box::pin(async move { self.prompt(input).await.map(AgentOutcome::into_text) })
+    }
+
     /// Runs a user text turn inside an existing runtime context.
     pub fn run<'a>(
         &'a self,
@@ -23,7 +60,160 @@ impl Agent {
         let input = input.into();
         let state = self.initial_state(input, run.root_run_id().to_string());
         Box::pin(async move {
-            self.execute_state(state, run, None, Arc::new(NoopObserver))
+            self.execute_state(state, run, None, Arc::new(NoopObserver), true)
+                .await
+        })
+    }
+
+    /// Runs and atomically commits one bounded multi-turn conversation.
+    ///
+    /// Transcript messages remain append-only. Execution-journal events stay
+    /// in [`runifold_core::Journal`], summaries remain lossy derived views,
+    /// and semantic memory is injected only as explicitly untrusted context.
+    pub fn run_conversation<'a>(
+        &'a self,
+        input: impl Into<String> + Send + 'a,
+        run: &'a RunContext,
+        store: &'a dyn ConversationStore,
+        conversation_id: ConversationId,
+        namespace: MemoryNamespace,
+        policy: ConversationContextPolicy,
+    ) -> AgentFuture<'a, Result<AgentConversationOutcome, AgentConversationError>> {
+        let input = input.into();
+        Box::pin(async move {
+            store.create(conversation_id, namespace.clone()).await?;
+            let view = store
+                .load_view(
+                    conversation_id,
+                    namespace.clone(),
+                    policy.window,
+                    policy.summary_batch,
+                )
+                .await?;
+            if view.requires_summary() {
+                return Err(AgentConversationError::SummaryRequired {
+                    conversation_id,
+                    buffered_entries: u64::try_from(view.summary_buffer.len())
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(view.summary_backlog),
+                });
+            }
+            let mut transcript = self.instructions.clone();
+            if let Some(summary) = &view.summary {
+                transcript.push(summary_message(summary));
+            }
+            if let Some(limit) = policy.semantic_memory_limit {
+                let query =
+                    SemanticMemoryQuery::new(namespace.clone(), input.clone(), limit.get())?;
+                let search = store
+                    .search_memory_scoped(query, RetrievalContext::for_run(run))
+                    .await?;
+                if search.usage != Usage::default() {
+                    consume_budget(run, search.usage, None).map_err(AgentConversationError::Run)?;
+                }
+                if let Some(message) = semantic_memory_message(&search.memories) {
+                    transcript.push(message);
+                }
+            }
+            transcript.extend(view.window.iter().map(|entry| entry.message.clone()));
+            let persisted_prefix_len = transcript.len();
+            transcript.push(Message::user(input));
+            let state =
+                self.initial_state_from_transcript(transcript, run.root_run_id().to_string());
+            let outcome = self
+                .execute_state(state, run, None, Arc::new(NoopObserver), true)
+                .await
+                .map_err(AgentConversationError::Run)?;
+            let messages = outcome
+                .transcript
+                .iter()
+                .skip(persisted_prefix_len)
+                .filter(|message| !is_transient_context(message))
+                .cloned()
+                .collect();
+            let append = ConversationAppend {
+                conversation_id,
+                expected_version: view.version,
+                messages,
+            };
+            match store.append(namespace, append).await {
+                Ok(conversation_version) => Ok(AgentConversationOutcome {
+                    outcome,
+                    conversation_version,
+                }),
+                Err(source) => Err(AgentConversationError::Commit {
+                    source,
+                    outcome: Box::new(outcome),
+                }),
+            }
+        })
+    }
+
+    /// Summarizes an overflowing prefix before running a conversational turn.
+    ///
+    /// Summary generation uses the supplied [`AutomaticConversationSummary`]
+    /// and the same [`RunContext`], preserving cancellation, deadline, budget,
+    /// and journal behavior. The immutable transcript is never rewritten.
+    pub fn run_conversation_with_summary<'a>(
+        &'a self,
+        input: impl Into<String> + Send + 'a,
+        run: &'a RunContext,
+        store: &'a dyn ConversationStore,
+        conversation_id: ConversationId,
+        namespace: MemoryNamespace,
+        automatic_summary: AutomaticConversationSummary<'a>,
+    ) -> AgentFuture<'a, Result<AgentConversationOutcome, AgentConversationError>> {
+        let input = input.into();
+        Box::pin(async move {
+            let policy = automatic_summary.context;
+            store.create(conversation_id, namespace.clone()).await?;
+            for pass in 0..automatic_summary.max_passes.get() {
+                let view = store
+                    .load_view(
+                        conversation_id,
+                        namespace.clone(),
+                        policy.window,
+                        policy.summary_batch,
+                    )
+                    .await?;
+                let Some(through_sequence) = view.summary_buffer.last().map(|entry| entry.sequence)
+                else {
+                    break;
+                };
+                let summary_backlog = view.summary_backlog;
+                let summary = automatic_summary
+                    .summarizer
+                    .summarize(
+                        ConversationSummaryRequest {
+                            transcript_version: view.version,
+                            previous_summary: view.summary,
+                            entries: view.summary_buffer,
+                        },
+                        run,
+                    )
+                    .await?;
+                store
+                    .commit_summary(
+                        namespace.clone(),
+                        ConversationSummaryCommit {
+                            conversation_id,
+                            expected_version: view.version,
+                            through_sequence,
+                            content: summary,
+                        },
+                    )
+                    .await?;
+                if summary_backlog == 0 {
+                    break;
+                }
+                if pass + 1 == automatic_summary.max_passes.get() {
+                    return Err(AgentConversationError::SummaryPassLimitExceeded {
+                        conversation_id,
+                        remaining_entries: summary_backlog,
+                    });
+                }
+            }
+            self.run_conversation(input, run, store, conversation_id, namespace, policy)
                 .await
         })
     }
@@ -37,7 +227,7 @@ impl Agent {
         let state = self.initial_state(input.into(), run.root_run_id().to_string());
         let observer = BufferedObserver::default();
         let events = observer.events();
-        let execution = Box::pin(self.execute_state(state, run, None, Arc::new(observer)));
+        let execution = Box::pin(self.execute_state(state, run, None, Arc::new(observer), true));
         AgentEventStream::new(execution, events)
     }
 
@@ -53,7 +243,7 @@ impl Agent {
             let mut state = self.initial_state(input, checkpoint.id().to_string());
             state.usage = run.budget().usage();
             let mut cursor = CheckpointCursor::create(checkpoint, run, &state)?;
-            self.execute_state(state, run, Some(&mut cursor), Arc::new(NoopObserver))
+            self.execute_state(state, run, Some(&mut cursor), Arc::new(NoopObserver), true)
                 .await
         })
     }
@@ -83,7 +273,7 @@ impl Agent {
                 validate_exact_usage(state.usage, run.budget().usage())?;
             }
             let mut cursor = CheckpointCursor::loaded(checkpoint, envelope);
-            self.execute_state(state, run, Some(&mut cursor), Arc::new(NoopObserver))
+            self.execute_state(state, run, Some(&mut cursor), Arc::new(NoopObserver), false)
                 .await
         })
     }
@@ -91,6 +281,14 @@ impl Agent {
     fn initial_state(&self, input: String, execution_id: String) -> AgentCheckpointState {
         let mut transcript = self.instructions.clone();
         transcript.push(Message::user(input));
+        self.initial_state_from_transcript(transcript, execution_id)
+    }
+
+    fn initial_state_from_transcript(
+        &self,
+        transcript: Vec<Message>,
+        execution_id: String,
+    ) -> AgentCheckpointState {
         AgentCheckpointState {
             execution_id,
             agent: self.name.clone(),
@@ -108,8 +306,9 @@ impl Agent {
         &self,
         state: AgentCheckpointState,
         run: &RunContext,
-        checkpoint: Option<&mut CheckpointCursor>,
+        mut checkpoint: Option<&mut CheckpointCursor>,
         observer: Arc<dyn AgentObserver>,
+        retrieve_context: bool,
     ) -> Result<AgentOutcome, AgentError> {
         let started = run
             .record(
@@ -124,9 +323,22 @@ impl Agent {
             },
         )
         .await;
-        let result = self
-            .run_loop(state, run, started, checkpoint, observer.as_ref())
-            .await;
+        let result = async {
+            let has_context = !self.context.is_empty() || !self.dynamic_context.is_empty();
+            let state = if retrieve_context && has_context {
+                let mut prepared = self
+                    .prepare_context(state, run, started, observer.as_ref())
+                    .await?;
+                prepared.usage = run.budget().usage();
+                save_checkpoint(&mut checkpoint, &prepared)?;
+                prepared
+            } else {
+                state
+            };
+            self.run_loop(state, run, started, checkpoint, observer.as_ref())
+                .await
+        }
+        .await;
         let terminal = terminal_event(&self.name, &result);
         run.record(terminal, started)?;
         if let Ok(outcome) = &result {

@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use runifold_core::{CancellationToken, InvocationId, RunContext, RunId};
+use runifold_core::{CancellationToken, Instant, InvocationId, RunContext, RunId};
 
 /// Execution scope for one tool invocation.
 #[derive(Clone, Debug)]

@@ -25,7 +25,7 @@ pub(crate) async fn execute_parallel(
     step_started: Option<EventId>,
     checkpoint: &mut Option<&mut WorkflowCheckpointCursor>,
 ) -> Result<Value, WorkflowError> {
-    let pending = prepare_parallel(branches, node, state, run, checkpoint)?;
+    let pending = prepare_parallel(branches, node, state, run, checkpoint).await?;
     let mut futures = FuturesUnordered::new();
     let mut active = BTreeMap::new();
     for (id, branch, reservation) in pending {
@@ -69,7 +69,8 @@ pub(crate) async fn execute_parallel(
                         branch_started,
                         source,
                     },
-                );
+                )
+                .await;
             }
         };
         if let Err(error) = record_success(
@@ -84,7 +85,9 @@ pub(crate) async fn execute_parallel(
                 branch_started,
                 output,
             },
-        ) {
+        )
+        .await
+        {
             cancel_active(run, workflow, &node.id, &active)?;
             return Err(error);
         }
@@ -93,7 +96,7 @@ pub(crate) async fn execute_parallel(
     completed_output(state, &node.id)
 }
 
-fn prepare_parallel<'a>(
+async fn prepare_parallel<'a>(
     branches: &'a [ParallelBranch],
     node: &WorkflowNode,
     state: &mut WorkflowCheckpointState,
@@ -131,7 +134,7 @@ fn prepare_parallel<'a>(
         branches: progress,
     };
     state.usage = run.budget().usage();
-    save_checkpoint(checkpoint, state)?;
+    save_checkpoint(checkpoint, state).await?;
     Ok(pending
         .into_iter()
         .zip(reservations)
@@ -167,7 +170,7 @@ struct BranchSuccess {
     output: Value,
 }
 
-fn record_success(
+async fn record_success(
     workflow: &str,
     node: &WorkflowNode,
     state: &mut WorkflowCheckpointState,
@@ -200,7 +203,7 @@ fn record_success(
         },
     )?;
     state.usage = run.budget().usage();
-    save_checkpoint(checkpoint, state)
+    save_checkpoint(checkpoint, state).await
 }
 
 struct BranchFailure {
@@ -210,7 +213,7 @@ struct BranchFailure {
     source: WorkflowStepError,
 }
 
-fn record_failure(
+async fn record_failure(
     workflow: &str,
     node: &WorkflowNode,
     state: &mut WorkflowCheckpointState,
@@ -246,7 +249,7 @@ fn record_failure(
     )?;
     cancel_active(run, workflow, &node.id, active)?;
     state.usage = run.budget().usage();
-    save_checkpoint(checkpoint, state)?;
+    save_checkpoint(checkpoint, state).await?;
     Err(WorkflowError::ParallelBranch {
         step: node.id.clone(),
         branch: failure.id,

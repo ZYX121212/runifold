@@ -3,13 +3,15 @@ use std::sync::Arc;
 use runifold_core::CapabilitySet;
 use runifold_effect::{EffectExecutor, EffectRecoveryPolicy};
 use runifold_model::{FeaturePolicy, Message, Model, ModelRef, OutputFormat};
+use runifold_retrieval::{Document, RetrievalError, Retriever};
 use runifold_tool::{Tool, ToolRegistrationError};
 use schemars::JsonSchema;
 use thiserror::Error;
 
+use crate::agent::DynamicContext;
 use crate::{
-    Agent, AgentConfig, AgentDescriptor, AgentRegistrationError, AgentRoute, GatewayMiddleware,
-    StructuredAgent, ToolErrorPolicy,
+    Agent, AgentConfig, AgentDescriptor, AgentError, AgentFuture, AgentOutcome,
+    AgentRegistrationError, AgentRoute, GatewayMiddleware, StructuredAgent, ToolErrorPolicy,
 };
 
 /// Failure while assembling an [`Agent`].
@@ -31,6 +33,21 @@ pub enum AgentBuildError {
     /// The configured turn limit cannot execute any model turn.
     #[error("max_turns must be greater than zero")]
     ZeroMaxTurns,
+    /// A static or dynamic context registration was invalid.
+    #[error("agent retrieval configuration failed: {0}")]
+    Retrieval(#[from] RetrievalError),
+}
+
+/// Failure while building and immediately prompting an Agent.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum AgentPromptError {
+    /// Fluent Agent assembly failed before model execution.
+    #[error("failed to build agent: {0}")]
+    Build(#[from] AgentBuildError),
+    /// Canonical Agent execution failed.
+    #[error("agent prompt failed: {0}")]
+    Run(#[from] AgentError),
 }
 
 /// Fluent assembly of one canonical [`Agent`].
@@ -61,6 +78,52 @@ impl AgentBuilder {
         self
     }
 
+    /// Adds one static document as untrusted user-level context.
+    ///
+    /// The document is never promoted to a system instruction. Use
+    /// [`Self::system`] for trusted application policy.
+    #[must_use]
+    pub fn context(self, text: impl Into<String>) -> Self {
+        let id = format!("static-context-{}", self.agent.context.len() + 1);
+        match Document::new(id, text) {
+            Ok(document) => self.context_document(document),
+            Err(error) => self.with_error(error.into()),
+        }
+    }
+
+    /// Adds one validated static context document.
+    #[must_use]
+    pub fn context_document(mut self, document: Document) -> Self {
+        if self.error.is_none() {
+            self.agent.context.push(document);
+        }
+        self
+    }
+
+    /// Adds an owned dynamic context source.
+    #[must_use]
+    pub fn dynamic_context<R>(self, limit: usize, retriever: R) -> Self
+    where
+        R: Retriever + 'static,
+    {
+        self.shared_dynamic_context(limit, Arc::new(retriever))
+    }
+
+    /// Adds a shared, type-erased dynamic context source.
+    #[must_use]
+    pub fn shared_dynamic_context(mut self, limit: usize, retriever: Arc<dyn Retriever>) -> Self {
+        if self.error.is_none() {
+            if limit == 0 {
+                self.error = Some(RetrievalError::ZeroLimit.into());
+            } else {
+                self.agent
+                    .dynamic_context
+                    .push(DynamicContext { limit, retriever });
+            }
+        }
+        self
+    }
+
     /// Registers an owned Tool.
     #[must_use]
     pub fn tool<T>(self, tool: T) -> Self
@@ -77,6 +140,13 @@ impl AgentBuilder {
             if let Err(error) = self.agent.tools.register(tool) {
                 self.error = Some(error.into());
             }
+        }
+        self
+    }
+
+    fn with_error(mut self, error: AgentBuildError) -> Self {
+        if self.error.is_none() {
+            self.error = Some(error);
         }
         self
     }
@@ -198,6 +268,39 @@ impl AgentBuilder {
         Ok(self.agent)
     }
 
+    /// Builds the Agent and runs one ergonomic prompt.
+    ///
+    /// This removes the explicit build step for one-shot usage while retaining
+    /// the complete canonical outcome. Use [`Self::build`] when the Agent will
+    /// be reused or executed with an explicit runtime context.
+    pub fn prompt(
+        self,
+        input: impl Into<String> + Send + 'static,
+    ) -> AgentFuture<'static, Result<AgentOutcome, AgentPromptError>> {
+        let input = input.into();
+        Box::pin(async move {
+            let agent = self.build()?;
+            Ok(agent.prompt(input).await?)
+        })
+    }
+
+    /// Builds the Agent, runs one ergonomic prompt, and returns only
+    /// model-visible text.
+    ///
+    /// This is the shortest path from provider configuration to a text answer.
+    /// Use [`Self::prompt`] when transcript, usage, warnings, and provider
+    /// events must be preserved.
+    pub fn prompt_text(
+        self,
+        input: impl Into<String> + Send + 'static,
+    ) -> AgentFuture<'static, Result<String, AgentPromptError>> {
+        let input = input.into();
+        Box::pin(async move {
+            let agent = self.build()?;
+            Ok(agent.prompt_text(input).await?)
+        })
+    }
+
     /// Builds an Agent whose schema and local decoder are bound to `T`.
     ///
     /// This is the preferred terminal builder operation for structured output
@@ -235,14 +338,14 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     use runifold_core::{CapabilityId, CapabilitySet, EffectClass, RiskLevel};
-    use runifold_model::{ModelRef, OutputFormat};
+    use runifold_model::{ContentPart, FinishReason, ModelRef, ModelStreamEvent, OutputFormat};
     use runifold_testkit::ScriptedModel;
     use runifold_tool::{Tool, ToolContext, ToolDescriptor, ToolError, ToolFuture, ToolOutput};
     use schemars::JsonSchema;
     use serde::Deserialize;
     use serde_json::json;
 
-    use crate::{Agent, AgentBuildError, AgentDescriptor};
+    use crate::{Agent, AgentBuildError, AgentDescriptor, AgentPromptError};
 
     struct TestTool {
         descriptor: ToolDescriptor,
@@ -350,5 +453,51 @@ mod tests {
         assert_eq!(name, "typed_answer");
         assert!(strict);
         assert_eq!(schema["properties"]["value"]["type"], "integer");
+    }
+
+    #[test]
+    fn builder_prompt_text_is_a_single_use_golden_path() {
+        let model = ScriptedModel::new();
+        model.enqueue([
+            ModelStreamEvent::ResponseStarted {
+                id: Some("response-1".into()),
+                model: ModelRef::new("test", "scripted"),
+            },
+            ModelStreamEvent::ContentPartCompleted {
+                index: 0,
+                part: ContentPart::text("done"),
+            },
+            ModelStreamEvent::ResponseCompleted {
+                finish_reason: FinishReason::Stop,
+                provider_metadata: BTreeMap::new(),
+            },
+        ]);
+
+        let text = futures_executor::block_on(
+            Agent::builder("worker", Arc::new(model), ModelRef::new("test", "scripted"))
+                .system("Be precise")
+                .prompt_text("start"),
+        )
+        .unwrap();
+
+        assert_eq!(text, "done");
+    }
+
+    #[test]
+    fn builder_prompt_reports_build_failures_before_model_execution() {
+        let error = futures_executor::block_on(
+            Agent::builder(
+                "",
+                Arc::new(ScriptedModel::new()),
+                ModelRef::new("test", "scripted"),
+            )
+            .prompt("start"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            AgentPromptError::Build(AgentBuildError::EmptyName)
+        ));
     }
 }

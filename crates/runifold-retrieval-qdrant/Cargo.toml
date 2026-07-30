@@ -1,0 +1,31 @@
+[package]
+name = "runifold-retrieval-qdrant"
+description = "Qdrant vector retrieval adapter for Runifold"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+reqwest.workspace = true
+runifold-core.workspace = true
+runifold-retrieval.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+runifold-provider-testkit.workspace = true
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }

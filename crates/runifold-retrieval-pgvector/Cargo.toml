@@ -1,0 +1,29 @@
+[package]
+name = "runifold-retrieval-pgvector"
+description = "PostgreSQL pgvector retrieval adapter for Runifold"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[dependencies]
+futures-timer.workspace = true
+futures-util.workspace = true
+pgvector = { version = "0.4.2", features = ["postgres"] }
+runifold-core.workspace = true
+runifold-retrieval.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { version = "1.53.1", features = ["rt", "sync"] }
+tokio-postgres = { version = "0.7.18", features = ["with-serde_json-1"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }

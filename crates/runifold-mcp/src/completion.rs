@@ -274,7 +274,9 @@ impl CompletionRegistry {
             }
             let mut capabilities = CapabilitySet::new();
             capabilities.grant(descriptor.capability());
-            let child = authority.child(capabilities);
+            let child = authority.child(capabilities).map_err(|error| {
+                CompletionError::new(CompletionErrorKind::CapabilityDenied, error.to_string())
+            })?;
             if child
                 .deadline()
                 .is_some_and(|deadline| deadline <= std::time::Instant::now())

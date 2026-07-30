@@ -1,7 +1,7 @@
 # RFC 0005: Provider identity and wire protocol are orthogonal
 
 - Status: Accepted for initial implementation
-- Scope: `runifold-provider-openai`
+- Scope: `runifold-providers::openai`
 
 ## Summary
 

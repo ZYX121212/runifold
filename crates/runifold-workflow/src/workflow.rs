@@ -1,10 +1,11 @@
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::Arc, time::Duration};
 
 use runifold_agent::Agent;
 use runifold_core::{CapabilitySet, EffectClass, Usage};
 
 use crate::{
-    AgentStep, StepId, WorkflowBuildError, WorkflowCondition, WorkflowStep, WorkflowStepError,
+    AgentStep, StepId, WorkflowBuildError, WorkflowCondition, WorkflowInterruptRequest,
+    WorkflowSignalName, WorkflowStep, WorkflowStepError, WorkflowWait,
 };
 
 pub(crate) enum WorkflowNodeKind {
@@ -16,6 +17,10 @@ pub(crate) enum WorkflowNodeKind {
     },
     Parallel(Arc<[ParallelBranch]>),
     Race(Arc<[ParallelBranch]>),
+    Timer(WorkflowWait),
+    Signal(WorkflowWait),
+    SignalOrTimeout(WorkflowWait),
+    Interrupt(String),
 }
 
 pub(crate) struct WorkflowNode {
@@ -45,7 +50,12 @@ impl WorkflowNode {
                     .await
                     .map(|output| (output, Some(selected)))
             }
-            WorkflowNodeKind::Parallel(_) | WorkflowNodeKind::Race(_) => {
+            WorkflowNodeKind::Parallel(_)
+            | WorkflowNodeKind::Race(_)
+            | WorkflowNodeKind::Timer(_)
+            | WorkflowNodeKind::Signal(_)
+            | WorkflowNodeKind::SignalOrTimeout(_)
+            | WorkflowNodeKind::Interrupt(_) => {
                 unreachable!("concurrent nodes use their dedicated scheduler")
             }
         }
@@ -173,6 +183,84 @@ impl WorkflowBuilder {
             self.error = Some(WorkflowBuildError::InvalidVersion);
         } else {
             self.version = version;
+        }
+        self
+    }
+
+    /// Appends a durable timer that releases its worker lease while waiting.
+    #[must_use]
+    pub fn timer(mut self, id: impl Into<String>, delay: Duration) -> Self {
+        match WorkflowWait::timer(delay) {
+            Ok(wait) => self.push_node(id, CapabilitySet::new(), WorkflowNodeKind::Timer(wait)),
+            Err(_) if self.error.is_none() => {
+                self.error = Some(WorkflowBuildError::InvalidTimerDuration);
+            }
+            Err(_) => {}
+        }
+        self
+    }
+
+    /// Appends a durable external-signal wait targeted by checkpoint identity.
+    #[must_use]
+    pub fn wait_for_signal(mut self, id: impl Into<String>, signal: impl Into<String>) -> Self {
+        match WorkflowSignalName::parse(signal) {
+            Ok(name) => self.push_node(
+                id,
+                CapabilitySet::new(),
+                WorkflowNodeKind::Signal(WorkflowWait::signal(name)),
+            ),
+            Err(_) if self.error.is_none() => {
+                self.error = Some(WorkflowBuildError::InvalidSignalName);
+            }
+            Err(_) => {}
+        }
+        self
+    }
+
+    /// Appends a durable race between an external signal and a timeout.
+    #[must_use]
+    pub fn wait_for_signal_or_timeout(
+        mut self,
+        id: impl Into<String>,
+        signal: impl Into<String>,
+        timeout: Duration,
+    ) -> Self {
+        let wait = WorkflowSignalName::parse(signal)
+            .map_err(|_| WorkflowBuildError::InvalidSignalName)
+            .and_then(|name| {
+                WorkflowWait::signal_or_timeout(name, timeout)
+                    .map_err(|_| WorkflowBuildError::InvalidTimerDuration)
+            });
+        match wait {
+            Ok(wait) => self.push_node(
+                id,
+                CapabilitySet::new(),
+                WorkflowNodeKind::SignalOrTimeout(wait),
+            ),
+            Err(error) if self.error.is_none() => self.error = Some(error),
+            Err(_) => {}
+        }
+        self
+    }
+
+    /// Suspends until a human approves, edits, or rejects the current value.
+    ///
+    /// The request and current proposal are checkpointed before the worker
+    /// releases its lease. Reviewers can inspect the generated interrupt
+    /// identity and submit an idempotent decision through [`crate::WorkflowStore`].
+    #[must_use]
+    pub fn interrupt(mut self, id: impl Into<String>, prompt: impl Into<String>) -> Self {
+        let prompt = prompt.into();
+        match WorkflowInterruptRequest::validate_prompt(&prompt) {
+            Ok(()) => self.push_node(
+                id,
+                CapabilitySet::new(),
+                WorkflowNodeKind::Interrupt(prompt),
+            ),
+            Err(_) if self.error.is_none() => {
+                self.error = Some(WorkflowBuildError::InvalidInterruptPrompt);
+            }
+            Err(_) => {}
         }
         self
     }

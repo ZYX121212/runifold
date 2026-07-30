@@ -1,10 +1,15 @@
-use std::{future::Future, pin::Pin, time::Instant};
+use std::{future::Future, pin::Pin};
 
-use runifold_core::{CancellationToken, EffectRequest, RunContext, RunError, RunId};
+use runifold_core::{CancellationToken, EffectRequest, Instant, RunContext, RunError, RunId};
 use serde_json::Value;
 
 /// Boxed future returned by an effect handler.
+#[cfg(not(target_arch = "wasm32"))]
 pub type EffectFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Boxed effect-handler future on single-threaded WASM.
+#[cfg(target_arch = "wasm32")]
+pub type EffectFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 /// Lifecycle-only context passed to an external-effect handler.
 #[derive(Clone, Debug)]

@@ -1,0 +1,80 @@
+name: Live OpenAI Realtime canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Realtime model used to mint two short-lived client secrets
+        required: true
+        default: gpt-realtime-2.1
+        type: string
+      expiration_seconds:
+        description: Requested client-secret lifetime
+        required: true
+        default: "60"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-openai-realtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  client-secret-rotation:
+    name: Mint and compare ephemeral credentials
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_TERM_COLOR: always
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      RUNIFOLD_LIVE_OPENAI_REALTIME_MODEL: ${{ inputs.model }}
+      RUNIFOLD_LIVE_OPENAI_REALTIME_TTL_SECONDS: ${{ inputs.expiration_seconds }}
+      RUNIFOLD_LIVE_EVIDENCE_PATH: ${{ github.workspace }}/target/reliability-evidence/openai-realtime-live.json
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Require explicit live credential
+        shell: bash
+        run: |
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "::error title=Missing live credential::Configure the OPENAI_API_KEY repository secret before dispatching this workflow."
+            exit 1
+          fi
+
+      - name: Cache Cargo
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-live-openai-realtime-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Execute ignored live canary
+        run: |
+          cargo test -p runifold-providers \
+            --features openai \
+            --test openai_realtime_live \
+            --locked \
+            -- --ignored
+
+      - name: Reject credential-shaped evidence
+        shell: bash
+        run: |
+          evidence="$RUNIFOLD_LIVE_EVIDENCE_PATH"
+          [[ -s "$evidence" ]]
+          if grep -E -q 'ek_[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9_-]{8,}' "$evidence"; then
+            echo "::error title=Credential material in evidence::Live evidence contained a credential-shaped value."
+            exit 1
+          fi
+
+      - name: Upload redacted live evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: openai-realtime-live-${{ github.sha }}
+          path: target/reliability-evidence/openai-realtime-live.json
+          if-no-files-found: error
+          retention-days: 30

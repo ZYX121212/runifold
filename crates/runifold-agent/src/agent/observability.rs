@@ -134,6 +134,29 @@ fn agent_error_kind(error: &AgentError) -> RunErrorKind {
             }
             _ => RunErrorKind::Invocation,
         },
+        AgentError::Retrieval(error) => match error {
+            runifold_retrieval::RetrievalError::EmptyDocumentId
+            | runifold_retrieval::RetrievalError::EmptyDocumentText { .. }
+            | runifold_retrieval::RetrievalError::EmptyQuery
+            | runifold_retrieval::RetrievalError::ZeroLimit
+            | runifold_retrieval::RetrievalError::EmptyEmbedding
+            | runifold_retrieval::RetrievalError::NonFiniteEmbedding { .. }
+            | runifold_retrieval::RetrievalError::EmbeddingCoordinateOutOfRange { .. }
+            | runifold_retrieval::RetrievalError::ZeroNormEmbedding
+            | runifold_retrieval::RetrievalError::DimensionMismatch { .. }
+            | runifold_retrieval::RetrievalError::EmbeddingCountMismatch { .. }
+            | runifold_retrieval::RetrievalError::EmptyEmbeddingInput { .. }
+            | runifold_retrieval::RetrievalError::DuplicateDocument(_) => {
+                RunErrorKind::InvalidInput
+            }
+            runifold_retrieval::RetrievalError::UsageOverflow => RunErrorKind::BudgetExceeded,
+            runifold_retrieval::RetrievalError::CapabilityDenied { .. } => {
+                RunErrorKind::CapabilityDenied
+            }
+            runifold_retrieval::RetrievalError::Cancelled => RunErrorKind::Cancelled,
+            runifold_retrieval::RetrievalError::DeadlineExceeded => RunErrorKind::DeadlineExceeded,
+            _ => RunErrorKind::Invocation,
+        },
         AgentError::Budget(_) | AgentError::MaxTurns { .. } => RunErrorKind::BudgetExceeded,
         AgentError::Gateway(error) => match error.kind {
             GatewayErrorKind::CapabilityDenied

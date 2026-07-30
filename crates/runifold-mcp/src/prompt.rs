@@ -320,7 +320,9 @@ impl PromptRegistry {
             validate_arguments(&descriptor.prompt, &arguments)?;
             let mut capabilities = CapabilitySet::new();
             capabilities.grant(descriptor.capability());
-            let child = authority.child(capabilities);
+            let child = authority.child(capabilities).map_err(|error| {
+                PromptError::new(PromptErrorKind::CapabilityDenied, error.to_string())
+            })?;
             if child
                 .deadline()
                 .is_some_and(|deadline| deadline <= std::time::Instant::now())

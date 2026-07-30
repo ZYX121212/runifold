@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, future::Future, pin::Pin, time::Instant};
+use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 use runifold_core::{
-    ChildEvent, DomainEvent, EventId, LifecycleEvent, RetrySafety, RunContext, RunError,
+    ChildEvent, DomainEvent, EventId, Instant, LifecycleEvent, RetrySafety, RunContext, RunError,
     RunErrorKind, RunEventKind, Usage,
 };
 use serde_json::Value;
@@ -12,11 +12,32 @@ use crate::race::execute_race;
 use crate::workflow::WorkflowNodeKind;
 use crate::{
     ParallelBranchCheckpoint, StepId, Workflow, WorkflowCheckpoint, WorkflowCheckpointPhase,
-    WorkflowCheckpointState, WorkflowError, WorkflowOutcome, WorkflowResumePolicy,
+    WorkflowCheckpointState, WorkflowError, WorkflowInterruptDecision, WorkflowInterruptOutcome,
+    WorkflowInterruptRequest, WorkflowOutcome, WorkflowResumePolicy, WorkflowWait,
+    WorkflowWaitOutcome, WorkflowWake,
 };
 
 /// A boxed, sendable workflow execution future.
+#[cfg(not(target_arch = "wasm32"))]
 pub type WorkflowFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// A boxed workflow execution future on single-threaded WASM.
+#[cfg(target_arch = "wasm32")]
+pub type WorkflowFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+pub(crate) enum WorkflowExecution {
+    Completed(WorkflowOutcome),
+    Suspended(WorkflowWait),
+}
+
+impl WorkflowExecution {
+    fn require_completed(self) -> Result<WorkflowOutcome, WorkflowError> {
+        match self {
+            Self::Completed(outcome) => Ok(outcome),
+            Self::Suspended(_) => Err(WorkflowError::DurableWaitRequiresWorker),
+        }
+    }
+}
 
 impl Workflow {
     /// Executes this workflow from the first node.
@@ -26,7 +47,11 @@ impl Workflow {
         run: &'a RunContext,
     ) -> WorkflowFuture<'a, Result<WorkflowOutcome, WorkflowError>> {
         let state = self.initial_state(input.into(), run.budget().usage());
-        Box::pin(async move { self.execute_state(state, run, None).await })
+        Box::pin(async move {
+            self.execute_state(state, run, None)
+                .await?
+                .require_completed()
+        })
     }
 
     /// Executes with write-ahead workflow checkpoint persistence.
@@ -39,7 +64,23 @@ impl Workflow {
         Box::pin(async move {
             self.validate_authority(run)?;
             let state = self.initial_state(input.into(), run.budget().usage());
-            let mut cursor = WorkflowCheckpointCursor::create(checkpoint, run, &state)?;
+            let mut cursor = WorkflowCheckpointCursor::create(checkpoint, run, &state).await?;
+            self.execute_state(state, run, Some(&mut cursor))
+                .await?
+                .require_completed()
+        })
+    }
+
+    pub(crate) fn run_checkpointed_controlled<'a>(
+        &'a self,
+        input: Value,
+        run: &'a RunContext,
+        checkpoint: &'a WorkflowCheckpoint,
+    ) -> WorkflowFuture<'a, Result<WorkflowExecution, WorkflowError>> {
+        Box::pin(async move {
+            self.validate_authority(run)?;
+            let state = self.initial_state(input, run.budget().usage());
+            let mut cursor = WorkflowCheckpointCursor::create(checkpoint, run, &state).await?;
             self.execute_state(state, run, Some(&mut cursor)).await
         })
     }
@@ -52,12 +93,27 @@ impl Workflow {
         policy: WorkflowResumePolicy,
     ) -> WorkflowFuture<'a, Result<WorkflowOutcome, WorkflowError>> {
         Box::pin(async move {
-            let (envelope, mut state) = checkpoint.load()?;
+            self.resume_controlled(checkpoint, run, policy, None)
+                .await?
+                .require_completed()
+        })
+    }
+
+    pub(crate) fn resume_controlled<'a>(
+        &'a self,
+        checkpoint: &'a WorkflowCheckpoint,
+        run: &'a RunContext,
+        policy: WorkflowResumePolicy,
+        wake: Option<WorkflowWake>,
+    ) -> WorkflowFuture<'a, Result<WorkflowExecution, WorkflowError>> {
+        Box::pin(async move {
+            let (envelope, mut state) = checkpoint.load_async().await?;
             self.validate_checkpoint_identity(&state)?;
             if let Some(outcome) = state.outcome() {
                 validate_exact_usage(state.usage, run.budget().usage())?;
-                return Ok(outcome);
+                return Ok(WorkflowExecution::Completed(outcome));
             }
+            let mut waiting_wake = None;
             match &state.phase {
                 WorkflowCheckpointPhase::StepInFlight { step } => {
                     if policy == WorkflowResumePolicy::RejectAmbiguous {
@@ -66,6 +122,14 @@ impl Workflow {
                     validate_usage_floor(state.usage, run.budget().usage())?;
                     state.usage = run.budget().usage();
                     state.phase = WorkflowCheckpointPhase::Ready;
+                }
+                WorkflowCheckpointPhase::Waiting { wait, .. } => {
+                    validate_exact_usage(state.usage, run.budget().usage())?;
+                    let wake = wake.ok_or(WorkflowError::DurableWaitRequiresWorker)?;
+                    if !wake.matches(wait) {
+                        return Err(WorkflowError::WakeMismatch);
+                    }
+                    waiting_wake = Some((wait.clone(), wake));
                 }
                 WorkflowCheckpointPhase::ParallelInFlight { step, branches } => {
                     let all_completed = branches
@@ -107,6 +171,11 @@ impl Workflow {
                 }
             }
             let mut cursor = WorkflowCheckpointCursor::loaded(checkpoint, envelope);
+            if let Some((wait, wake)) = waiting_wake {
+                let node = &self.nodes[state.next_index];
+                let output = wake_output(&wait, wake, &state.value)?;
+                commit_node(&mut state, &node.id, output, run, &mut Some(&mut cursor)).await?;
+            }
             self.execute_state(state, run, Some(&mut cursor)).await
         })
     }
@@ -129,7 +198,7 @@ impl Workflow {
         mut state: WorkflowCheckpointState,
         run: &RunContext,
         mut checkpoint: Option<&mut WorkflowCheckpointCursor>,
-    ) -> Result<WorkflowOutcome, WorkflowError> {
+    ) -> Result<WorkflowExecution, WorkflowError> {
         self.validate_authority(run)?;
         let started = run
             .record(
@@ -150,7 +219,7 @@ impl Workflow {
         run: &RunContext,
         caused_by: Option<EventId>,
         checkpoint: &mut Option<&mut WorkflowCheckpointCursor>,
-    ) -> Result<WorkflowOutcome, WorkflowError> {
+    ) -> Result<WorkflowExecution, WorkflowError> {
         while state.next_index < self.nodes.len() {
             check_lifecycle(run)?;
             let node = &self.nodes[state.next_index];
@@ -163,12 +232,58 @@ impl Workflow {
                     self.execute_race_node(node, branches, state, run, caused_by, checkpoint)
                         .await?
                 }
+                WorkflowNodeKind::Timer(wait)
+                | WorkflowNodeKind::Signal(wait)
+                | WorkflowNodeKind::SignalOrTimeout(wait) => {
+                    state.phase = WorkflowCheckpointPhase::Waiting {
+                        step: node.id.clone(),
+                        wait: wait.clone(),
+                    };
+                    state.usage = run.budget().usage();
+                    save_checkpoint(checkpoint, state).await?;
+                    record_domain(
+                        run,
+                        "workflow.suspended",
+                        serde_json::json!({
+                            "workflow": self.name,
+                            "step": node.id,
+                            "wait": wait,
+                        }),
+                        caused_by,
+                    )?;
+                    return Ok(WorkflowExecution::Suspended(wait.clone()));
+                }
+                WorkflowNodeKind::Interrupt(prompt) => {
+                    let wait = WorkflowWait::Interrupt {
+                        request: WorkflowInterruptRequest::new(
+                            prompt.clone(),
+                            state.value.clone(),
+                        )?,
+                    };
+                    state.phase = WorkflowCheckpointPhase::Waiting {
+                        step: node.id.clone(),
+                        wait: wait.clone(),
+                    };
+                    state.usage = run.budget().usage();
+                    save_checkpoint(checkpoint, state).await?;
+                    record_domain(
+                        run,
+                        "workflow.interrupted",
+                        serde_json::json!({
+                            "workflow": self.name,
+                            "step": node.id,
+                            "wait": wait,
+                        }),
+                        caused_by,
+                    )?;
+                    return Ok(WorkflowExecution::Suspended(wait));
+                }
                 _ => {
                     self.execute_serial_node(node, state, run, caused_by, checkpoint)
                         .await?
                 }
             };
-            commit_node(state, &node.id, output, run, checkpoint)?;
+            commit_node(state, &node.id, output, run, checkpoint).await?;
         }
 
         let outcome = WorkflowOutcome {
@@ -180,8 +295,8 @@ impl Workflow {
         state.phase = WorkflowCheckpointPhase::Completed {
             outcome: outcome.clone(),
         };
-        save_checkpoint(checkpoint, state)?;
-        Ok(outcome)
+        save_checkpoint(checkpoint, state).await?;
+        Ok(WorkflowExecution::Completed(outcome))
     }
 
     async fn execute_serial_node(
@@ -196,7 +311,7 @@ impl Workflow {
             step: node.id.clone(),
         };
         state.usage = run.budget().usage();
-        save_checkpoint(checkpoint, state)?;
+        save_checkpoint(checkpoint, state).await?;
 
         let step_started = record_domain(
             run,
@@ -208,7 +323,12 @@ impl Workflow {
             }),
             caused_by,
         )?;
-        let mut child = run.child(node.capabilities.clone());
+        let mut child = run.child(node.capabilities.clone()).map_err(|error| {
+            WorkflowError::AuthorityEscalation {
+                step: node.id.clone(),
+                capability: error.capability,
+            }
+        })?;
         if let Some(event_id) = step_started {
             child = child.with_cause(event_id);
         }
@@ -428,6 +548,25 @@ impl Workflow {
                 .nodes
                 .get(state.next_index)
                 .is_some_and(|node| node.id == *step),
+            WorkflowCheckpointPhase::Waiting { step, wait } => {
+                self.nodes.get(state.next_index).is_some_and(|node| {
+                    if node.id != *step {
+                        return false;
+                    }
+                    matches!(
+                        &node.kind,
+                        WorkflowNodeKind::Timer(expected)
+                            | WorkflowNodeKind::Signal(expected)
+                            | WorkflowNodeKind::SignalOrTimeout(expected) if expected == wait
+                    ) || matches!(
+                        (&node.kind, wait),
+                        (
+                            WorkflowNodeKind::Interrupt(prompt),
+                            WorkflowWait::Interrupt { request }
+                        ) if request.prompt == *prompt && request.proposal == state.value
+                    )
+                })
+            }
             WorkflowCheckpointPhase::ParallelInFlight { step, branches } => {
                 self.nodes.get(state.next_index).is_some_and(|node| {
                     node.id == *step && parallel_layout_matches(&node.kind, branches)
@@ -457,7 +596,7 @@ impl Workflow {
     }
 }
 
-fn commit_node(
+async fn commit_node(
     state: &mut WorkflowCheckpointState,
     step: &StepId,
     output: Value,
@@ -469,7 +608,52 @@ fn commit_node(
     state.next_index += 1;
     state.usage = run.budget().usage();
     state.phase = WorkflowCheckpointPhase::Ready;
-    save_checkpoint(checkpoint, state)
+    save_checkpoint(checkpoint, state).await
+}
+
+fn wake_output(
+    wait: &WorkflowWait,
+    wake: WorkflowWake,
+    current: &Value,
+) -> Result<Value, WorkflowError> {
+    match (wait, wake) {
+        (WorkflowWait::Timer { .. }, WorkflowWake::Timer) => Ok(current.clone()),
+        (WorkflowWait::Signal { .. }, WorkflowWake::Signal { payload, .. }) => Ok(payload),
+        (
+            WorkflowWait::SignalOrTimeout { .. },
+            WorkflowWake::Signal {
+                signal_id,
+                name,
+                payload,
+            },
+        ) => Ok(serde_json::to_value(WorkflowWaitOutcome::Signal {
+            signal_id,
+            name,
+            payload,
+        })?),
+        (WorkflowWait::SignalOrTimeout { .. }, WorkflowWake::Timeout) => {
+            Ok(serde_json::to_value(WorkflowWaitOutcome::TimedOut)?)
+        }
+        (WorkflowWait::Interrupt { request }, WorkflowWake::Signal { name, payload, .. })
+            if name == request.signal_name() =>
+        {
+            let decision: WorkflowInterruptDecision = serde_json::from_value(payload)?;
+            decision.validate()?;
+            let outcome = match decision {
+                WorkflowInterruptDecision::Approve => WorkflowInterruptOutcome::Approved {
+                    value: request.proposal.clone(),
+                },
+                WorkflowInterruptDecision::Edit { value } => {
+                    WorkflowInterruptOutcome::Edited { value }
+                }
+                WorkflowInterruptDecision::Reject { reason } => {
+                    WorkflowInterruptOutcome::Rejected { reason }
+                }
+            };
+            Ok(serde_json::to_value(outcome)?)
+        }
+        _ => Err(WorkflowError::WakeMismatch),
+    }
 }
 
 fn parallel_layout_matches(
@@ -517,12 +701,12 @@ fn race_layout_matches(
         })
 }
 
-pub(crate) fn save_checkpoint(
+pub(crate) async fn save_checkpoint(
     checkpoint: &mut Option<&mut WorkflowCheckpointCursor>,
     state: &WorkflowCheckpointState,
 ) -> Result<(), WorkflowError> {
     if let Some(checkpoint) = checkpoint.as_deref_mut() {
-        checkpoint.save(state)?;
+        checkpoint.save(state).await?;
     }
     Ok(())
 }
@@ -558,15 +742,29 @@ pub(crate) fn record_domain(
         .map(|event| event.meta.event_id))
 }
 
-fn terminal_event(workflow: &str, result: &Result<WorkflowOutcome, WorkflowError>) -> RunEventKind {
+fn terminal_event(
+    workflow: &str,
+    result: &Result<WorkflowExecution, WorkflowError>,
+) -> RunEventKind {
     match result {
-        Ok(outcome) => RunEventKind::Lifecycle(LifecycleEvent::Completed {
-            output: serde_json::json!({
-                "workflow": workflow,
-                "steps": outcome.steps.len(),
-                "usage": outcome.usage,
-            }),
-        }),
+        Ok(WorkflowExecution::Completed(outcome)) => {
+            RunEventKind::Lifecycle(LifecycleEvent::Completed {
+                output: serde_json::json!({
+                    "workflow": workflow,
+                    "steps": outcome.steps.len(),
+                    "usage": outcome.usage,
+                }),
+            })
+        }
+        Ok(WorkflowExecution::Suspended(wait)) => {
+            RunEventKind::Lifecycle(LifecycleEvent::Completed {
+                output: serde_json::json!({
+                    "workflow": workflow,
+                    "state": "suspended",
+                    "wait": wait,
+                }),
+            })
+        }
         Err(WorkflowError::Cancelled) => RunEventKind::Lifecycle(LifecycleEvent::Cancelled),
         Err(error) => RunEventKind::Lifecycle(LifecycleEvent::Failed {
             error: workflow_run_error(error),
@@ -581,15 +779,20 @@ fn workflow_run_error(error: &WorkflowError) -> RunError {
         }
         WorkflowError::Cancelled => (RunErrorKind::Cancelled, RetrySafety::Safe),
         WorkflowError::DeadlineExceeded => (RunErrorKind::DeadlineExceeded, RetrySafety::Unknown),
+        WorkflowError::DurableWaitRequiresWorker | WorkflowError::WakeMismatch => {
+            (RunErrorKind::InvalidInput, RetrySafety::Safe)
+        }
         WorkflowError::Budget(_) => (RunErrorKind::BudgetExceeded, RetrySafety::Safe),
         WorkflowError::Build(_)
+        | WorkflowError::Wait(_)
         | WorkflowError::CheckpointIdentityMismatch
         | WorkflowError::CheckpointUsageMismatch => (RunErrorKind::InvalidInput, RetrySafety::Safe),
         WorkflowError::AmbiguousCheckpoint { .. }
+        | WorkflowError::Serialization(_)
         | WorkflowError::Step { .. }
         | WorkflowError::ParallelBranch { .. }
         | WorkflowError::RaceAllFailed { .. }
-        | WorkflowError::BudgetReservation(_)
+        | WorkflowError::ChildRun(_)
         | WorkflowError::Journal(_)
         | WorkflowError::Checkpoint(_) => (RunErrorKind::Invocation, RetrySafety::Unknown),
     };

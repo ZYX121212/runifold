@@ -3,6 +3,7 @@
 mod agent;
 mod builder;
 mod checkpoint;
+mod conversation;
 mod descriptor;
 mod error;
 mod gateway;
@@ -12,8 +13,20 @@ mod stream;
 mod structured;
 
 pub use agent::{Agent, AgentConfig, AgentFuture, ToolErrorPolicy};
-pub use builder::{AgentBuildError, AgentBuilder};
+pub use builder::{AgentBuildError, AgentBuilder, AgentPromptError};
 pub use checkpoint::{AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, ResumePolicy};
+pub use conversation::{
+    AgentConversationError, AgentConversationOutcome, AutomaticConversationSummary,
+    ConversationAppend, ConversationContextPolicy, ConversationCreateOutcome, ConversationId,
+    ConversationSequence, ConversationStore, ConversationStoreError, ConversationStoreErrorKind,
+    ConversationStoreFuture, ConversationSummarizer, ConversationSummarizerError,
+    ConversationSummarizerFuture, ConversationSummary, ConversationSummaryBatch,
+    ConversationSummaryCommit, ConversationSummaryPassLimit, ConversationSummaryRequest,
+    ConversationTranscriptEntry, ConversationVersion, ConversationView, ConversationWindow,
+    InMemoryConversationStore, MemoryNamespace, SemanticMemory, SemanticMemoryId,
+    SemanticMemoryQuery, SemanticMemorySearchOutcome, SemanticMemorySource, SemanticMemoryUpsert,
+    SemanticMemoryUpsertOutcome,
+};
 pub use descriptor::AgentDescriptor;
 pub use error::AgentError;
 pub use gateway::{

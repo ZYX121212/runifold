@@ -200,6 +200,7 @@ fn sampling_error_type(error: &McpError) -> &'static str {
         crate::McpErrorKind::Remote => "remote",
         crate::McpErrorKind::DeadlineExceeded => "timeout",
         crate::McpErrorKind::Cancelled => "cancelled",
+        crate::McpErrorKind::TaskExpired => "task_expired",
         crate::McpErrorKind::Lifecycle => "lifecycle",
         crate::McpErrorKind::UnsupportedVersion => "unsupported_version",
         crate::McpErrorKind::Authentication => "authentication",

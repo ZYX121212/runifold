@@ -8,10 +8,10 @@ use runifold_mcp::{
     CompleteParams, CompleteResult, Completion, CompletionArgument, CompletionDescriptor,
     CompletionReference, CompletionRegistry, FunctionCompletion, FunctionPrompt, GetPromptResult,
     Implementation, McpClient, McpClientConfig, McpError, McpHttpServer, McpHttpServerConfig,
-    McpServer, PromptArgument, PromptDescriptor, PromptHandler, PromptMessage, PromptRegistry,
-    ReadResourceResult, ResourceContents, ResourceDescriptor, ResourceFuture, ResourceRegistry,
-    ResourceTemplateDescriptor, ResourceTemplateHandler, StaticTextResource, StdioTransport,
-    StreamableHttpTransport, serve_io,
+    McpProtocolMode, McpServer, PromptArgument, PromptDescriptor, PromptHandler, PromptMessage,
+    PromptRegistry, ReadResourceResult, ResourceContents, ResourceDescriptor, ResourceFuture,
+    ResourceRegistry, ResourceTemplateDescriptor, ResourceTemplateHandler, StaticTextResource,
+    StdioTransport, StreamableHttpTransport, SubscriptionFilter, serve_io,
 };
 use runifold_tool::ToolRegistry;
 use tokio::io::{BufReader, split};
@@ -36,6 +36,146 @@ async fn automatic_pagination_is_complete_and_cursors_are_session_bound() {
         .await
         .unwrap_err();
     assert!(matches!(foreign, McpError::Remote { code: -32602, .. }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stateless_http_pagination_survives_independent_requests() {
+    let http_server = McpHttpServer::new(paginated_server(), McpHttpServerConfig::new());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let router = http_server.router("/mcp");
+    let server_task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = McpClient::new(
+        Arc::new(StreamableHttpTransport::new(endpoint).unwrap()),
+        McpClientConfig::new(Implementation::new("stateless-pagination", "1")),
+    );
+
+    assert_eq!(client.connect().await.unwrap(), McpProtocolMode::Stateless);
+    let resources = client.list_resources().await.unwrap();
+    assert_eq!(resources.len(), 3);
+    assert_eq!(resources[0].uri, "memory://item/0");
+    assert_eq!(resources[2].uri, "memory://item/2");
+    assert_eq!(http_server.session_count().await, 0);
+    server_task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stateless_http_listen_filters_correlates_and_uses_no_session() {
+    let server = paginated_server();
+    let publisher = server.clone();
+    let http_server = McpHttpServer::new(server, McpHttpServerConfig::new());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let router = http_server.router("/mcp");
+    let server_task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = McpClient::new(
+        Arc::new(StreamableHttpTransport::new(endpoint).unwrap()),
+        McpClientConfig::new(Implementation::new("modern-listener", "1")),
+    );
+
+    assert_eq!(client.connect().await.unwrap(), McpProtocolMode::Stateless);
+    let mut subscription = client
+        .listen(SubscriptionFilter {
+            tools_list_changed: true,
+            prompts_list_changed: true,
+            resources_list_changed: false,
+            resource_subscriptions: vec!["memory://item/1".into(), "memory://missing".into()],
+            task_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert!(subscription.accepted().tools_list_changed);
+    assert!(!subscription.accepted().prompts_list_changed);
+    assert_eq!(
+        subscription.accepted().resource_subscriptions,
+        ["memory://item/1"]
+    );
+
+    assert!(publisher.notify_resource_updated("memory://item/2"));
+    assert!(publisher.notify_resource_updated("memory://item/1"));
+    let update = tokio::time::timeout(Duration::from_secs(1), subscription.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(update.method, "notifications/resources/updated");
+    assert_eq!(
+        update
+            .params
+            .as_ref()
+            .and_then(|params| params.get("uri"))
+            .and_then(serde_json::Value::as_str),
+        Some("memory://item/1")
+    );
+    assert_eq!(http_server.session_count().await, 0);
+    drop(subscription);
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn stateless_stdio_listen_is_multiplexed_and_drop_cancelled() {
+    let server = paginated_server();
+    let publisher = server.clone();
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let (server_reader, server_writer) = split(server_io);
+    let server_task = tokio::spawn(serve_io(
+        server.session(),
+        BufReader::new(server_reader),
+        server_writer,
+    ));
+    let (client_reader, client_writer) = split(client_io);
+    let transport = Arc::new(StdioTransport::from_io(
+        BufReader::new(client_reader),
+        client_writer,
+    ));
+    let client = McpClient::new(
+        transport.clone(),
+        McpClientConfig::new(Implementation::new("stdio-modern-listener", "1")),
+    );
+
+    assert_eq!(client.connect().await.unwrap(), McpProtocolMode::Stateless);
+    let mut subscription = client
+        .listen(SubscriptionFilter {
+            tools_list_changed: true,
+            ..SubscriptionFilter::default()
+        })
+        .await
+        .unwrap();
+    let mut second_subscription = client
+        .listen(SubscriptionFilter {
+            tools_list_changed: true,
+            ..SubscriptionFilter::default()
+        })
+        .await
+        .unwrap();
+    assert!(publisher.notify_tools_list_changed());
+    let changed = tokio::time::timeout(Duration::from_secs(1), subscription.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(changed.method, "notifications/tools/list_changed");
+    let second_changed = tokio::time::timeout(Duration::from_secs(1), second_subscription.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(second_changed.method, "notifications/tools/list_changed");
+
+    drop(subscription);
+    drop(second_subscription);
+    drop(client);
+    transport.shutdown().await.unwrap();
+    drop(transport);
+    tokio::time::timeout(Duration::from_secs(1), server_task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -212,7 +352,7 @@ async fn resource_template_completion_requires_a_declared_variable() {
         Some(Arc::new(completions)),
     );
     let client = client(&server, 50);
-    client.initialize().await.unwrap();
+    assert_eq!(client.connect().await.unwrap(), McpProtocolMode::Stateless);
 
     let result = client
         .complete(CompleteParams {
@@ -452,6 +592,8 @@ impl ResourceTemplateHandler for UserResourceTemplate {
             let id = uri.trim_start_matches("memory://users/");
             Ok(ReadResourceResult {
                 contents: vec![ResourceContents::text(uri.clone(), format!("user:{id}"))],
+                ttl_ms: None,
+                cache_scope: None,
             })
         })
     }

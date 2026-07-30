@@ -1,7 +1,7 @@
 # RFC 0027: Native Gemini and Ollama providers
 
 - Status: implemented
-- Scope: `runifold-provider-gemini`, `runifold-provider-ollama`, `runifold-model`
+- Scope: `runifold-providers::{gemini, ollama}`, `runifold-model`
 
 ## Decision
 

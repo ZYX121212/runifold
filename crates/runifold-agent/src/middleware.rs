@@ -8,7 +8,12 @@ use crate::{
 };
 
 /// A boxed, sendable future returned by gateway extensions.
+#[cfg(not(target_arch = "wasm32"))]
 pub type GatewayFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// A boxed gateway future on single-threaded WASM.
+#[cfg(target_arch = "wasm32")]
+pub type GatewayFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 /// Immutable-authority request flowing through gateway middleware.
 #[derive(Clone, Debug)]

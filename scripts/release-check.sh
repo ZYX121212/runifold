@@ -9,6 +9,10 @@ if [[ -z "$msrv" || "$msrv" == "null" ]]; then
     echo "workspace packages must declare rust-version" >&2
     exit 1
 fi
+msrv_toolchain="$msrv"
+if [[ "$msrv" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    msrv_toolchain="${msrv}.0"
+fi
 
 versions="$(
     cargo metadata --no-deps --format-version 1 |
@@ -28,20 +32,24 @@ if [[ -n "$release_tag" && "$release_tag" != "v$version" ]]; then
     exit 1
 fi
 
-echo "Checking Runifold v$version with MSRV Rust $msrv"
+echo "Checking Runifold v$version with MSRV Rust $msrv_toolchain"
 cargo fmt --all -- --check
+cargo test --workspace --all-targets --locked
 cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 
-escaped_msrv="${msrv//./\\.}"
-if ! rustup toolchain list | awk '{print $1}' | rg -q "^${escaped_msrv}(\\.|-|$)"; then
-    rustup toolchain install "$msrv" --profile minimal
+escaped_msrv_toolchain="${msrv_toolchain//./\\.}"
+if ! rustup toolchain list | awk '{print $1}' |
+    rg -q "^${escaped_msrv_toolchain}(-|$)"; then
+    rustup toolchain install "$msrv_toolchain" --profile minimal
 fi
-cargo "+$msrv" check --workspace --all-targets --all-features --locked
+cargo "+$msrv_toolchain" check --workspace --all-targets --all-features --locked
 
-cargo package --workspace --allow-dirty --locked
+scripts/semver-check.sh
+scripts/publish-crates.sh --list >/dev/null
+cargo package --workspace --allow-dirty --locked --no-verify
 
 package_count="$(find target/package -maxdepth 1 -name "*-$version.crate" | wc -l | tr -d ' ')"
 workspace_count="$(

@@ -15,6 +15,8 @@ pub enum McpErrorKind {
     DeadlineExceeded,
     /// Request was cancelled.
     Cancelled,
+    /// A durable Task handle exceeded its advertised retention.
+    TaskExpired,
     /// MCP lifecycle order was invalid.
     Lifecycle,
     /// No mutually supported protocol version exists.
@@ -62,6 +64,12 @@ pub enum McpError {
     /// A request was cancelled.
     #[error("MCP request was cancelled")]
     Cancelled,
+    /// A durable Task handle exceeded its advertised retention.
+    #[error("MCP Task `{task_id}` exceeded its advertised retention")]
+    TaskExpired {
+        /// Expired opaque Task identity.
+        task_id: String,
+    },
     /// An operation was invalid for the current lifecycle phase.
     #[error("MCP lifecycle violation: {message}")]
     Lifecycle {
@@ -102,6 +110,7 @@ impl McpError {
             Self::Remote { .. } => McpErrorKind::Remote,
             Self::DeadlineExceeded => McpErrorKind::DeadlineExceeded,
             Self::Cancelled => McpErrorKind::Cancelled,
+            Self::TaskExpired { .. } => McpErrorKind::TaskExpired,
             Self::Lifecycle { .. } => McpErrorKind::Lifecycle,
             Self::UnsupportedVersion { .. } => McpErrorKind::UnsupportedVersion,
             Self::Authentication => McpErrorKind::Authentication,

@@ -1,7 +1,7 @@
 # RFC 0026: Native Anthropic adapter and provider protocol testkit
 
 - Status: implemented
-- Scope: `runifold-provider-anthropic`, `runifold-provider-testkit`
+- Scope: `runifold-providers::anthropic`, `runifold-provider-testkit`
 
 ## Decision
 

@@ -20,7 +20,9 @@ futures-util.workspace = true
 opentelemetry = "0.32.0"
 runifold-core.workspace = true
 runifold-model.workspace = true
+runifold-workflow = { version = "0.2.0", path = "../runifold-workflow" }
 serde_json.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 opentelemetry-prometheus = { version = "0.32.0", default-features = false }

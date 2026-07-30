@@ -6,6 +6,174 @@ for models, tools, agents, and workflows in Rust.
 The name combines **run** with **manifold**: models, tools, agents, and flows
 are different surfaces over the same execution space.
 
+## Quickstart
+
+Add the facade and the providers your application needs:
+
+```console
+cargo add runifold --features openai
+```
+
+The ergonomic path automatically creates a root run with authority limited to
+the Tool and child-Agent capabilities explicitly registered on the Agent:
+
+```rust,no_run
+use runifold::{ProviderModelExt, openai::OpenAiClient};
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let runtime = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?
+    .runtime("gpt-5")?;
+let agent = runtime
+    .agent("assistant")
+    .system("Answer precisely and expose uncertainty.");
+
+let answer = agent
+    .prompt_text("Why is durable execution useful?")
+    .await?;
+# let _ = answer;
+# Ok(())
+# }
+```
+
+Compatible providers have first-class modules without separate crates:
+
+```console
+cargo add runifold --features deepseek
+```
+
+```rust,no_run
+use runifold::deepseek::{DeepSeekAgentExt, client};
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let answer = client(std::env::var("DEEPSEEK_API_KEY")?)?
+    .agent("reasoner", "deepseek-reasoner")
+    .prompt_text("Why does idempotency matter?")
+    .await?;
+# let _ = answer;
+# Ok(())
+# }
+```
+
+See the [Provider support matrix](docs/PROVIDERS.md) for native versus
+compatible protocols, regional endpoints, and verification levels.
+Repeatable latency, throughput, reliability, and cross-framework comparison
+rules, plus the standalone release-mode Rig executor, are documented in the
+[benchmarking contract](docs/BENCHMARKING.md).
+Production claims, mandatory fault tests, machine-readable evidence, and
+explicitly unverified areas are tracked in the
+[reliability matrix](docs/RELIABILITY.md).
+The provider-neutral facade is compiled for `wasm32-unknown-unknown` on the
+declared Rust 1.85 MSRV, with core identity, authority, cancellation, and
+budget semantics executed in the mandatory edge-runtime CI gate.
+OpenAI-compatible, Anthropic, Gemini and Ollama Agent paths plus native
+embeddings are exercised in pinned headless Chrome through real CORS, Fetch,
+SSE and NDJSON. Browser deployments must use the documented
+[application-gateway credential boundary](docs/EDGE.md).
+
+Use `agent.prompt(...)` when the canonical transcript, usage, warnings, and
+provider events matter. Use `agent.run(input, &context)` when the application
+must supply a tighter budget, narrower capabilities, a deadline, durable
+journaling, or shared run-tree identity.
+
+Static and dynamic grounding use the same Agent path:
+
+```rust,ignore
+let agent = client
+    .agent("support", "gpt-5")
+    .system("Answer only from relevant evidence.")
+    .context("Returns are accepted within 30 days.")
+    .dynamic_context(5, application_retriever)
+    .build()?;
+
+let answer = agent.prompt_text("Can I return an item after two weeks?").await?;
+```
+
+`dynamic_context` accepts any provider-neutral `Retriever`, including the
+deterministic `InMemoryVectorIndex`. Retrieved documents are labelled as
+untrusted user-level data and retain stable document IDs; they can never
+become system instructions. The ergonomic prompt path grants only registered
+retrievers. An explicit `RunContext` must grant each retriever capability.
+
+Native embedding adapters reuse provider clients rather than configuration
+values:
+
+```rust,ignore
+use std::sync::Arc;
+use runifold::{
+    Document, InMemoryVectorIndex, RetrievalContext,
+    openai::{OpenAiAgentExt, OpenAiClient},
+};
+
+let client = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?;
+let embedder = Arc::new(client.embedding_model("text-embedding-3-small")?);
+let built = InMemoryVectorIndex::build(
+    "product-docs",
+    embedder,
+    vec![
+        Document::new("returns", "Returns are accepted within 30 days.")?,
+        Document::new("shipping", "Standard shipping takes three days.")?,
+    ],
+    RetrievalContext::new(),
+)
+.await?;
+
+let agent = client
+    .agent("support", "gpt-5")
+    .dynamic_context(4, built.index)
+    .build()?;
+```
+
+Gemini and Ollama expose the same `client.embedding_model(...)` path. Index
+construction is tagged `RetrievalDocument`; lookup is tagged
+`RetrievalQuery`, allowing providers such as Gemini to tune the two sides
+correctly. Silent truncation is disabled by default.
+
+For persistent retrieval, select a replaceable vector-store adapter:
+
+```console
+cargo add runifold --features openai,qdrant
+```
+
+```rust,ignore
+use std::sync::Arc;
+use runifold::{
+    Document, RetrievalContext, VectorRetriever,
+    openai::OpenAiClient,
+    qdrant::{QdrantConfig, QdrantVectorStore},
+};
+
+let embedder = Arc::new(
+    OpenAiClient::from_api_key(api_key)?
+        .embedding_model("text-embedding-3-small")?
+);
+let store = Arc::new(QdrantVectorStore::new(
+    QdrantConfig::new("http://localhost:6333")?,
+    "product-docs",
+)?);
+let retriever = VectorRetriever::new("product-docs", embedder, store);
+
+retriever
+    .index_documents(documents, RetrievalContext::new())
+    .await?;
+```
+
+Use the `pgvector` feature and `PgVectorStore` for PostgreSQL. Schema creation
+and HNSW index creation are explicit setup operations; lookup and upsert never
+perform hidden migrations.
+
+Retrieval quality can be measured independently of the model and Agent:
+
+```rust,ignore
+use runifold_testkit::{RetrievalEvaluationCase, RetrievalEvaluationRunner};
+
+let report = RetrievalEvaluationRunner::new(Arc::new(retriever))
+    .run(&cases)
+    .await?;
+
+assert!(report.mean_recall_at_k >= 0.90);
+assert!(report.mean_reciprocal_rank >= 0.85);
+```
+
 ## Status
 
 Runifold is pre-alpha. The implemented foundation includes:
@@ -13,6 +181,7 @@ Runifold is pre-alpha. The implemented foundation includes:
 - stable run identity and causal event envelopes;
 - hierarchical cancellation and deadlines;
 - explicit capability grants;
+- core-enforced child authority attenuation;
 - budget accounting;
 - effect descriptions;
 - in-memory journaling and deterministic test helpers;
@@ -23,13 +192,34 @@ Runifold is pre-alpha. The implemented foundation includes:
 - an object-safe asynchronous model invocation boundary;
 - wakeable hierarchical cancellation;
 - a queue-backed scripted model for deterministic invocation tests;
-- Responses and Chat Completions adapters for OpenAI, Ark, Qwen, and custom endpoints;
+- Responses and Chat Completions adapters for OpenAI, Azure OpenAI, Ark, Qwen, DeepSeek,
+  OpenRouter, xAI, Groq, Mistral, Together AI, Perplexity Sonar, MiniMax,
+  Zhipu AI, SiliconFlow, and custom endpoints;
 - a native Anthropic Messages adapter with text, images, tools, thinking, and strict SSE decoding;
 - native Gemini GenerateContent SSE and Ollama chat NDJSON adapters;
-- an offline real-HTTP provider cassette with delays, disconnects, and credential redaction;
+- native Amazon Bedrock Converse Stream through the AWS SDK, including
+  `SigV4`, temporary credentials, Tools, reasoning, usage, cancellation, and deadlines;
+- offline real-HTTP Bedrock binary EventStream cassettes covering arbitrary
+  frame fragmentation, truncation, deadlines, and concurrent SDK streams;
+- offline real-HTTP provider cassettes, including Azure API-key and Entra
+  authentication, streaming fragmentation, delays, disconnects, and credential redaction;
+- a shared Provider Conformance Kit covering identity, visible/reasoning
+  separation, usage, raw events, error kinds, and retry safety;
+- a framework-neutral Provider benchmark contract with TTFT, p50/p95/p99
+  latency, throughput, reliability evidence, environment metadata, and
+  baseline regression gates;
+- an isolated release-mode Rig 0.40 comparison executor with equivalent-request
+  validation, alternating paired rounds, bootstrap confidence intervals, and
+  retained raw JSON evidence;
 - concurrent real-HTTP provider stress tests with timeout, offline, and truncation classification;
 - optional OpenTelemetry GenAI spans and metrics for models, agents, tools, and workflows;
-- capability-safe MCP 2025-11-25 Tools, Resources, Prompts, pagination, Resource Templates, subscriptions, Completion, and client-owned Sampling over in-process, stdio, and Streamable HTTP transports;
+- capability-safe MCP 2025-11-25 plus the 2026-07-28 stateless core, including
+  Tools, Resources, Prompts, pagination, Resource Templates, subscriptions,
+  Completion, Sampling, schema-driven `Mcp-Param-*` routing, bounded MRTR,
+  authorization-partitioned response caching, durable Tasks backed by
+  Runifold workflows, typed `notifications/tasks` state streams, and filtered
+  `subscriptions/listen` over in-process, stdio, and Streamable HTTP
+  transports;
 - a capability-gated, object-safe tool runtime and deterministic registry;
 - a bounded Model → Tool → Model agent loop;
 - capability-gated Agent → Gateway → Agent delegation with child-run authority attenuation;
@@ -41,6 +231,32 @@ Runifold is pre-alpha. The implemented foundation includes:
 - optional durable SQLite stores for effects, checkpoints, and journals;
 - cross-process crash recovery proving completed Tool effects are not re-executed;
 - fluent Agent construction across OpenAI, Ark, Qwen, and custom compatible clients;
+- provider-neutral embeddings, capability-gated Agent retrieval, and a deterministic in-memory vector index;
+- native OpenAI-compatible, Gemini, and Ollama batch embedding adapters;
+- typed OpenAI-compatible model discovery, bounded multipart file upload, and
+  Batch create/inspect/cancel operations with browser-safe Gateway execution;
+- typed OpenAI GA Realtime WebSocket sessions with bounded frames and browser
+  receive queues, strict lifecycle validation, text, function-call, bounded
+  PCM24/PCMU/PCMA audio and transcript deltas, redacted short-lived
+  client-secret creation, cancellation/deadlines, and explicit ambiguous
+  reconnect classification;
+- browser-native OpenAI GA Realtime WebRTC with microphone capture, remote
+  audio playback, bounded `oai-events`, direct ephemeral-secret negotiation,
+  credential-free Gateway or unified server-side SDP exchange, validated
+  STUN/TURN configuration, relay-only policy, observable Peer/ICE state, and
+  phase-aware recovery safety verified against pinned coturn and a real relay
+  network partition;
+- a safety-first Realtime reconnect controller with bounded exponential
+  backoff, per-invocation full jitter, cancellation/deadline enforcement,
+  fresh credential/SDP negotiation on every factory invocation, redacted
+  lifecycle events, fail-closed handling of ambiguous in-flight output, and a
+  browser Gateway helper that rebuilds Peer/SDP/DataChannel resources while
+  retrying only 408/429/5xx SDP exchange responses;
+- a manual, opt-in live OpenAI Realtime canary that mints two short-lived
+  client secrets, proves credential and effective-session rotation, validates
+  bounded TTL, and emits only credential-free evidence;
+- optional Qdrant and PostgreSQL/pgvector storage with one provider-neutral retriever;
+- deterministic Recall@K, Precision@K, MRR, nDCG, latency, and usage evaluation;
 - typed async Rust Tools with generated JSON Schemas and an attribute macro;
 - host-only Tool state injection and explicit application-error normalization;
 - backpressured Agent streaming across model, Tool, delegation, usage, and terminal events;
@@ -48,11 +264,36 @@ Runifold is pre-alpha. The implemented foundation includes:
 - deterministic multi-provider routing with explicit, stream-safe fallback authority;
 - optional per-route circuit breakers with deterministic half-open recovery;
 - bounded same-route retry with exponential backoff, jitter, `Retry-After`, and deadline truncation;
+- one `Model + ProviderModel` integration contract that automatically unlocks
+  canonical streaming, resilient routing, Agent construction, budgets,
+  OpenTelemetry instrumentation, and durable workflow execution;
 - durable sequential and conditional workflows with explicit per-step authority;
 - Agent-backed workflow steps, causal child runs, and conservative checkpoint recovery;
 - atomic scoped budget reservations for concurrent child runs;
 - durable fail-fast parallel workflows with stable joins and per-branch recovery;
-- side-effect-safe first-success races with fair start, conservative losing-budget accounting, and durable winners.
+- side-effect-safe first-success races with fair start, conservative losing-budget accounting, and durable winners;
+- provider-neutral distributed workflow claims with leases, heartbeats, delayed retries, and fencing tokens;
+- a definition-registered worker runtime with fenced checkpoints, automatic heartbeat, lease-loss cancellation, crash resume, bounded supervision, graceful drain, and operational metrics;
+- lease-free durable timers and idempotent external signals that survive process restarts and early webhook delivery;
+- store-authoritative signal-or-timeout races, externally fenced cancellation, and auditable signal dead letters with safe retention.
+- durable human review with inspectable interrupt state, typed approve/edit/reject decisions, idempotent delivery, and crash-safe resume;
+- immutable checkpoint history with bounded state inspection, idempotent fork/replay, explicit ambiguous-effect authority, and durable lineage;
+- typed multi-turn conversations with append-only transcripts, summary-buffer backpressure, bounded windows, and provenance-required cross-session semantic memory;
+- tenant-scoped workflow admission with outstanding/concurrent quotas, fair claims, and fail-closed control-plane isolation;
+- durable tenant token, cost, duration, turn, tool-call, and delegation budgets with atomic reservation, settlement, and crash recovery.
+- cursor-paginated tenant budget audits and identity-safe OpenTelemetry metrics for admission, utilization, reservation age, and recovery forfeiture.
+- restart-safe bounded OTel budget projection with named durable cursors, monotonic CAS, explicit at-least-once semantics, and compaction protection for slow consumers.
+- fenced terminal Task retention with bounded PostgreSQL cleanup batches and immutable tombstone audit.
+- dynamically sharded Task cleanup supervision with database-clock heartbeat, bounded concurrency, health snapshots, and low-cardinality OpenTelemetry metrics.
+- governed tombstone lifecycle with legal holds, monotonic archive receipts, independent approval, fenced purge recovery, and immutable deletion evidence.
+- fail-closed tenant-scoped governance authorization, authenticated audit actors, idempotent archive delivery, and low-cardinality governance telemetry.
+- durable purge approval inboxes with bounded discovery, independent reviewer claims, timeout takeover fencing, and auditable approve/reject decisions.
+- optional S3-compatible WORM tombstone archives with pre-signed PUT/HEAD authority, SHA-256 reconciliation, encryption, and Object Lock.
+- native SDK-independent S3 SigV4 signing for AWS, MinIO, temporary credentials, and custom path-style endpoints.
+- bounded S3 archive I/O with typed failure classes and automatic reconciliation when a commit succeeds but its response is lost.
+- exclusively leased budget projection supervisors with database-clock expiry, heartbeat renewal, fencing-token takeover, cancellation-safe release, and low-cardinality lease-loss alerts.
+- lock-free live projection health snapshots for readiness and control planes, including lease ownership, catch-up state, last acknowledged cursor, throughput, and failures.
+- dynamically discovered multi-tenant budget projection with stable keyset pagination, deterministic no-coordinator sharding, bounded concurrency, and lease-safe rebalancing.
 
 See [RFC 0003](docs/rfcs/0003-model-invocation-boundary.md) for the model
 invocation boundary and [RFC 0008](docs/rfcs/0008-agent-delegation-gateway.md)
@@ -86,6 +327,14 @@ Gemini and Ollama native protocol boundaries are specified in
 [RFC 0027](docs/rfcs/0027-gemini-and-ollama-providers.md).
 Provider transport reliability and concurrency contracts are specified in
 [RFC 0028](docs/rfcs/0028-provider-transport-reliability.md).
+The feature-gated provider crate topology and companion-crate threshold
+are specified in
+[RFC 0052](docs/rfcs/0052-provider-crate-topology.md).
+The provider identity contract and automatic resilient runtime composition are
+specified in
+[RFC 0053](docs/rfcs/0053-provider-runtime-contract.md).
+The native Amazon Bedrock SDK boundary is specified in
+[RFC 0054](docs/rfcs/0054-amazon-bedrock-provider.md).
 OpenTelemetry GenAI signal, privacy, and dependency boundaries are specified in
 [RFC 0029](docs/rfcs/0029-opentelemetry-genai-observability.md).
 Native MCP Tools and stdio transport semantics are specified in
@@ -114,7 +363,33 @@ reusable GitHub Actions gate are specified in
 Release integrity, MSRV, SemVer, supply-chain policy, SBOMs, and controlled
 crates.io publication are specified in
 [RFC 0039](docs/rfcs/0039-release-integrity-and-supply-chain.md); maintainers
-should follow the [release runbook](docs/RELEASING.md).
+should follow the [release runbook](docs/RELEASING.md). Provider-neutral
+embedding, retrieval authority, untrusted context, and recovery semantics are
+specified in [RFC 0040](docs/rfcs/0040-provider-neutral-retrieval.md). Native
+embedding adapter behavior is specified in
+[RFC 0041](docs/rfcs/0041-native-embedding-providers.md). Replaceable vector
+stores and retrieval evaluation are specified in
+[RFC 0042](docs/rfcs/0042-vector-stores-and-retrieval-evaluation.md).
+Distributed workflow claims, authoritative leases, heartbeats, and fencing are
+specified in
+[RFC 0043](docs/rfcs/0043-distributed-workflow-leases.md). Worker execution,
+fenced checkpoint CAS, and recovery supervision are specified in
+[RFC 0044](docs/rfcs/0044-workflow-worker-runtime.md). Lease-free timers,
+buffered signals, wake recovery, and idempotency are specified in
+[RFC 0045](docs/rfcs/0045-durable-timers-and-signals.md). Deadline races,
+external cancellation, and signal lifecycle governance are specified in
+[RFC 0046](docs/rfcs/0046-durable-wait-governance.md). Multi-tenant workflow
+admission, fairness, and control-plane isolation are specified in
+[RFC 0047](docs/rfcs/0047-multi-tenant-workflow-admission.md).
+Durable aggregate tenant budget reservation and settlement are specified in
+[RFC 0048](docs/rfcs/0048-durable-tenant-budget-ledger.md).
+Durable budget audit and low-cardinality telemetry projection are specified in
+[RFC 0049](docs/rfcs/0049-tenant-budget-observability.md). Projection leases,
+heartbeats, fencing, and continuous supervision are specified in
+[RFC 0050](docs/rfcs/0050-budget-projection-supervision.md). Multi-tenant
+discovery, deterministic sharding, and bounded projection coordination are
+specified in
+[RFC 0051](docs/rfcs/0051-multi-tenant-budget-projection-coordination.md).
 
 Enable the `otel` feature to decorate model calls and durable run events:
 
@@ -301,17 +576,46 @@ let client = McpClient::new(
     transport,
     McpClientConfig::new(Implementation::new("my-client", "0.1.0")),
 );
-client.initialize().await?;
+let mode = client.connect().await?;
 let tools = client.list_tools().await?;
 ```
 
-`StreamableHttpTransport` accepts JSON and SSE responses, retains opaque
-session state, and supports resumable server notifications. It never retries a
-request implicitly: an expired session is returned as
-`McpError::SessionExpired`, so a host cannot accidentally duplicate a Tool
-effect. `McpHttpServerConfig` rejects unknown browser origins by default and
-can require a bearer `HttpAuthorizer`. Public deployments should terminate TLS
-at the process or a trusted reverse proxy.
+`connect()` discovers the server and prefers the 2026-07-28 stateless request
+data plane. Tools, Resources, Prompts, Completion, pagination, per-request
+client metadata, result metadata, and the standard HTTP routing headers operate
+without an initialization handshake or HTTP session. If discovery identifies a
+legacy-only server, Runifold falls back to the finalized 2025-11-25
+initialization flow. The returned `McpProtocolMode` makes that choice explicit.
+
+`StreamableHttpTransport` accepts JSON and request-scoped SSE responses. Modern
+requests validate mirrored protocol, method, name, and schema-designated Tool
+parameter headers against the body. The HTTP client accepts only statically
+reachable primitive `x-mcp-header` declarations, excludes an invalid Tool from
+discovery, and safely encodes Unicode, whitespace, control characters, and the
+Base64 sentinel itself. Legacy mode retains opaque session state and resumable
+server notifications. The transport never retries a request implicitly: an
+expired legacy session is returned as `McpError::SessionExpired`, so a host
+cannot accidentally duplicate a Tool effect. Do not annotate secrets with
+`x-mcp-header`, because infrastructure may record HTTP headers.
+`McpHttpServerConfig` rejects unknown browser origins by default and can require
+a bearer `HttpAuthorizer`. Public deployments should terminate TLS at the
+process or a trusted reverse proxy.
+
+Modern server-to-client interaction is explicit and request-scoped.
+`McpClient::listen` opens a filtered `subscriptions/listen` stream; the server
+acknowledges only supported and authorized notification classes, and every
+event is correlated to the listen request. Multiple stdio subscriptions are
+demultiplexed independently, while HTTP uses one POST/SSE response per
+subscription and allocates no protocol session.
+
+MRTR incomplete results are handled under one total deadline and bounded round
+count. Each retry receives a fresh JSON-RPC ID, only the latest keyed
+`inputResponses`, and the exact opaque `requestState` returned by the server.
+Hosts can install a generic `MrtrInputHandler`; an existing `SamplingService`
+automatically resolves `sampling/createMessage`. On the server,
+`MrtrToolGate` runs with attenuated Tool authority and must validate any echoed
+state before returning `Proceed`. The canonical Tool is invoked only after the
+gate proceeds.
 
 Resources and Prompts use the same negotiated client:
 
@@ -382,16 +686,19 @@ Enable the first provider edge with the `openai` feature:
 ```rust,no_run
 use runifold::{
     Budget, BudgetTracker, RunContext,
-    openai::{OpenAiAgentExt, OpenAiClient, OpenAiConfig},
+    openai::{OpenAiAgentExt, OpenAiClient},
 };
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let config = OpenAiConfig::new(std::env::var("OPENAI_API_KEY")?)?;
-let agent = OpenAiClient::new(config)
+let agent = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?
     .agent("assistant", "gpt-5")
     .system("Answer precisely and expose uncertainty.")
     .max_turns(8)
     .build()?;
+let answer = agent.prompt_text("Why is durable execution useful?").await?;
+# let _ = answer;
+
+// Advanced execution keeps authority and accounting explicit.
 let run = RunContext::root(
     BudgetTracker::new(Budget::default()),
     agent.callable_capabilities(),
@@ -408,11 +715,10 @@ secrets enter their process.
 Anthropic uses its native Messages protocol behind the `anthropic` feature:
 
 ```rust,no_run
-use runifold::anthropic::{AnthropicAgentExt, AnthropicClient, AnthropicConfig};
+use runifold::anthropic::{AnthropicAgentExt, AnthropicClient};
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
-let config = AnthropicConfig::new(std::env::var("ANTHROPIC_API_KEY")?)?;
-let agent = AnthropicClient::new(config)
+let agent = AnthropicClient::from_api_key(std::env::var("ANTHROPIC_API_KEY")?)?
     .agent("researcher", "claude-sonnet-4-5")
     .system("Separate evidence from inference.")
     .build()?;
@@ -833,6 +1139,254 @@ let agent = agent.effect_executor(executor);
 SQLite is an optional local adapter, not part of the runtime kernel. A service
 can implement the same traits with PostgreSQL or another transactional store.
 
+Distributed Workflow workers use the `workflow-postgres` feature:
+
+```rust,ignore
+use std::{sync::Arc, time::Duration};
+use runifold::{
+    Budget, CancellationToken, CapabilitySet, LeaseDuration, WorkerId,
+    WorkflowDefinition, WorkflowRegistry, WorkflowResumePolicy,
+    WorkflowSupervisor, WorkflowSupervisorConfig, WorkflowWorker,
+    postgres::PostgresWorkflowStore,
+};
+
+let store = Arc::new(
+    PostgresWorkflowStore::connect(&database_url, "runifold_workflows").await?
+);
+store.ensure_schema().await?;
+
+let mut registry = WorkflowRegistry::new();
+registry.register(
+    WorkflowDefinition::new(
+        Arc::new(workflow),
+        Budget::default(),
+        CapabilitySet::new(),
+    )
+    .with_resume_policy(WorkflowResumePolicy::RetryInterruptedStep),
+)?;
+
+let worker = WorkflowWorker::new(
+    store,
+    registry,
+    WorkerId::parse("worker-01")?,
+    LeaseDuration::new(Duration::from_secs(30))?,
+    Duration::from_secs(10),
+)?;
+
+let shutdown = CancellationToken::new();
+let supervisor = WorkflowSupervisor::new(
+    Arc::new(worker),
+    WorkflowSupervisorConfig::new(16)?
+        .with_backoff(Duration::from_millis(25), Duration::from_secs(5))?,
+);
+let report = supervisor.run(&shutdown).await;
+```
+
+`run_once` remains available for embedded hosts and claims at most one task.
+`WorkflowSupervisor` adds continuous polling, bounded concurrency, exponential
+idle/error backoff, a low-cardinality metric snapshot, and graceful shutdown
+that stops admission before draining started cycles. A failed heartbeat
+cancels and joins the in-flight Workflow before returning `LeaseLost`. Every
+distributed checkpoint write also validates the worker fencing token
+independently.
+
+Durable waits are definition nodes, not sleeping worker futures:
+
+```rust,ignore
+let tenant = WorkflowTenantId::parse("acme")?;
+store
+    .set_tenant_policy(
+        tenant.clone(),
+        WorkflowTenantPolicy::new(10_000, 100)?,
+    )
+    .await?;
+
+let workflow = Workflow::builder("approval")
+    .timer("cooldown", Duration::from_secs(30))
+    .wait_for_signal_or_timeout(
+        "approval",
+        "approved",
+        Duration::from_secs(24 * 60 * 60),
+    )
+    .agent("fulfill", fulfillment_agent, capabilities)
+    .build()?;
+
+let signal = WorkflowSignal::new(
+    workflow_checkpoint_id,
+    WorkflowSignalName::parse("approved")?,
+    serde_json::json!({"approved_by": "operator-7"}),
+)?;
+let outcome = store.publish_signal(tenant.clone(), signal).await?;
+```
+
+Timers use store-authoritative time and hold no lease while waiting. Signals
+target a workflow checkpoint and carry a stable publication identity:
+duplicates with identical content are accepted idempotently, conflicting reuse
+is rejected, and signals received before the wait are buffered. A
+signal-or-timeout node emits a typed `WorkflowWaitOutcome`, with the store
+choosing exactly one winner. `WorkflowStore::cancel` fences leased work;
+`inspect_signal` exposes lifecycle metadata without payloads; and
+`compact_signals` deletes only expired consumed or dead-letter identities.
+Every external control-plane operation also requires a `WorkflowTenantId`.
+Claims rotate across eligible tenants before applying task priority, while
+each tenant's outstanding-task and unexpired-lease limits are enforced
+independently.
+
+Human review uses the same durable wake and fencing machinery:
+
+```rust,ignore
+let workflow = Workflow::builder("transfer")
+    .interrupt("review", "Review the proposed transfer")
+    .agent("continue", transfer_agent, capabilities)
+    .build()?;
+
+let snapshot = store.inspect(tenant.clone(), workflow_checkpoint_id).await?;
+let request = snapshot.interrupt.expect("workflow is awaiting review");
+let command = WorkflowInterruptCommand::new(
+    workflow_checkpoint_id,
+    request.interrupt_id,
+    WorkflowInterruptDecision::edit(serde_json::json!({"amount": 40}))?,
+)?;
+let outcome = store.decide_interrupt(tenant, command).await?;
+```
+
+The prompt, proposal, and stable interrupt identity are checkpointed before
+the worker lease is released. A decision ID is independently stable, so an
+operator can safely retry the same command after a timeout. The downstream
+node receives a typed `WorkflowInterruptOutcome`, preserving the distinction
+between approval, edit, and rejection.
+
+Checkpoint time travel creates a new execution instead of mutating history:
+
+```rust,ignore
+let revisions = store
+    .list_checkpoint_history(
+        tenant.clone(),
+        workflow_checkpoint_id,
+        None,
+        WorkflowCheckpointHistoryLimit::new(64)?,
+    )
+    .await?;
+
+let selected = &revisions[3];
+let command = WorkflowForkCommand::new(
+    workflow_checkpoint_id,
+    selected.revision,
+    WorkflowForkPolicy::RejectAmbiguous,
+);
+let fork = store.fork_workflow(tenant, command).await?;
+```
+
+Every revision is immutable. The fork receives a new checkpoint and Run
+identity, keeps the source workflow version, accumulated usage, and capability
+ceiling, and records `WorkflowLineage` back to the exact parent revision.
+Completed steps are not replayed. A serial `StepInFlight` revision is rejected
+unless the caller explicitly selects `RetryInterruptedStep`; in-flight
+parallel and race revisions remain fail-closed. Forked timers and timeouts
+restart from branch creation, while signal and human-review waits remain
+durably suspended under the new task identity.
+
+Multi-turn Agent context uses a separate `ConversationStore` boundary:
+
+```rust,ignore
+let store = InMemoryConversationStore::new();
+let conversation_id = ConversationId::new();
+let namespace = MemoryNamespace::parse("tenant.user-42")?;
+let policy = ConversationContextPolicy::new(
+    ConversationWindow::new(16)?,
+)
+.with_semantic_memory(4)?;
+
+let turn = agent
+    .run_conversation(
+        "Continue our Rust design discussion",
+        &run,
+        &store,
+        conversation_id,
+        namespace,
+        policy,
+    )
+    .await?;
+```
+
+The transcript is immutable model-visible conversation data. `Journal`
+continues to contain execution facts and is never stored as conversation
+history. A `ConversationSummary` is a lossy, monotonically advancing view over
+a transcript prefix and never deletes that prefix. `summary_buffer` contains
+older unsummarized entries outside the bounded live window; Agents fail closed
+with `SummaryRequired` instead of silently dropping them. `SemanticMemory`
+requires explicit upsert and immutable transcript provenance, is searchable
+across conversations only inside its `MemoryNamespace`, and is injected as
+untrusted transient context rather than masquerading as prior dialogue.
+
+Production deployments can persist the same contract in `PostgreSQL`:
+
+```rust,ignore
+let store = PostgresConversationStore::connect(
+    &database_url,
+    "runifold_conversations",
+).await?;
+store.ensure_schema().await?; // explicit deployment step, never hidden in a turn
+
+let automatic_summary = AutomaticConversationSummary::new(
+    ConversationContextPolicy::new(ConversationWindow::new(16)?)
+        .with_summary_batch(ConversationSummaryBatch::new(32)?),
+    &summary_agent,
+)
+.with_pass_limit(ConversationSummaryPassLimit::new(8)?);
+let turn = agent
+    .run_conversation_with_summary(
+        "Continue our Rust design discussion",
+        &run,
+        &store,
+        conversation_id,
+        namespace,
+        automatic_summary,
+    )
+    .await?;
+```
+
+The PostgreSQL adapter uses atomic compare-and-swap transcript commits,
+monotonic summary commits, namespace-isolated semantic memory, and explicit
+schema setup. `summary_agent` implements `ConversationSummarizer`; because it
+runs through the canonical Agent engine with the same `RunContext`, summary
+generation remains subject to cancellation, deadlines, budgets, authority,
+and journaling. Transcript content is marked as untrusted data in the summary
+prompt, and a concurrent transcript append causes an explicit summary CAS
+conflict rather than committing a stale summary.
+
+Both the live window and each summary batch are bounded independently.
+`summary_backlog` reports how many older entries remain without loading them,
+and automatic compaction stops with `SummaryPassLimitExceeded` before the main
+model runs when the configured pass limit is insufficient.
+
+PostgreSQL semantic memory can opt into native pgvector search:
+
+```rust,ignore
+let store = PostgresConversationStore::connect(
+    &database_url,
+    "runifold_conversations",
+)
+.await?
+.with_semantic_memory_embedder(Arc::new(embedding_model));
+store.ensure_schema().await?;
+store
+    .ensure_semantic_memory_vector_schema(NonZeroU32::new(1536)?)
+    .await?;
+
+let stored = store
+    .upsert_memory_scoped(command, RetrievalContext::for_run(&run))
+    .await?;
+```
+
+Scoped memory writes and searches use `RetrievalDocument` and
+`RetrievalQuery` embedding tasks respectively, persist the memory and vector
+in one PostgreSQL statement, and return attributable embedding/database
+`Usage`. Conversational Agent lookup uses the scoped path automatically, so
+embedding tokens, cost, duration, cancellation, and deadlines participate in
+the caller's run. Without an embedder the same API retains deterministic
+lexical search.
+
 ## Design principles
 
 1. Every execution is a `Run`.
@@ -847,7 +1401,8 @@ can implement the same traits with PostgreSQL or another transactional store.
 10. Stable kernel, replaceable edges.
 
 See [the project charter](docs/CHARTER.md) and
-[RFC 0001](docs/rfcs/0001-runtime-kernel.md).
+[RFC 0001](docs/rfcs/0001-runtime-kernel.md). Persistence and fault-injection
+requirements are documented in the [testing guide](docs/TESTING.md).
 
 ## Workspace
 
@@ -862,11 +1417,12 @@ See [the project charter](docs/CHARTER.md) and
 | `runifold-macros` | Attribute macros for typed async Rust Tools |
 | `runifold-mcp` | Capability-safe MCP Tools, Resources, Templates, Prompts, Completion, Sampling, stdio, and Streamable HTTP |
 | `runifold-observability-otel` | Optional OpenTelemetry GenAI spans and metrics |
-| `runifold-provider-anthropic` | Native Anthropic Messages requests and semantic SSE streams |
-| `runifold-provider-gemini` | Native Gemini GenerateContent requests and SSE responses |
-| `runifold-provider-ollama` | Native Ollama chat requests, NDJSON, local models, and thinking |
-| `runifold-provider-openai` | Responses and Chat Completions for OpenAI-compatible providers |
+| `runifold-providers` | Feature-gated HTTP and SDK-backed model provider adapters |
 | `runifold-provider-testkit` | Offline real-HTTP cassettes, protocol assertions, delays, and disconnect injection |
+| `runifold-retrieval` | Provider-neutral embeddings, capability-safe retrieval, and a deterministic reference vector index |
+| `runifold-retrieval-pgvector` | Explicit PostgreSQL/pgvector persistence and cosine/HNSW retrieval |
+| `runifold-retrieval-qdrant` | Qdrant REST upsert and query adapter with stable document identity |
+| `runifold-store-postgres` | PostgreSQL conversations, semantic memory, workflow claims, fenced checkpoints, leases, heartbeats, and fencing tokens |
 | `runifold-store-sqlite` | Optional durable effects, checkpoints, and journals in one SQLite database |
 | `runifold-testkit` | Deterministic runtime helpers, quality datasets, async scorers, and regression gates |
 | `runifold-tool` | Tool descriptors, capability gating, registry, and execution |

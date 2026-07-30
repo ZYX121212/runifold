@@ -5,6 +5,21 @@
 //! exercising real request serialization, response streaming, delays, and
 //! mid-stream disconnects.
 
+mod benchmark;
+mod conformance;
+
+pub use benchmark::{
+    BenchmarkFailureCount, BenchmarkFailureKind, BenchmarkFuture, BenchmarkInvocation,
+    BenchmarkInvocationError, BenchmarkPlan, BenchmarkRegressionComparison,
+    BenchmarkRegressionMetric, BenchmarkRegressionPolicy, BenchmarkTarget, LatencyDistribution,
+    ModelBenchmarkTarget, ProviderBenchmarkError, ProviderBenchmarkReport, benchmark,
+    compare_benchmarks,
+};
+pub use conformance::{
+    ConformanceCheck, ErrorContract, ProviderConformanceError, ProviderConformanceReport,
+    SuccessContract, verify_error, verify_success,
+};
+
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
@@ -411,10 +426,12 @@ fn serve(
             request_finished(stats, false);
             return;
         }
-        if let Err(error) = write_response(&mut stream, &exchange.response) {
-            set_failure(failure, error.to_string());
+        if write_response(&mut stream, &exchange.response).is_err() {
+            // A caller may deliberately cancel or time out after the request
+            // has matched. That closes its socket, but must not prevent later
+            // scripted exchanges from being accepted.
             request_finished(stats, false);
-            return;
+            continue;
         }
         request_finished(stats, true);
     }
@@ -604,7 +621,13 @@ fn validate_request(
 }
 
 fn redact(mut request: ObservedRequest) -> ObservedRequest {
-    for name in ["authorization", "x-api-key", "x-goog-api-key", "api-key"] {
+    for name in [
+        "authorization",
+        "x-api-key",
+        "x-goog-api-key",
+        "api-key",
+        "x-amz-security-token",
+    ] {
         if let Some(value) = request.headers.get_mut(name) {
             *value = "[REDACTED]".into();
         }
@@ -703,7 +726,7 @@ mod tests {
         let mut stream = TcpStream::connect(server.address).unwrap();
         stream
             .write_all(
-                b"POST /messages HTTP/1.1\r\nHost: localhost\r\nX-Api-Key: secret\r\nContent-Length: 15\r\n\r\n{\"prompt\":\"hi\"}",
+                b"POST /messages HTTP/1.1\r\nHost: localhost\r\nX-Api-Key: secret\r\nX-Amz-Security-Token: temporary-secret\r\nContent-Length: 15\r\n\r\n{\"prompt\":\"hi\"}",
             )
             .unwrap();
         let mut response = String::new();
@@ -713,6 +736,7 @@ mod tests {
         server.assert_finished().unwrap();
         let observed = server.observed_requests();
         assert_eq!(observed[0].headers["x-api-key"], "[REDACTED]");
+        assert_eq!(observed[0].headers["x-amz-security-token"], "[REDACTED]");
         assert_eq!(observed[0].json_body().unwrap(), json!({"prompt": "hi"}));
     }
 }

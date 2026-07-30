@@ -3,6 +3,7 @@
 mod evaluation;
 mod evaluation_scorers;
 mod evaluation_store;
+mod retrieval_evaluation;
 
 use std::{
     collections::VecDeque,
@@ -30,6 +31,10 @@ pub use evaluation_scorers::{
     JsonRule, JsonRuleScorer, JudgeRubric, ModelJudgeScorer, TokenOverlapScorer, WeightedJsonRule,
 };
 pub use evaluation_store::{EvaluationRepository, EvaluationStoreError, FileEvaluationRepository};
+pub use retrieval_evaluation::{
+    RetrievalCaseMetrics, RetrievalEvaluationCase, RetrievalEvaluationError,
+    RetrievalEvaluationReport, RetrievalEvaluationRunner,
+};
 
 type ModelScript = Result<Vec<ModelStreamEvent>, ModelError>;
 type ModelScriptQueue = Arc<Mutex<VecDeque<ModelScript>>>;

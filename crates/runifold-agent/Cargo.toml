@@ -13,10 +13,12 @@ publish.workspace = true
 
 [dependencies]
 futures-core.workspace = true
+futures-timer.workspace = true
 futures-util.workspace = true
 runifold-core.workspace = true
 runifold-effect.workspace = true
 runifold-model.workspace = true
+runifold-retrieval.workspace = true
 runifold-tool.workspace = true
 schemars.workspace = true
 serde.workspace = true

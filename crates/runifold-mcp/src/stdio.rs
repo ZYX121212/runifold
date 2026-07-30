@@ -15,7 +15,7 @@ use tokio::{
 use crate::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, McpError, McpSession, McpTransport,
     PeerRequestHandler, RequestId, ServerNotificationStream, TransportFuture,
-    transport::ClientPeerTransport,
+    subscription::notification_subscription_id, transport::ClientPeerTransport,
 };
 
 const PARSE_ERROR: i64 = -32700;
@@ -109,15 +109,31 @@ where
             };
             let session = session.clone();
             let writer = Arc::clone(&writer);
-            requests.spawn(async move {
-                let response = session.handle_request(request).await;
-                write_response(&writer, &response).await
-            });
+            if request.method == "subscriptions/listen" {
+                requests.spawn(async move {
+                    use futures_util::StreamExt;
+                    match session.open_subscription(request) {
+                        Ok(mut notifications) => {
+                            while let Some(notification) = notifications.next().await {
+                                write_message(&writer, &notification?).await?;
+                            }
+                            Ok(())
+                        }
+                        Err(response) => write_response(&writer, &response).await,
+                    }
+                });
+            } else {
+                requests.spawn(async move {
+                    let response = session.handle_request(request).await;
+                    write_response(&writer, &response).await
+                });
+            }
         } else {
             let notification = serde_json::from_value::<JsonRpcNotification>(value)?;
             session.handle_notification(notification)?;
         }
     }
+    session.cancel_all_inflight();
     while let Some(result) = requests.join_next().await {
         result.map_err(|error| McpError::protocol(error.to_string()))??;
     }
@@ -279,6 +295,75 @@ impl McpTransport for StdioTransport {
         })
     }
 
+    fn listen(&self, request: JsonRpcRequest) -> TransportFuture<'_, ServerNotificationStream> {
+        Box::pin(async move {
+            let id = request.id.clone();
+            let mut notifications = self.notifications.subscribe();
+            let (sender, response) = oneshot::channel();
+            if self.pending.lock().insert(id.clone(), sender).is_some() {
+                return Err(McpError::protocol("duplicate subscription request id"));
+            }
+            if let Err(error) = write_message(&self.writer, &request).await {
+                self.pending.lock().remove(&id);
+                return Err(error);
+            }
+            let guard = StdioListenGuard {
+                id: id.clone(),
+                pending: self.pending.clone(),
+                writer: Arc::clone(&self.writer),
+            };
+            let subscription_id = id;
+            Ok(Box::pin(async_stream::stream! {
+                let _guard = guard;
+                let mut response = response;
+                loop {
+                    tokio::select! {
+                        notification = notifications.recv() => {
+                            match notification {
+                                Ok(notification)
+                                    if notification_subscription_id(&notification)
+                                        == Some(subscription_id.clone()) =>
+                                {
+                                    yield Ok(notification);
+                                }
+                                Ok(notification)
+                                    if is_subscription_cancelled(
+                                        &notification,
+                                        &subscription_id,
+                                    ) =>
+                                {
+                                    break;
+                                }
+                                Ok(_) => {}
+                                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                    yield Err(McpError::protocol(format!(
+                                        "MCP subscription receiver lagged by {skipped} messages"
+                                    )));
+                                    break;
+                                }
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                        response = &mut response => {
+                            match response {
+                                Ok(Ok(response)) => {
+                                    if let Err(error) = response.into_result() {
+                                        yield Err(error);
+                                    }
+                                }
+                                Ok(Err(error)) => yield Err(error),
+                                Err(_) => yield Err(McpError::protocol(
+                                    "MCP subscription response channel closed"
+                                )),
+                            }
+                            break;
+                        }
+                    }
+                }
+            }) as ServerNotificationStream)
+        })
+    }
+
     fn install_peer_handler(&self, handler: Arc<dyn PeerRequestHandler>) -> Result<(), McpError> {
         let mut installed = self
             .peer_handler
@@ -292,6 +377,22 @@ impl McpTransport for StdioTransport {
         *installed = Some(handler);
         Ok(())
     }
+}
+
+fn is_subscription_cancelled(
+    notification: &JsonRpcNotification,
+    subscription_id: &RequestId,
+) -> bool {
+    notification.method == "notifications/cancelled"
+        && notification
+            .params
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .and_then(|params| params.get("requestId"))
+            .cloned()
+            .and_then(|value| serde_json::from_value::<RequestId>(value).ok())
+            .as_ref()
+            == Some(subscription_id)
 }
 
 type PendingSender = oneshot::Sender<Result<JsonRpcResponse, McpError>>;
@@ -347,6 +448,31 @@ impl PendingMap {
 struct PendingGuard {
     id: RequestId,
     pending: PendingMap,
+}
+
+struct StdioListenGuard {
+    id: RequestId,
+    pending: PendingMap,
+    writer: SharedWriter,
+}
+
+impl Drop for StdioListenGuard {
+    fn drop(&mut self) {
+        self.pending.lock().remove(&self.id);
+        let notification = JsonRpcNotification::new(
+            "notifications/cancelled",
+            Some(serde_json::json!({
+                "requestId": &self.id,
+                "reason": "subscription stream dropped",
+            })),
+        );
+        let writer = Arc::clone(&self.writer);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = write_message(&writer, &notification).await;
+            });
+        }
+    }
 }
 
 impl PendingGuard {

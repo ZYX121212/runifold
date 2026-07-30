@@ -58,6 +58,11 @@ Every node declares its exact `CapabilitySet`. Before any workflow node
 executes, the scheduler verifies that all requested capabilities are a subset
 of the parent run's authority.
 
+`RunContext::child` and `RunContext::child_reserved` independently enforce the
+same subset invariant. This defense in depth prevents callers that bypass the
+Workflow scheduler from constructing an authority-amplified child Run. Only
+`RunContext::root` establishes initial host authority.
+
 Each node receives a child `RunContext`:
 
 - budget remains shared with the run tree;
@@ -140,3 +145,4 @@ unknown effects remain intentionally unsupported.
 7. Stable recovery never decreases shared usage.
 8. Conditional execution invokes exactly one branch.
 9. Checkpoint writes use the existing compare-and-swap storage contract.
+10. Every non-root Run's capabilities are a subset of its direct parent.

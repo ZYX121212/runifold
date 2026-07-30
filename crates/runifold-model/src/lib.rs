@@ -22,7 +22,7 @@ pub use content::{
     ToolResult,
 };
 pub use error::{ModelError, ModelErrorKind};
-pub use invocation::{Model, ModelCallContext, ModelEventStream, ModelFuture};
+pub use invocation::{Model, ModelCallContext, ModelEventStream, ModelFuture, ProviderModel};
 pub use request::{
     FeaturePolicy, GenerationOptions, ModelRef, ModelRequest, OutputFormat, ToolChoice, ToolSpec,
 };

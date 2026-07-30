@@ -37,8 +37,14 @@ impl fmt::Display for StepId {
 }
 
 /// Boxed asynchronous workflow-step result.
+#[cfg(not(target_arch = "wasm32"))]
 pub type WorkflowStepFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Value, WorkflowStepError>> + Send + 'a>>;
+
+/// Boxed workflow-step result on single-threaded WASM.
+#[cfg(target_arch = "wasm32")]
+pub type WorkflowStepFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Value, WorkflowStepError>> + 'a>>;
 
 /// One executable, provider-neutral workflow node.
 ///

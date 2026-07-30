@@ -1,18 +1,39 @@
-use std::time::Instant;
 use std::{collections::BTreeMap, sync::Arc};
 
 use serde_json::Value;
 
 use crate::{
-    BudgetReservation, BudgetTracker, CancellationToken, CapabilitySet, EventId, Journal,
-    JournalError, RunEvent, RunEventKind, RunId, RunRecorder,
+    BudgetReservation, BudgetTracker, CancellationToken, CapabilityId, CapabilitySet, EventId,
+    Instant, Journal, JournalError, RunEvent, RunEventKind, RunId, RunRecorder,
 };
 use thiserror::Error;
+
+/// A child Run cannot receive authority absent from its parent.
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[error("child Run requested capability `{capability}` ({capability_id}) absent from its parent")]
+pub struct AuthorityAmplification {
+    /// Stable identity of the rejected capability.
+    pub capability_id: CapabilityId,
+    /// Human-readable capability name.
+    pub capability: String,
+}
 
 /// A reservation from another run tree cannot fund a child run.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 #[error("budget reservation does not belong to this run tree")]
 pub struct BudgetReservationMismatch;
+
+/// Failure to create a capability-attenuated child Run.
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ChildRunError {
+    /// The child requested authority absent from its parent.
+    #[error(transparent)]
+    Authority(#[from] AuthorityAmplification),
+    /// The budget reservation belongs to another run tree.
+    #[error(transparent)]
+    BudgetReservation(#[from] BudgetReservationMismatch),
+}
 
 /// Namespaced runtime metadata.
 pub type Metadata = BTreeMap<String, Value>;
@@ -145,30 +166,49 @@ impl RunContext {
         self
     }
 
-    /// Creates a child with an explicit capability set.
+    /// Creates a child with an explicitly attenuated capability set.
     ///
     /// The child shares the root budget tracker, receives a descendant
     /// cancellation token, and does not inherit metadata or capabilities.
-    #[must_use]
-    pub fn child(&self, capabilities: CapabilitySet) -> Self {
-        self.child_with_budget(capabilities, self.budget.clone())
-    }
-
-    /// Creates a child funded by one scoped reservation from this run tree.
     ///
     /// # Errors
     ///
-    /// Returns [`BudgetReservationMismatch`] when the reservation was created
-    /// by another run tree.
+    /// Returns [`AuthorityAmplification`] when the child requests any
+    /// capability absent from this Run.
+    pub fn child(&self, capabilities: CapabilitySet) -> Result<Self, AuthorityAmplification> {
+        self.validate_child_authority(&capabilities)?;
+        Ok(self.child_with_budget(capabilities, self.budget.clone()))
+    }
+
+    /// Creates an attenuated child funded by a scoped budget reservation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChildRunError`] when the child requests authority absent from
+    /// this Run or the reservation was created by another run tree.
     pub fn child_reserved(
         &self,
         capabilities: CapabilitySet,
         reservation: &BudgetReservation,
-    ) -> Result<Self, BudgetReservationMismatch> {
+    ) -> Result<Self, ChildRunError> {
+        self.validate_child_authority(&capabilities)?;
         if !reservation.belongs_to(&self.budget) {
-            return Err(BudgetReservationMismatch);
+            return Err(BudgetReservationMismatch.into());
         }
         Ok(self.child_with_budget(capabilities, reservation.tracker()))
+    }
+
+    fn validate_child_authority(
+        &self,
+        capabilities: &CapabilitySet,
+    ) -> Result<(), AuthorityAmplification> {
+        if let Some(missing) = capabilities.first_missing_from(&self.capabilities) {
+            return Err(AuthorityAmplification {
+                capability_id: missing.id,
+                capability: missing.name.clone(),
+            });
+        }
+        Ok(())
     }
 
     fn child_with_budget(&self, capabilities: CapabilitySet, budget: BudgetTracker) -> Self {
@@ -195,7 +235,7 @@ impl RunContext {
 mod tests {
     use std::sync::Arc;
 
-    use super::{BudgetReservationMismatch, RunContext};
+    use super::{AuthorityAmplification, BudgetReservationMismatch, ChildRunError, RunContext};
     use crate::{
         Budget, BudgetTracker, CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilitySet,
         EffectClass, InMemoryJournal, LifecycleEvent, RiskLevel, RunEventKind, Usage,
@@ -223,7 +263,7 @@ mod tests {
             }),
             parent_capabilities,
         );
-        let child = parent.child(CapabilitySet::new());
+        let child = parent.child(CapabilitySet::new()).unwrap();
 
         assert_eq!(child.parent_run_id(), Some(parent.run_id()));
         assert_eq!(child.root_run_id(), parent.root_run_id());
@@ -247,7 +287,7 @@ mod tests {
         let journal = InMemoryJournal::new();
         let parent = RunContext::root(BudgetTracker::new(Budget::default()), CapabilitySet::new())
             .with_journal(Arc::new(journal.clone()));
-        let child = parent.child(CapabilitySet::new());
+        let child = parent.child(CapabilitySet::new()).unwrap();
 
         parent
             .record(RunEventKind::Lifecycle(LifecycleEvent::Started), None)
@@ -300,6 +340,81 @@ mod tests {
             .child_reserved(CapabilitySet::new(), &reservation)
             .unwrap_err();
 
-        assert_eq!(error, BudgetReservationMismatch);
+        assert_eq!(
+            error,
+            ChildRunError::BudgetReservation(BudgetReservationMismatch)
+        );
+    }
+
+    #[test]
+    fn child_rejects_authority_absent_from_parent() {
+        let parent = RunContext::root(BudgetTracker::new(Budget::default()), CapabilitySet::new());
+        let requested = CapabilityDescriptor {
+            id: CapabilityId::new(),
+            name: "filesystem.write".into(),
+            version: "1".into(),
+            kind: CapabilityKind::Tool,
+            input_schema: serde_json::json!({}),
+            output_schema: serde_json::json!({}),
+            effect: EffectClass::NonIdempotentWrite,
+            risk: RiskLevel::High,
+            metadata: std::collections::BTreeMap::default(),
+        };
+        let mut capabilities = CapabilitySet::new();
+        capabilities.grant(requested.clone());
+
+        let error = parent.child(capabilities).unwrap_err();
+
+        assert_eq!(
+            error,
+            AuthorityAmplification {
+                capability_id: requested.id,
+                capability: requested.name,
+            }
+        );
+    }
+
+    #[test]
+    fn reserved_child_checks_authority_before_using_the_reservation() {
+        let parent = RunContext::root(
+            BudgetTracker::new(Budget {
+                turns: Some(1),
+                ..Budget::default()
+            }),
+            CapabilitySet::new(),
+        );
+        let reservation = parent
+            .budget()
+            .try_reserve(Usage {
+                turns: 1,
+                ..Usage::default()
+            })
+            .unwrap();
+        let requested = CapabilityDescriptor {
+            id: CapabilityId::new(),
+            name: "network.write".into(),
+            version: "1".into(),
+            kind: CapabilityKind::Tool,
+            input_schema: serde_json::json!({}),
+            output_schema: serde_json::json!({}),
+            effect: EffectClass::IdempotentWrite,
+            risk: RiskLevel::Medium,
+            metadata: std::collections::BTreeMap::default(),
+        };
+        let mut capabilities = CapabilitySet::new();
+        capabilities.grant(requested.clone());
+
+        let error = parent
+            .child_reserved(capabilities, &reservation)
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            ChildRunError::Authority(AuthorityAmplification {
+                capability_id: requested.id,
+                capability: requested.name,
+            })
+        );
+        assert_eq!(reservation.remaining().turns, 1);
     }
 }

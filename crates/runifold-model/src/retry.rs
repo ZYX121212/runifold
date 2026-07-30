@@ -64,6 +64,19 @@ pub struct ModelRetryPolicy {
     unknown_safety_kinds: Vec<ModelErrorKind>,
 }
 
+impl Default for ModelRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(2),
+            multiplier: 2,
+            jitter: RetryJitter::Full,
+            unknown_safety_kinds: Vec::new(),
+        }
+    }
+}
+
 impl ModelRetryPolicy {
     /// Creates an exponential policy. `max_attempts` includes the first call.
     ///
@@ -233,6 +246,17 @@ mod tests {
             .unwrap_err(),
             ModelRetryPolicyError::ZeroMaxAttempts
         );
+    }
+
+    #[test]
+    fn default_policy_is_bounded_and_safe_only() {
+        let policy = ModelRetryPolicy::default();
+
+        assert_eq!(policy.max_attempts(), 3);
+        assert_eq!(policy.initial_backoff(), Duration::from_millis(100));
+        assert_eq!(policy.max_backoff(), Duration::from_secs(2));
+        assert_eq!(policy.multiplier(), 2);
+        assert_eq!(policy.jitter_mode(), RetryJitter::Full);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # RFC 0004: OpenAI Responses adapter
 
 - Status: Accepted for initial implementation
-- Scope: `runifold-provider-openai`
+- Scope: `runifold-providers::openai`
 
 ## Summary
 

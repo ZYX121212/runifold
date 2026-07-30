@@ -1,7 +1,7 @@
 # RFC 0015: Canonical fluent Agent construction
 
 - Status: implemented
-- Scope: `runifold-agent`, `runifold`, `runifold-provider-openai`
+- Scope: `runifold-agent`, `runifold`, `runifold-providers::openai`
 
 ## Summary
 

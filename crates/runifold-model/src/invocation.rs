@@ -1,15 +1,11 @@
-use std::{
-    future::Future,
-    pin::Pin,
-    time::{Duration, Instant},
-};
+use std::{future::Future, pin::Pin, time::Duration};
 
 use futures_core::Stream;
 use futures_util::{
     StreamExt,
     future::{Either, select},
 };
-use runifold_core::{CancellationToken, InvocationId, RunContext, RunId};
+use runifold_core::{CancellationToken, Instant, InvocationId, RunContext, RunId};
 
 use crate::{
     ModelCapabilities, ModelError, ModelErrorKind, ModelRef, ModelRequest, ModelResponse,
@@ -17,11 +13,22 @@ use crate::{
 };
 
 /// A boxed, sendable future returned by a model implementation.
+#[cfg(not(target_arch = "wasm32"))]
 pub type ModelFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// A boxed future returned by a model implementation on single-threaded WASM.
+#[cfg(target_arch = "wasm32")]
+pub type ModelFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
 /// A provider-neutral stream of canonical model events.
+#[cfg(not(target_arch = "wasm32"))]
 pub type ModelEventStream =
     Pin<Box<dyn Stream<Item = Result<ModelStreamEvent, ModelError>> + Send + 'static>>;
+
+/// A provider-neutral model stream on single-threaded WASM.
+#[cfg(target_arch = "wasm32")]
+pub type ModelEventStream =
+    Pin<Box<dyn Stream<Item = Result<ModelStreamEvent, ModelError>> + 'static>>;
 
 /// Execution scope for one model invocation.
 ///
@@ -178,6 +185,25 @@ pub trait Model: Send + Sync {
                 }
             }
         })
+    }
+}
+
+/// Stable provider identity carried by a concrete model adapter.
+///
+/// Implementing this trait in addition to [`Model`] lets higher runtime layers
+/// construct provider-qualified model references and attach Agent, routing,
+/// retry, circuit-breaker, observability, budget, and workflow behavior
+/// without provider-specific orchestration code.
+pub trait ProviderModel: Model {
+    /// Returns the canonical provider namespace used by this adapter.
+    fn provider(&self) -> &str;
+
+    /// Qualifies one model name with this adapter's provider identity.
+    fn model_ref(&self, model: impl Into<String>) -> ModelRef
+    where
+        Self: Sized,
+    {
+        ModelRef::new(self.provider(), model)
     }
 }
 

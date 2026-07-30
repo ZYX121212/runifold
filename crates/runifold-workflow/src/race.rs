@@ -41,7 +41,7 @@ pub(crate) async fn execute_race(
     step_started: Option<EventId>,
     checkpoint: &mut Option<&mut WorkflowCheckpointCursor>,
 ) -> Result<Value, WorkflowError> {
-    let pending = prepare_race(branches, node, state, run, checkpoint)?;
+    let pending = prepare_race(branches, node, state, run, checkpoint).await?;
     if pending.is_empty() {
         return terminal_race_state(state, &node.id);
     }
@@ -86,7 +86,7 @@ pub(crate) async fn execute_race(
                 drop(pending_next);
                 abandon_active(workflow, node, state, run, &active)?;
                 state.usage = run.budget().usage();
-                save_checkpoint(checkpoint, state)?;
+                save_checkpoint(checkpoint, state).await?;
                 return Err(WorkflowError::Cancelled);
             }
             Either::Right((completed, _)) => completed,
@@ -112,7 +112,8 @@ pub(crate) async fn execute_race(
                         branch: completed,
                         output,
                     },
-                );
+                )
+                .await;
             }
             Err(source) => {
                 if let Err(error) = record_failure(
@@ -126,7 +127,9 @@ pub(crate) async fn execute_race(
                         branch: completed,
                         source,
                     },
-                ) {
+                )
+                .await
+                {
                     abandon_active(workflow, node, state, run, &active)?;
                     return Err(error);
                 }
@@ -222,7 +225,7 @@ impl InitialPollBarrier {
     }
 }
 
-fn prepare_race<'a>(
+async fn prepare_race<'a>(
     branches: &'a [ParallelBranch],
     node: &WorkflowNode,
     state: &mut WorkflowCheckpointState,
@@ -259,7 +262,7 @@ fn prepare_race<'a>(
         branches: progress,
     };
     state.usage = run.budget().usage();
-    save_checkpoint(checkpoint, state)?;
+    save_checkpoint(checkpoint, state).await?;
     Ok(pending
         .into_iter()
         .zip(reservations)
@@ -294,7 +297,7 @@ struct RaceWinner {
     output: Value,
 }
 
-fn record_winner(
+async fn record_winner(
     workflow: &str,
     node: &WorkflowNode,
     state: &mut WorkflowCheckpointState,
@@ -329,7 +332,7 @@ fn record_winner(
         winner.branch.caused_by,
     )?;
     state.usage = run.budget().usage();
-    save_checkpoint(checkpoint, state)?;
+    save_checkpoint(checkpoint, state).await?;
     Ok(winner.output)
 }
 
@@ -339,7 +342,7 @@ struct RaceFailure {
     source: WorkflowStepError,
 }
 
-fn record_failure(
+async fn record_failure(
     workflow: &str,
     node: &WorkflowNode,
     state: &mut WorkflowCheckpointState,
@@ -372,7 +375,7 @@ fn record_failure(
         failure.branch.caused_by,
     )?;
     state.usage = run.budget().usage();
-    save_checkpoint(checkpoint, state)
+    save_checkpoint(checkpoint, state).await
 }
 
 fn abandon_active(

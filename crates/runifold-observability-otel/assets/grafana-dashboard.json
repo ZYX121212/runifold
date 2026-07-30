@@ -103,6 +103,20 @@
       ],
       "title": "Agent Usage and Cost",
       "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 26},
+      "id": 9,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "sum(rate(runifold_workflow_tenant_budget_decisions_total[5m])) by (decision)", "legendFormat": "{{decision}}/s", "refId": "A"},
+        {"expr": "runifold:workflow_budget_denial_ratio:rate5m", "legendFormat": "Admission denial ratio", "refId": "B"},
+        {"expr": "runifold:workflow_budget_recovery_forfeits:rate5m", "legendFormat": "Recovery forfeits/s", "refId": "C"}
+      ],
+      "title": "Workflow Tenant Budget Decisions",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",

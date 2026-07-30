@@ -18,7 +18,8 @@ artifacts, then publishing immutable versions to crates.io.
 1. Move relevant entries from `Unreleased` in `CHANGELOG.md` to the new version.
 2. Set the shared version in the root `Cargo.toml` and update internal
    dependency requirements together.
-3. Run `scripts/release-check.sh`.
+3. Install the pinned release tools from `.github/workflows/release.yml`,
+   including `cargo-semver-checks`, then run `scripts/release-check.sh`.
 4. Commit the release, create a signed `vX.Y.Z` tag, and push it.
 
 The tag workflow checks formatting, linting, tests, documentation, MSRV, all
@@ -39,13 +40,16 @@ approval, and store a scoped crates.io token as `CARGO_REGISTRY_TOKEN`.
 
 After inspecting the GitHub Release assets, manually run **Publish crates.io**:
 
-- `tag`: the existing release tag, such as `v0.1.0`;
-- `confirmation`: the exact manifest version without `v`, such as `0.1.0`.
+- `tag`: the existing release tag, such as `v0.2.0`;
+- `confirmation`: the exact manifest version without `v`, such as `0.2.0`.
 
-The workflow checks out that tag, packages the whole workspace again, and calls
-`scripts/publish-crates.sh --execute`. The script publishes dependencies before
-their consumers, waits for each version to become visible in crates.io, and
-skips versions already present so an interrupted run can safely resume.
+The workflow checks out that tag, validates the dependency order, assembles
+the whole workspace, and calls `scripts/publish-crates.sh --execute`. Archive
+assembly uses `--no-verify` because an unpublished workspace version cannot
+resolve its own dependent crates from crates.io. The publish script then uses
+Cargo's normal verification while publishing dependencies before their
+consumers, waits for each version to become visible in crates.io, and skips
+versions already present so an interrupted run can safely resume.
 
 `scripts/publish-crates.sh --list` prints the audited order without changing
 external state. Never publish from a branch or a dirty worktree.

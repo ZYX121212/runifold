@@ -13,10 +13,10 @@ use futures_util::future::join_all;
 use runifold_core::{Budget, BudgetTracker, CapabilityId, CapabilitySet, RunContext};
 use runifold_mcp::{
     GetPromptResult, Implementation, McpClient, McpClientConfig, McpError, McpHttpServer,
-    McpHttpServerConfig, McpServer, PromptArgument, PromptDescriptor, PromptFuture, PromptHandler,
-    PromptMessage, PromptRegistry, ReadResourceResult, RequestId, ResourceContents,
-    ResourceDescriptor, ResourceErrorKind, ResourceFuture, ResourceHandler, ResourceRegistry,
-    StaticTextResource, StdioTransport, StreamableHttpTransport, serve_io,
+    McpHttpServerConfig, McpProtocolMode, McpServer, PromptArgument, PromptDescriptor,
+    PromptFuture, PromptHandler, PromptMessage, PromptRegistry, ReadResourceResult, RequestId,
+    ResourceContents, ResourceDescriptor, ResourceErrorKind, ResourceFuture, ResourceHandler,
+    ResourceRegistry, StaticTextResource, StdioTransport, StreamableHttpTransport, serve_io,
 };
 use runifold_tool::ToolRegistry;
 use tokio::io::{BufReader, split};
@@ -92,7 +92,7 @@ async fn stdio_preserves_resources_and_prompts_without_transport_specific_types(
         McpClientConfig::new(Implementation::new("stdio-content-client", "1")),
     );
 
-    client.initialize().await.unwrap();
+    assert_eq!(client.connect().await.unwrap(), McpProtocolMode::Stateless);
     assert_eq!(client.list_resources().await.unwrap().len(), 1);
     assert_eq!(client.list_prompts().await.unwrap().len(), 1);
     assert_eq!(
@@ -129,7 +129,7 @@ async fn streamable_http_handles_concurrent_resource_reads_and_prompt_renders() 
         Arc::new(StreamableHttpTransport::new(endpoint).unwrap()),
         McpClientConfig::new(Implementation::new("http-content-client", "1")),
     );
-    client.initialize().await.unwrap();
+    assert_eq!(client.connect().await.unwrap(), McpProtocolMode::Stateless);
 
     let reads = (0..32).map(|_| {
         let client = client.clone();
@@ -365,6 +365,8 @@ impl ResourceHandler for InvalidBlobResource {
                     self.descriptor.resource.uri.clone(),
                     "not base64!",
                 )],
+                ttl_ms: None,
+                cache_scope: None,
             })
         })
     }

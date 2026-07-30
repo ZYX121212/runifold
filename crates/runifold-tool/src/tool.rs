@@ -6,7 +6,12 @@ use serde_json::Value;
 use crate::{ToolContext, ToolDescriptor, ToolError};
 
 /// A boxed, sendable future returned by a tool.
+#[cfg(not(target_arch = "wasm32"))]
 pub type ToolFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// A boxed Tool future on single-threaded WASM.
+#[cfg(target_arch = "wasm32")]
+pub type ToolFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 /// Successful canonical tool output.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

@@ -1,8 +1,9 @@
 use std::{
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+use runifold_core::Instant;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -44,6 +45,21 @@ pub struct CircuitBreakerConfig {
     failure_threshold: u32,
     cooldown: Duration,
     counted_kinds: Vec<ModelErrorKind>,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            failure_threshold: 5,
+            cooldown: Duration::from_secs(30),
+            counted_kinds: vec![
+                ModelErrorKind::Transport,
+                ModelErrorKind::Provider,
+                ModelErrorKind::Protocol,
+                ModelErrorKind::StreamState,
+            ],
+        }
+    }
 }
 
 impl CircuitBreakerConfig {
@@ -105,6 +121,24 @@ impl CircuitBreakerConfig {
 
     pub(crate) fn counts(&self, error: &ModelError) -> bool {
         error.kind != ModelErrorKind::Cancelled && self.counted_kinds.contains(&error.kind)
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use std::time::Duration;
+
+    use super::CircuitBreakerConfig;
+    use crate::ModelErrorKind;
+
+    #[test]
+    fn default_breaker_is_bounded_and_counts_runtime_failures() {
+        let config = CircuitBreakerConfig::default();
+
+        assert_eq!(config.failure_threshold(), 5);
+        assert_eq!(config.cooldown(), Duration::from_secs(30));
+        assert!(config.failure_kinds().contains(&ModelErrorKind::Transport));
+        assert!(config.failure_kinds().contains(&ModelErrorKind::Protocol));
     }
 }
 

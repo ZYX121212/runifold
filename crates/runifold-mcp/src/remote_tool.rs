@@ -134,7 +134,8 @@ fn map_mcp_error(error: &McpError) -> ToolError {
         McpErrorKind::Cancelled => ToolErrorKind::Cancelled,
         McpErrorKind::DeadlineExceeded => ToolErrorKind::DeadlineExceeded,
         McpErrorKind::Authentication => ToolErrorKind::CapabilityDenied,
-        McpErrorKind::Transport
+        McpErrorKind::TaskExpired
+        | McpErrorKind::Transport
         | McpErrorKind::Protocol
         | McpErrorKind::Remote
         | McpErrorKind::Lifecycle

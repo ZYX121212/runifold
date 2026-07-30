@@ -21,6 +21,21 @@ pub struct AgentOutcome {
 }
 
 impl AgentOutcome {
+    /// Collects model-visible terminal text in canonical content order.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.response.text()
+    }
+
+    /// Consumes the outcome and returns only model-visible terminal text.
+    ///
+    /// Use this only when the transcript, usage, counters, warnings, and
+    /// provider-specific response data are no longer needed.
+    #[must_use]
+    pub fn into_text(self) -> String {
+        self.response.into_text()
+    }
+
     /// Locally validates and decodes the final model response while preserving
     /// the complete canonical outcome.
     ///

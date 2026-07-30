@@ -1,6 +1,7 @@
 use runifold_core::{BudgetExceeded, CheckpointError, JournalError};
 use runifold_effect::EffectExecutorError;
 use runifold_model::ModelError;
+use runifold_retrieval::RetrievalError;
 use runifold_tool::ToolError;
 use thiserror::Error;
 
@@ -16,6 +17,9 @@ pub enum AgentError {
     /// Tool execution failed.
     #[error("tool execution failed: {0}")]
     Tool(#[from] ToolError),
+    /// Static or dynamic context retrieval failed.
+    #[error("agent retrieval failed: {0}")]
+    Retrieval(#[from] RetrievalError),
     /// A shared run-tree budget was exceeded.
     #[error("agent budget exceeded: {0}")]
     Budget(#[from] BudgetExceeded),

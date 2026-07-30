@@ -28,19 +28,36 @@ use tokio::sync::{Mutex, RwLock, broadcast, oneshot};
 
 use crate::{
     HttpAuthorizer, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LATEST_PROTOCOL_VERSION,
-    McpError, McpSamplingClient, McpServer, McpSession, RequestId, TransportFuture,
+    McpError, McpSamplingClient, McpServer, McpSession, RequestId, STATELESS_PROTOCOL_VERSION,
+    TransportFuture,
+    http_headers::{compile_tool_header_rules, decode_header_value},
     transport::ClientPeerTransport,
 };
+
+mod handlers;
+mod validation;
+
+use handlers::{delete_handler, get_handler, post_handler};
 
 /// HTTP header carrying an opaque MCP session identifier.
 pub const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
 /// HTTP header carrying the negotiated MCP protocol revision.
 pub const MCP_PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
+/// HTTP header carrying the MCP request method for stateless routing.
+pub const MCP_METHOD_HEADER: &str = "mcp-method";
+/// HTTP header carrying a Tool, Resource, or Prompt routing name.
+pub const MCP_NAME_HEADER: &str = "mcp-name";
 
 const LAST_EVENT_ID_HEADER: &str = "last-event-id";
 const JSON_MEDIA_TYPE: &str = "application/json";
 const SSE_MEDIA_TYPE: &str = "text/event-stream";
 const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
+const METHOD_NOT_FOUND: i64 = -32601;
+const INVALID_PARAMS: i64 = -32602;
+const INTERNAL_ERROR: i64 = -32603;
+const HEADER_MISMATCH: i64 = -32020;
+const MISSING_REQUIRED_CLIENT_CAPABILITY: i64 = -32021;
+const UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
 
 /// Response framing selected for JSON-RPC requests.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -431,327 +448,4 @@ impl Drop for HttpPendingGuard {
 struct ServerEvent {
     id: String,
     data: String,
-}
-
-async fn post_handler(
-    State(state): State<Arc<HttpServerInner>>,
-    request: Request<Body>,
-) -> Response {
-    if let Err(response) = validate_security(&state, request.headers()) {
-        return *response;
-    }
-    if !request
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with(JSON_MEDIA_TYPE))
-    {
-        return status_response(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "Content-Type must be application/json",
-        );
-    }
-    let headers = request.headers().clone();
-    let Ok(body) = to_bytes(request.into_body(), state.config.max_body_bytes).await else {
-        return status_response(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
-    };
-    let value: Value = match serde_json::from_slice(&body) {
-        Ok(value) => value,
-        Err(_) => return status_response(StatusCode::BAD_REQUEST, "invalid JSON-RPC message"),
-    };
-
-    if value.get("id").is_some() && value.get("method").is_none() {
-        let response: JsonRpcResponse = match serde_json::from_value(value) {
-            Ok(response) => response,
-            Err(_) => return status_response(StatusCode::BAD_REQUEST, "invalid JSON-RPC response"),
-        };
-        let session = match existing_session(&state, &headers).await {
-            Ok(session) => session,
-            Err(response) => return *response,
-        };
-        return if session.complete_client_request(response) {
-            StatusCode::ACCEPTED.into_response()
-        } else {
-            status_response(StatusCode::BAD_REQUEST, "unknown JSON-RPC response id")
-        };
-    }
-    if value.get("id").is_some() {
-        let request: JsonRpcRequest = match serde_json::from_value(value) {
-            Ok(request) => request,
-            Err(_) => return status_response(StatusCode::BAD_REQUEST, "invalid JSON-RPC request"),
-        };
-        return handle_http_request(&state, &headers, request).await;
-    }
-    let notification: JsonRpcNotification = match serde_json::from_value(value) {
-        Ok(notification) => notification,
-        Err(_) => {
-            return status_response(StatusCode::BAD_REQUEST, "invalid JSON-RPC notification");
-        }
-    };
-    let session = match existing_session(&state, &headers).await {
-        Ok(session) => session,
-        Err(response) => return *response,
-    };
-    match session.mcp.handle_notification(notification) {
-        Ok(()) => StatusCode::ACCEPTED.into_response(),
-        Err(error) => status_response(StatusCode::BAD_REQUEST, &error.to_string()),
-    }
-}
-
-async fn handle_http_request(
-    state: &Arc<HttpServerInner>,
-    headers: &HeaderMap,
-    request: JsonRpcRequest,
-) -> Response {
-    if !accepts_response_mode(headers, state.config.response_mode) {
-        return status_response(
-            StatusCode::NOT_ACCEPTABLE,
-            "Accept does not allow configured response framing",
-        );
-    }
-    let is_initialize = request.method == "initialize";
-    let (session, is_new) = if is_initialize {
-        if headers.contains_key(MCP_SESSION_ID_HEADER) {
-            return status_response(
-                StatusCode::BAD_REQUEST,
-                "initialize must not reuse an existing session",
-            );
-        }
-        let session = Arc::new(HttpSession::new(state.server.session(), &state.config));
-        session.mcp.install_client_peer(Arc::new(HttpClientPeer {
-            session: Arc::downgrade(&session),
-        }));
-        (session, true)
-    } else {
-        match existing_session(state, headers).await {
-            Ok(session) => (session, false),
-            Err(response) => return *response,
-        }
-    };
-
-    let response = session.mcp.handle_request(request).await;
-    let initialized = is_new && matches!(response, JsonRpcResponse::Success { .. });
-    if initialized {
-        state
-            .sessions
-            .write()
-            .await
-            .insert(session.id.clone(), Arc::clone(&session));
-    }
-    response_for_request(
-        response,
-        initialized.then_some(session.id.as_str()),
-        state.config.response_mode,
-        headers,
-    )
-}
-
-async fn get_handler(
-    State(state): State<Arc<HttpServerInner>>,
-    request: Request<Body>,
-) -> Response {
-    if let Err(response) = validate_security(&state, request.headers()) {
-        return *response;
-    }
-    if !request
-        .headers()
-        .get(ACCEPT)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|accept| accept.contains(SSE_MEDIA_TYPE))
-    {
-        return status_response(
-            StatusCode::NOT_ACCEPTABLE,
-            "Accept must allow text/event-stream",
-        );
-    }
-    let session = match existing_session(&state, request.headers()).await {
-        Ok(session) => session,
-        Err(response) => return *response,
-    };
-    let last_event_id = request
-        .headers()
-        .get(LAST_EVENT_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let replay = session.replay_after(last_event_id.as_deref()).await;
-    let mut receiver = session.sender.subscribe();
-    let stream = async_stream::stream! {
-        for event in replay {
-            yield Ok::<_, Infallible>(sse_event(event));
-        }
-        loop {
-            match receiver.recv().await {
-                Ok(event) => yield Ok(sse_event(event)),
-                Err(broadcast::error::RecvError::Lagged(_)) => break,
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    };
-    Sse::new(stream)
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
-        .into_response()
-}
-
-async fn delete_handler(
-    State(state): State<Arc<HttpServerInner>>,
-    request: Request<Body>,
-) -> Response {
-    if let Err(response) = validate_security(&state, request.headers()) {
-        return *response;
-    }
-    if let Err(response) = validate_protocol_header(request.headers()) {
-        return *response;
-    }
-    let Some(session_id) = session_header(request.headers()) else {
-        return status_response(StatusCode::BAD_REQUEST, "MCP-Session-Id is required");
-    };
-    if state.sessions.write().await.remove(session_id).is_some() {
-        StatusCode::NO_CONTENT.into_response()
-    } else {
-        status_response(StatusCode::NOT_FOUND, "MCP session not found")
-    }
-}
-
-async fn existing_session(
-    state: &Arc<HttpServerInner>,
-    headers: &HeaderMap,
-) -> Result<Arc<HttpSession>, Box<Response>> {
-    validate_protocol_header(headers)?;
-    let session_id = session_header(headers).ok_or_else(|| {
-        Box::new(status_response(
-            StatusCode::BAD_REQUEST,
-            "MCP-Session-Id is required",
-        ))
-    })?;
-    state
-        .sessions
-        .read()
-        .await
-        .get(session_id)
-        .cloned()
-        .ok_or_else(|| {
-            Box::new(status_response(
-                StatusCode::NOT_FOUND,
-                "MCP session not found",
-            ))
-        })
-}
-
-fn validate_security(state: &HttpServerInner, headers: &HeaderMap) -> Result<(), Box<Response>> {
-    if let Some(value) = headers.get(ORIGIN) {
-        let Ok(origin) = value.to_str() else {
-            return Err(Box::new(status_response(
-                StatusCode::FORBIDDEN,
-                "request Origin is not allowed",
-            )));
-        };
-        if !state.config.allowed_origins.contains(origin) {
-            return Err(Box::new(status_response(
-                StatusCode::FORBIDDEN,
-                "request Origin is not allowed",
-            )));
-        }
-    }
-    if let Some(authorizer) = &state.config.authorizer {
-        let bearer = headers
-            .get(AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "));
-        if !authorizer.authorize(bearer) {
-            let mut response =
-                status_response(StatusCode::UNAUTHORIZED, "bearer authorization required");
-            response.headers_mut().insert(
-                WWW_AUTHENTICATE,
-                HeaderValue::from_static("Bearer realm=\"mcp\""),
-            );
-            return Err(Box::new(response));
-        }
-    }
-    Ok(())
-}
-
-fn validate_protocol_header(headers: &HeaderMap) -> Result<(), Box<Response>> {
-    match headers
-        .get(MCP_PROTOCOL_VERSION_HEADER)
-        .and_then(|value| value.to_str().ok())
-    {
-        Some(LATEST_PROTOCOL_VERSION) => Ok(()),
-        Some(_) => Err(Box::new(status_response(
-            StatusCode::BAD_REQUEST,
-            "unsupported MCP-Protocol-Version",
-        ))),
-        None => Err(Box::new(status_response(
-            StatusCode::BAD_REQUEST,
-            "MCP-Protocol-Version is required",
-        ))),
-    }
-}
-
-fn response_for_request(
-    response: JsonRpcResponse,
-    session_id: Option<&str>,
-    mode: HttpResponseMode,
-    request_headers: &HeaderMap,
-) -> Response {
-    let accepts = request_headers
-        .get(ACCEPT)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    let mut response = match mode {
-        HttpResponseMode::Json if accepts.contains(JSON_MEDIA_TYPE) => {
-            axum::Json(response).into_response()
-        }
-        HttpResponseMode::Sse if accepts.contains(SSE_MEDIA_TYPE) => {
-            let Ok(data) = serde_json::to_string(&response) else {
-                return status_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to encode JSON-RPC response",
-                );
-            };
-            Sse::new(futures_util::stream::once(async move {
-                Ok::<_, Infallible>(Event::default().event("message").data(data))
-            }))
-            .into_response()
-        }
-        _ => {
-            return status_response(
-                StatusCode::NOT_ACCEPTABLE,
-                "Accept does not allow configured response framing",
-            );
-        }
-    };
-    if let Some(session_id) = session_id {
-        if let Ok(value) = HeaderValue::from_str(session_id) {
-            response.headers_mut().insert(MCP_SESSION_ID_HEADER, value);
-        }
-    }
-    response
-}
-
-fn accepts_response_mode(headers: &HeaderMap, mode: HttpResponseMode) -> bool {
-    let accepts = headers
-        .get(ACCEPT)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    match mode {
-        HttpResponseMode::Json => accepts.contains(JSON_MEDIA_TYPE),
-        HttpResponseMode::Sse => accepts.contains(SSE_MEDIA_TYPE),
-    }
-}
-
-fn session_header(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(MCP_SESSION_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-}
-
-fn sse_event(event: ServerEvent) -> Event {
-    Event::default()
-        .event("message")
-        .id(event.id)
-        .data(event.data)
-}
-
-fn status_response(status: StatusCode, message: &str) -> Response {
-    (status, message.to_owned()).into_response()
 }

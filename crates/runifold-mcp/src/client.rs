@@ -7,23 +7,38 @@ use std::{
     time::Duration,
 };
 
-use runifold_core::CancellationToken;
+use futures_util::StreamExt;
+use runifold_core::{CancellationToken, RunId};
 use runifold_tool::ToolContext;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::json;
 use tokio::sync::Mutex;
 
 use crate::{
-    CallToolParams, CallToolResult, ClientCapabilities, CompleteParams, CompleteResult,
-    CreateMessageParams, GetPromptParams, GetPromptResult, Implementation, InitializeParams,
-    InitializeResult, JsonRpcNotification, JsonRpcRequest, LATEST_PROTOCOL_VERSION,
-    ListPromptsParams, ListPromptsResult, ListResourceTemplatesParams, ListResourceTemplatesResult,
-    ListResourcesParams, ListResourcesResult, ListToolsParams, ListToolsResult, McpError,
-    McpPrompt, McpResource, McpResourceTemplate, McpTool, McpTransport, PeerRequestHandler,
-    ReadResourceParams, ReadResourceResult, RequestId, ResourceSubscriptionParams,
-    SamplingCapability, SamplingError, SamplingErrorKind, SamplingService,
-    ServerNotificationStream, TransportFuture,
+    CacheMode, CallToolParams, CallToolResult, ClientCapabilities, CompleteParams, CompleteResult,
+    CreateMessageParams, DiscoverParams, DiscoverResult, GetPromptParams, GetPromptResult,
+    Implementation, InitializeParams, InitializeResult, JsonRpcNotification, JsonRpcRequest,
+    LATEST_PROTOCOL_VERSION, ListPromptsParams, ListPromptsResult, ListResourceTemplatesParams,
+    ListResourceTemplatesResult, ListResourcesParams, ListResourcesResult, ListToolsParams,
+    ListToolsResult, McpError, McpPrompt, McpResource, McpResourceTemplate, McpTool, McpTransport,
+    PeerRequestHandler, ReadResourceParams, ReadResourceResult, RequestId,
+    ResourceSubscriptionParams, STATELESS_PROTOCOL_VERSION, SamplingCapability, SamplingError,
+    SamplingErrorKind, SamplingService, ServerNotificationStream, StatelessCancellation,
+    StatelessRequestMetadata, TransportFuture,
+    cache::{ClientResponseCache, InMemoryResponseCache, ResponseCacheStore},
+    mrtr::{InputRequiredResult, MrtrInputHandler},
+    subscription::{
+        McpSubscription, SubscriptionAcknowledgedParams, SubscriptionFilter,
+        SubscriptionsListenParams, notification_subscription_id,
+    },
 };
+
+mod connection;
+mod lifecycle;
+mod prompts;
+mod request;
+mod resources;
+mod tools;
 
 /// MCP client policy.
 #[derive(Clone, Debug)]
@@ -32,6 +47,16 @@ pub struct McpClientConfig {
     request_timeout: Duration,
     max_pagination_pages: usize,
     sampling: Option<Arc<SamplingService>>,
+    mrtr_input_handler: Option<Arc<dyn MrtrInputHandler>>,
+    max_mrtr_rounds: usize,
+    max_mrtr_inputs_per_round: usize,
+    response_cache: Arc<dyn ResponseCacheStore>,
+    cache_namespace: String,
+    private_cache_partition: String,
+    max_cache_ttl: Duration,
+    tasks_enabled: bool,
+    min_task_poll_interval: Duration,
+    max_task_poll_interval: Duration,
 }
 
 impl McpClientConfig {
@@ -42,6 +67,16 @@ impl McpClientConfig {
             request_timeout: Duration::from_secs(30),
             max_pagination_pages: 1024,
             sampling: None,
+            mrtr_input_handler: None,
+            max_mrtr_rounds: 10,
+            max_mrtr_inputs_per_round: 64,
+            response_cache: Arc::new(InMemoryResponseCache::new(512)),
+            cache_namespace: RunId::new().to_string(),
+            private_cache_partition: RunId::new().to_string(),
+            max_cache_ttl: Duration::from_secs(60 * 60),
+            tasks_enabled: false,
+            min_task_poll_interval: Duration::from_millis(100),
+            max_task_poll_interval: Duration::from_secs(30),
         }
     }
 
@@ -49,6 +84,27 @@ impl McpClientConfig {
     #[must_use]
     pub fn with_sampling(mut self, sampling: Arc<SamplingService>) -> Self {
         self.sampling = Some(sampling);
+        self
+    }
+
+    /// Installs a host-controlled resolver for MRTR Sampling, Elicitation, or Roots requests.
+    #[must_use]
+    pub fn with_mrtr_input_handler(mut self, handler: Arc<dyn MrtrInputHandler>) -> Self {
+        self.mrtr_input_handler = Some(handler);
+        self
+    }
+
+    /// Bounds incomplete MRTR responses before the logical request fails.
+    #[must_use]
+    pub const fn with_max_mrtr_rounds(mut self, rounds: usize) -> Self {
+        self.max_mrtr_rounds = if rounds == 0 { 1 } else { rounds };
+        self
+    }
+
+    /// Bounds independently keyed input requests in one MRTR round.
+    #[must_use]
+    pub const fn with_max_mrtr_inputs_per_round(mut self, inputs: usize) -> Self {
+        self.max_mrtr_inputs_per_round = if inputs == 0 { 1 } else { inputs };
         self
     }
 
@@ -65,6 +121,61 @@ impl McpClientConfig {
         self.request_timeout = timeout;
         self
     }
+
+    /// Replaces the response-cache storage implementation.
+    #[must_use]
+    pub fn with_response_cache(mut self, cache: Arc<dyn ResponseCacheStore>) -> Self {
+        self.response_cache = cache;
+        self
+    }
+
+    /// Selects the server namespace used by cache keys.
+    ///
+    /// Clients may share public entries only when this value and their cache
+    /// store are the same. It should identify a trusted endpoint, not
+    /// self-reported MCP server metadata.
+    #[must_use]
+    pub fn with_cache_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.cache_namespace = namespace.into();
+        self
+    }
+
+    /// Selects the authorization partition used by private cache entries.
+    #[must_use]
+    pub fn with_private_cache_partition(mut self, partition: impl Into<String>) -> Self {
+        self.private_cache_partition = partition.into();
+        self
+    }
+
+    /// Bounds server-provided cache lifetimes.
+    #[must_use]
+    pub const fn with_max_cache_ttl(mut self, max_ttl: Duration) -> Self {
+        self.max_cache_ttl = max_ttl;
+        self
+    }
+
+    /// Enables the modern MCP Tasks extension and explicit Task APIs.
+    #[must_use]
+    pub const fn with_tasks(mut self) -> Self {
+        self.tasks_enabled = true;
+        self
+    }
+
+    /// Bounds server-suggested Task polling intervals.
+    #[must_use]
+    pub const fn with_max_task_poll_interval(mut self, interval: Duration) -> Self {
+        self.max_task_poll_interval = interval;
+        self
+    }
+
+    /// Sets the client-enforced floor for server-suggested Task polling.
+    ///
+    /// The effective floor never exceeds the configured maximum interval.
+    #[must_use]
+    pub const fn with_min_task_poll_interval(mut self, interval: Duration) -> Self {
+        self.min_task_poll_interval = interval;
+        self
+    }
 }
 
 /// Stateful MCP Tools client.
@@ -73,532 +184,13 @@ pub struct McpClient {
     inner: Arc<ClientInner>,
 }
 
-impl McpClient {
-    /// Creates a client over a pluggable transport.
-    pub fn new(transport: Arc<dyn McpTransport>, config: McpClientConfig) -> Self {
-        Self {
-            inner: Arc::new(ClientInner {
-                transport,
-                config,
-                next_id: AtomicU64::new(1),
-                state: Mutex::new(ClientState::Created),
-            }),
-        }
-    }
-
-    /// Negotiates the finalized MCP protocol and Tool capability.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] for transport, protocol, version, timeout, or
-    /// lifecycle failures.
-    pub async fn initialize(&self) -> Result<InitializeResult, McpError> {
-        {
-            let mut state = self.inner.state.lock().await;
-            if !matches!(*state, ClientState::Created) {
-                return Err(McpError::lifecycle(
-                    "client initialization may only run once",
-                ));
-            }
-            *state = ClientState::Initializing;
-        }
-        let params = InitializeParams {
-            protocol_version: LATEST_PROTOCOL_VERSION.into(),
-            capabilities: ClientCapabilities {
-                sampling: self
-                    .inner
-                    .config
-                    .sampling
-                    .as_ref()
-                    .map(|_| SamplingCapability::default()),
-                ..ClientCapabilities::default()
-            },
-            client_info: self.inner.config.implementation.clone(),
-        };
-        let initialized = self
-            .request_typed::<_, InitializeResult>(
-                "initialize",
-                &params,
-                self.inner.config.request_timeout,
-            )
-            .await;
-        let initialized = match initialized {
-            Ok(initialized) => initialized,
-            Err(error) => {
-                *self.inner.state.lock().await = ClientState::Created;
-                return Err(error);
-            }
-        };
-        if initialized.protocol_version != LATEST_PROTOCOL_VERSION {
-            *self.inner.state.lock().await = ClientState::Created;
-            return Err(McpError::UnsupportedVersion {
-                selected: initialized.protocol_version,
-            });
-        }
-        if let Some(sampling) = &self.inner.config.sampling {
-            let handler = Arc::new(ClientPeerHandler::new(Arc::clone(sampling)));
-            if let Err(error) = self.inner.transport.install_peer_handler(handler) {
-                *self.inner.state.lock().await = ClientState::Created;
-                return Err(error);
-            }
-            if let Err(error) = self.inner.transport.start_peer().await {
-                *self.inner.state.lock().await = ClientState::Created;
-                return Err(error);
-            }
-        }
-        if let Err(error) = self
-            .inner
-            .transport
-            .notify(JsonRpcNotification::new("notifications/initialized", None))
-            .await
-        {
-            *self.inner.state.lock().await = ClientState::Created;
-            return Err(error);
-        }
-        *self.inner.state.lock().await = ClientState::Active {
-            server: Box::new(initialized.clone()),
-        };
-        Ok(initialized)
-    }
-
-    /// Returns the negotiated server information.
-    pub async fn server_info(&self) -> Option<InitializeResult> {
-        match &*self.inner.state.lock().await {
-            ClientState::Active { server } => Some((**server).clone()),
-            ClientState::Created | ClientState::Initializing => None,
-        }
-    }
-
-    /// Lists available remote tools.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] when the client is not initialized or the peer
-    /// rejects the request.
-    pub async fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
-        self.require_active().await?;
-        let mut tools = Vec::new();
-        let mut cursor = None;
-        let mut seen = HashSet::new();
-        for _ in 0..self.inner.config.max_pagination_pages {
-            let page = self.list_tools_page(cursor).await?;
-            tools.extend(page.tools);
-            let Some(next) = page.next_cursor else {
-                return Ok(tools);
-            };
-            if !seen.insert(next.clone()) {
-                return Err(McpError::protocol("server repeated a pagination cursor"));
-            }
-            cursor = Some(next);
-        }
-        Err(McpError::protocol(
-            "tool list exceeded the configured pagination limit",
-        ))
-    }
-
-    /// Fetches one tool-list page without following its cursor.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] for lifecycle, transport, cursor, or peer failures.
-    pub async fn list_tools_page(
-        &self,
-        cursor: Option<String>,
-    ) -> Result<ListToolsResult, McpError> {
-        self.require_active().await?;
-        self.request_typed(
-            "tools/list",
-            &ListToolsParams { cursor },
-            self.inner.config.request_timeout,
-        )
-        .await
-    }
-
-    /// Lists authorized remote resources.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] when resources were not negotiated, pagination is
-    /// returned, or the request fails.
-    pub async fn list_resources(&self) -> Result<Vec<McpResource>, McpError> {
-        self.require_resources().await?;
-        let mut resources = Vec::new();
-        let mut cursor = None;
-        let mut seen = HashSet::new();
-        for _ in 0..self.inner.config.max_pagination_pages {
-            let page = self.list_resources_page(cursor).await?;
-            resources.extend(page.resources);
-            let Some(next) = page.next_cursor else {
-                return Ok(resources);
-            };
-            if !seen.insert(next.clone()) {
-                return Err(McpError::protocol("server repeated a pagination cursor"));
-            }
-            cursor = Some(next);
-        }
-        Err(McpError::protocol(
-            "resource list exceeded the configured pagination limit",
-        ))
-    }
-
-    /// Fetches one resource-list page without following its cursor.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] for lifecycle, transport, cursor, or peer failures.
-    pub async fn list_resources_page(
-        &self,
-        cursor: Option<String>,
-    ) -> Result<ListResourcesResult, McpError> {
-        self.require_resources().await?;
-        self.request_typed(
-            "resources/list",
-            &ListResourcesParams { cursor },
-            self.inner.config.request_timeout,
-        )
-        .await
-    }
-
-    /// Lists all authorized resource templates across pagination.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] for capability, transport, pagination, or peer failures.
-    pub async fn list_resource_templates(&self) -> Result<Vec<McpResourceTemplate>, McpError> {
-        self.require_resources().await?;
-        let mut templates = Vec::new();
-        let mut cursor = None;
-        let mut seen = HashSet::new();
-        for _ in 0..self.inner.config.max_pagination_pages {
-            let page = self.list_resource_templates_page(cursor).await?;
-            templates.extend(page.resource_templates);
-            let Some(next) = page.next_cursor else {
-                return Ok(templates);
-            };
-            if !seen.insert(next.clone()) {
-                return Err(McpError::protocol("server repeated a pagination cursor"));
-            }
-            cursor = Some(next);
-        }
-        Err(McpError::protocol(
-            "resource-template list exceeded the configured pagination limit",
-        ))
-    }
-
-    /// Fetches one resource-template-list page without following its cursor.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] for capability, transport, cursor, or peer failures.
-    pub async fn list_resource_templates_page(
-        &self,
-        cursor: Option<String>,
-    ) -> Result<ListResourceTemplatesResult, McpError> {
-        self.require_resources().await?;
-        self.request_typed(
-            "resources/templates/list",
-            &ListResourceTemplatesParams { cursor },
-            self.inner.config.request_timeout,
-        )
-        .await
-    }
-
-    /// Reads one exact remote resource URI.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] when resources were not negotiated or the peer
-    /// rejects the URI.
-    pub async fn read_resource(
-        &self,
-        uri: impl Into<String>,
-    ) -> Result<ReadResourceResult, McpError> {
-        self.require_resources().await?;
-        self.request_typed(
-            "resources/read",
-            &ReadResourceParams { uri: uri.into() },
-            self.inner.config.request_timeout,
-        )
-        .await
-    }
-
-    /// Subscribes to updates for one exact authorized resource URI.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] when subscriptions were not negotiated or the peer rejects the URI.
-    pub async fn subscribe_resource(&self, uri: impl Into<String>) -> Result<(), McpError> {
-        self.require_resource_subscriptions().await?;
-        let _: serde_json::Value = self
-            .request_typed(
-                "resources/subscribe",
-                &ResourceSubscriptionParams { uri: uri.into() },
-                self.inner.config.request_timeout,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Removes one resource update subscription.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] when subscriptions were not negotiated or the request fails.
-    pub async fn unsubscribe_resource(&self, uri: impl Into<String>) -> Result<(), McpError> {
-        self.require_resource_subscriptions().await?;
-        let _: serde_json::Value = self
-            .request_typed(
-                "resources/unsubscribe",
-                &ResourceSubscriptionParams { uri: uri.into() },
-                self.inner.config.request_timeout,
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Opens the transport's server-to-client notification stream.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] when the client is inactive or the transport cannot subscribe.
-    pub async fn notifications(&self) -> Result<ServerNotificationStream, McpError> {
-        self.require_active().await?;
-        self.inner.transport.subscribe().await
-    }
-
-    /// Lists authorized remote prompts.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] when prompts were not negotiated, pagination is
-    /// returned, or the request fails.
-    pub async fn list_prompts(&self) -> Result<Vec<McpPrompt>, McpError> {
-        self.require_prompts().await?;
-        let mut prompts = Vec::new();
-        let mut cursor = None;
-        let mut seen = HashSet::new();
-        for _ in 0..self.inner.config.max_pagination_pages {
-            let page = self.list_prompts_page(cursor).await?;
-            prompts.extend(page.prompts);
-            let Some(next) = page.next_cursor else {
-                return Ok(prompts);
-            };
-            if !seen.insert(next.clone()) {
-                return Err(McpError::protocol("server repeated a pagination cursor"));
-            }
-            cursor = Some(next);
-        }
-        Err(McpError::protocol(
-            "prompt list exceeded the configured pagination limit",
-        ))
-    }
-
-    /// Fetches one prompt-list page without following its cursor.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] for capability, transport, cursor, or peer failures.
-    pub async fn list_prompts_page(
-        &self,
-        cursor: Option<String>,
-    ) -> Result<ListPromptsResult, McpError> {
-        self.require_prompts().await?;
-        self.request_typed(
-            "prompts/list",
-            &ListPromptsParams { cursor },
-            self.inner.config.request_timeout,
-        )
-        .await
-    }
-
-    /// Renders one user-selected remote prompt with string arguments.
-    ///
-    /// This method returns protocol content only; it never injects messages
-    /// into a model request automatically.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] when prompts were not negotiated, arguments are
-    /// invalid, or the peer rejects the request.
-    pub async fn get_prompt(
-        &self,
-        name: impl Into<String>,
-        arguments: BTreeMap<String, String>,
-    ) -> Result<GetPromptResult, McpError> {
-        self.require_prompts().await?;
-        self.request_typed(
-            "prompts/get",
-            &GetPromptParams {
-                name: name.into(),
-                arguments: (!arguments.is_empty()).then_some(arguments),
-            },
-            self.inner.config.request_timeout,
-        )
-        .await
-    }
-
-    /// Completes one prompt or resource-template argument.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] when completion was not negotiated or the peer rejects the request.
-    pub async fn complete(&self, params: CompleteParams) -> Result<CompleteResult, McpError> {
-        self.require_completions().await?;
-        self.request_typed(
-            "completion/complete",
-            &params,
-            self.inner.config.request_timeout,
-        )
-        .await
-    }
-
-    /// Calls one remote tool with the configured timeout.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError`] for lifecycle, transport, protocol, timeout, or
-    /// peer failures.
-    pub async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpError> {
-        self.require_active().await?;
-        self.request_typed("tools/call", &params, self.inner.config.request_timeout)
-            .await
-    }
-
-    pub(crate) async fn call_tool_scoped(
-        &self,
-        params: CallToolParams,
-        context: &ToolContext,
-    ) -> Result<CallToolResult, McpError> {
-        self.require_active().await?;
-        let timeout = context
-            .remaining()
-            .map_or(self.inner.config.request_timeout, |remaining| {
-                remaining.min(self.inner.config.request_timeout)
-            });
-        let id = self.next_id();
-        let request = request_with_params(id.clone(), "tools/call", &params)?;
-        let request_future = self.inner.transport.request(request);
-        tokio::select! {
-            response = request_future => {
-                decode_response(&id, response?)
-            }
-            () = context.cancellation().cancelled() => {
-                self.cancel_request(&id, "Runifold Tool invocation cancelled").await;
-                Err(McpError::Cancelled)
-            }
-            () = tokio::time::sleep(timeout) => {
-                self.cancel_request(&id, "Runifold Tool invocation deadline exceeded").await;
-                Err(McpError::DeadlineExceeded)
-            }
-        }
-    }
-
-    async fn request_typed<P, R>(
-        &self,
-        method: &str,
-        params: &P,
-        timeout: Duration,
-    ) -> Result<R, McpError>
-    where
-        P: Serialize + ?Sized,
-        R: DeserializeOwned,
-    {
-        let id = self.next_id();
-        let request = request_with_params(id.clone(), method, params)?;
-        let Ok(response) =
-            tokio::time::timeout(timeout, self.inner.transport.request(request)).await
-        else {
-            self.cancel_request(&id, "Runifold MCP request timed out")
-                .await;
-            return Err(McpError::DeadlineExceeded);
-        };
-        decode_response(&id, response?)
-    }
-
-    async fn require_active(&self) -> Result<(), McpError> {
-        if matches!(*self.inner.state.lock().await, ClientState::Active { .. }) {
-            Ok(())
-        } else {
-            Err(McpError::lifecycle("client is not initialized"))
-        }
-    }
-
-    async fn require_resources(&self) -> Result<(), McpError> {
-        match &*self.inner.state.lock().await {
-            ClientState::Active { server } if server.capabilities.resources.is_some() => Ok(()),
-            ClientState::Active { .. } => Err(McpError::protocol(
-                "server did not negotiate the resources capability",
-            )),
-            ClientState::Created | ClientState::Initializing => {
-                Err(McpError::lifecycle("client is not initialized"))
-            }
-        }
-    }
-
-    async fn require_prompts(&self) -> Result<(), McpError> {
-        match &*self.inner.state.lock().await {
-            ClientState::Active { server } if server.capabilities.prompts.is_some() => Ok(()),
-            ClientState::Active { .. } => Err(McpError::protocol(
-                "server did not negotiate the prompts capability",
-            )),
-            ClientState::Created | ClientState::Initializing => {
-                Err(McpError::lifecycle("client is not initialized"))
-            }
-        }
-    }
-
-    async fn require_resource_subscriptions(&self) -> Result<(), McpError> {
-        match &*self.inner.state.lock().await {
-            ClientState::Active { server }
-                if server
-                    .capabilities
-                    .resources
-                    .as_ref()
-                    .is_some_and(|capability| capability.subscribe) =>
-            {
-                Ok(())
-            }
-            ClientState::Active { .. } => Err(McpError::protocol(
-                "server did not negotiate resource subscriptions",
-            )),
-            ClientState::Created | ClientState::Initializing => {
-                Err(McpError::lifecycle("client is not initialized"))
-            }
-        }
-    }
-
-    async fn require_completions(&self) -> Result<(), McpError> {
-        match &*self.inner.state.lock().await {
-            ClientState::Active { server } if server.capabilities.completions.is_some() => Ok(()),
-            ClientState::Active { .. } => Err(McpError::protocol(
-                "server did not negotiate the completions capability",
-            )),
-            ClientState::Created | ClientState::Initializing => {
-                Err(McpError::lifecycle("client is not initialized"))
-            }
-        }
-    }
-
-    async fn cancel_request(&self, id: &RequestId, reason: &str) {
-        let _ = self
-            .inner
-            .transport
-            .notify(JsonRpcNotification::new(
-                "notifications/cancelled",
-                Some(json!({
-                    "requestId": id,
-                    "reason": reason,
-                })),
-            ))
-            .await;
-    }
-
-    fn next_id(&self) -> RequestId {
-        RequestId::String(format!(
-            "runifold-{}",
-            self.inner.next_id.fetch_add(1, Ordering::Relaxed)
-        ))
-    }
+/// MCP protocol era selected for ordinary requests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum McpProtocolMode {
+    /// Stateless per-request metadata introduced in `2026-07-28`.
+    Stateless,
+    /// Initialization-based protocol used by `2025-11-25`.
+    Legacy,
 }
 
 struct ClientPeerHandler {
@@ -742,6 +334,7 @@ impl std::fmt::Debug for McpClient {
 struct ClientInner {
     transport: Arc<dyn McpTransport>,
     config: McpClientConfig,
+    cache: ClientResponseCache,
     next_id: AtomicU64,
     state: Mutex<ClientState>,
 }
@@ -749,31 +342,10 @@ struct ClientInner {
 #[derive(Clone, Debug)]
 enum ClientState {
     Created,
+    Discovering,
     Initializing,
-    Active { server: Box<InitializeResult> },
-}
-
-fn request_with_params<P>(
-    id: RequestId,
-    method: &str,
-    params: &P,
-) -> Result<JsonRpcRequest, McpError>
-where
-    P: Serialize + ?Sized,
-{
-    Ok(JsonRpcRequest::new(
-        id,
-        method,
-        Some(serde_json::to_value(params)?),
-    ))
-}
-
-fn decode_response<R>(id: &RequestId, response: crate::JsonRpcResponse) -> Result<R, McpError>
-where
-    R: DeserializeOwned,
-{
-    if response.id() != id {
-        return Err(McpError::protocol("response id does not match request id"));
-    }
-    serde_json::from_value(response.into_result()?).map_err(McpError::from)
+    Active {
+        server: Box<InitializeResult>,
+        mode: McpProtocolMode,
+    },
 }

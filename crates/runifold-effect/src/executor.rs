@@ -1,8 +1,8 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use futures_util::future::{Either, select};
 use runifold_core::{
-    EffectClass, EffectEvent, EffectId, EffectRequest, RunContext, RunError, RunEventKind,
+    EffectClass, EffectEvent, EffectId, EffectRequest, Instant, RunContext, RunError, RunEventKind,
 };
 use serde_json::Value;
 

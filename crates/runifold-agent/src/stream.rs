@@ -44,6 +44,13 @@ pub enum AgentStreamEvent {
         /// Canonical event accepted by the model stream accumulator.
         event: ModelStreamEvent,
     },
+    /// One dynamic context source completed retrieval.
+    ContextRetrieved {
+        /// Operator-visible source name.
+        source: String,
+        /// Number of documents injected into the transcript.
+        documents: usize,
+    },
     /// A Tool or child Agent call started.
     CallableStarted {
         /// One-based owning turn.

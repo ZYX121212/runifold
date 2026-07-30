@@ -5,6 +5,15 @@ use serde_json::Value;
 
 /// Latest finalized MCP revision supported by this crate.
 pub const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
+/// Stateless MCP revision used for discovery probes.
+///
+/// Runifold does not advertise this revision as fully supported yet. The
+/// constant exists so modern clients can use `server/discover` to detect the
+/// legacy revision without guessing or depending on a transport session.
+pub const STATELESS_PROTOCOL_VERSION: &str = "2026-07-28";
+/// Protocol revisions currently supported for ordinary MCP requests.
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
+    &[STATELESS_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION];
 pub(crate) const JSON_RPC_VERSION: &str = "2.0";
 
 /// JSON-RPC request identity.
@@ -192,6 +201,15 @@ pub struct ClientCapabilities {
     /// Client-side model Sampling support.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<SamplingCapability>,
+    /// Client-side Roots support, including MRTR `roots/list`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roots: Option<BTreeMap<String, Value>>,
+    /// Client-side Elicitation support advertised for MRTR requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<BTreeMap<String, Value>>,
+    /// Negotiated protocol extensions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: BTreeMap<String, Value>,
     /// Namespaced experimental capabilities.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub experimental: BTreeMap<String, Value>,
@@ -242,9 +260,84 @@ pub struct ServerCapabilities {
     /// Prompt and resource-template argument completion support.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completions: Option<BTreeMap<String, Value>>,
+    /// Negotiated protocol extensions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: BTreeMap<String, Value>,
     /// Namespaced experimental capabilities.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub experimental: BTreeMap<String, Value>,
+}
+
+/// Per-request metadata used by the stateless MCP revision.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct StatelessRequestMetadata {
+    /// Protocol revision selected for this request.
+    #[serde(rename = "io.modelcontextprotocol/protocolVersion")]
+    pub protocol_version: String,
+    /// Self-reported client identity. It is never an authorization input.
+    #[serde(
+        rename = "io.modelcontextprotocol/clientInfo",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub client_info: Option<Implementation>,
+    /// Client capabilities relevant to this request.
+    #[serde(rename = "io.modelcontextprotocol/clientCapabilities")]
+    pub client_capabilities: ClientCapabilities,
+}
+
+/// `server/discover` request parameters.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct DiscoverParams {
+    /// Stateless request metadata.
+    #[serde(rename = "_meta")]
+    pub metadata: StatelessRequestMetadata,
+}
+
+/// Metadata returned by `server/discover`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct DiscoverMetadata {
+    /// Self-reported server identity. It is never an authorization input.
+    #[serde(rename = "io.modelcontextprotocol/serverInfo")]
+    pub server_info: Implementation,
+}
+
+/// Backward-compatible name for the unified MCP cache scope.
+pub type DiscoveryCacheScope = crate::CacheScope;
+
+/// Result discriminator used by the stateless MCP protocol.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpResultType {
+    /// The request completed and contains its final result.
+    Complete,
+    /// The request requires another client round trip.
+    InputRequired,
+    /// The request was durably materialized as an asynchronous Task.
+    Task,
+}
+
+/// `server/discover` result.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoverResult {
+    /// Polymorphic MCP result discriminator.
+    pub result_type: McpResultType,
+    /// Protocol revisions supported for ordinary requests.
+    pub supported_versions: Vec<String>,
+    /// Server capabilities available under the supported revisions.
+    pub capabilities: ServerCapabilities,
+    /// Per-response server identity metadata.
+    #[serde(rename = "_meta")]
+    pub metadata: DiscoverMetadata,
+    /// Optional server usage instructions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    /// Optional discovery cache lifetime in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+    /// Optional discovery cache visibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<DiscoveryCacheScope>,
 }
 
 /// `initialize` request parameters.
@@ -313,6 +406,12 @@ pub struct ListToolsResult {
     /// Opaque cursor for the next page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// Server-provided freshness lifetime in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+    /// Visibility of this response across authorization contexts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<crate::CacheScope>,
 }
 
 /// `tools/call` parameters.

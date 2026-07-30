@@ -104,19 +104,46 @@ impl ModelCapabilities {
         request: &ModelRequest,
         streaming: bool,
     ) -> Result<Vec<ModelWarning>, ModelError> {
-        let mut required = Vec::new();
-        if streaming {
-            required.push(("streaming", &self.streaming));
-        }
         let requires_tools = !request.tools.is_empty()
             || matches!(
                 request.tool_choice,
                 ToolChoice::Required | ToolChoice::Named { .. }
             );
+        let requires_structured_output = !matches!(request.output_format, OutputFormat::Text);
+        let has_capability_sensitive_content = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|part| {
+                matches!(
+                    part,
+                    ContentPart::Image { .. }
+                        | ContentPart::Audio { .. }
+                        | ContentPart::Document { .. }
+                        | ContentPart::Reasoning(_)
+                )
+            });
+        if !requires_tools && !requires_structured_output && !has_capability_sensitive_content {
+            let mut warnings = Vec::new();
+            if streaming {
+                assess_feature(
+                    "streaming",
+                    &self.streaming,
+                    request.feature_policy,
+                    &mut warnings,
+                )?;
+            }
+            return Ok(warnings);
+        }
+
+        let mut required = Vec::new();
+        if streaming {
+            required.push(("streaming", &self.streaming));
+        }
         if requires_tools {
             required.push(("tools", &self.tools));
         }
-        if !matches!(request.output_format, OutputFormat::Text) {
+        if requires_structured_output {
             required.push(("structured_output", &self.structured_output));
         }
         for message in &request.messages {

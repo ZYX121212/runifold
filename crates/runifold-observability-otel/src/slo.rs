@@ -28,6 +28,13 @@ pub const MCP_SAMPLING_DURATION_SECONDS: &[f64] =
 /// Attributed Agent cost buckets in US dollars.
 pub const AGENT_COST_USD: &[f64] = &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 50.0];
 
+/// Aggregate tenant-budget utilization ratios.
+pub const WORKFLOW_BUDGET_UTILIZATION: &[f64] = &[0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1.0, 1.25];
+
+/// Reservation age buckets in seconds.
+pub const WORKFLOW_BUDGET_RESERVATION_AGE_SECONDS: &[f64] =
+    &[0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0, 3_600.0];
+
 /// Stable OpenTelemetry instrument names used by the SLO assets.
 pub mod metric_names {
     /// End-to-end Agent run duration.
@@ -56,6 +63,29 @@ pub mod metric_names {
     pub const MCP_SAMPLING_REQUESTS: &str = "runifold.mcp.sampling.requests";
     /// Failed scoped MCP Sampling requests.
     pub const MCP_SAMPLING_FAILURES: &str = "runifold.mcp.sampling.failures";
+    /// Durable workflow tenant-budget decisions.
+    pub const WORKFLOW_BUDGET_DECISIONS: &str = "runifold.workflow.tenant_budget.decisions";
+    /// Resource amount attached to a budget decision.
+    pub const WORKFLOW_BUDGET_AMOUNT: &str = "runifold.workflow.tenant_budget.amount";
+    /// Aggregate utilization after a budget decision.
+    pub const WORKFLOW_BUDGET_UTILIZATION: &str = "runifold.workflow.tenant_budget.utilization";
+    /// Reservation age when observed, settled, or forfeited.
+    pub const WORKFLOW_BUDGET_RESERVATION_AGE: &str =
+        "runifold.workflow.tenant_budget.reservation.age";
+    /// Projection ownership, completion, and failure operations.
+    pub const WORKFLOW_BUDGET_PROJECTION_OPERATIONS: &str =
+        "runifold.workflow.tenant_budget.projection.operations";
+    /// Terminal Task cleanup scan, claim, and failure outcomes.
+    pub const WORKFLOW_TASK_CLEANUP_OPERATIONS: &str = "runifold.workflow.task_cleanup.operations";
+    /// Terminal Task cleanup tenant discovery and shard assignment.
+    pub const WORKFLOW_TASK_CLEANUP_TENANTS: &str = "runifold.workflow.task_cleanup.tenants";
+    /// Non-empty terminal Task cleanup batches.
+    pub const WORKFLOW_TASK_CLEANUP_BATCHES: &str = "runifold.workflow.task_cleanup.batches";
+    /// Terminal Tasks atomically tombstoned and deleted.
+    pub const WORKFLOW_TASK_CLEANUP_DELETED: &str = "runifold.workflow.task_cleanup.deleted";
+    /// Authorized tombstone governance operations and terminal outcomes.
+    pub const WORKFLOW_TASK_GOVERNANCE_OPERATIONS: &str =
+        "runifold.workflow.task_governance.operations";
 }
 
 /// Prometheus recording and alert rules for the default Runifold SLOs.
@@ -101,10 +131,15 @@ mod tests {
             "runifold_agent_budget_exhaustions_total",
             "runifold_mcp_sampling_requests_total",
             "runifold_mcp_sampling_failures_total",
+            "runifold_workflow_tenant_budget_decisions_total",
         ] {
             assert!(PROMETHEUS_RULES.contains(metric));
             assert!(GRAFANA_DASHBOARD.contains(metric));
         }
+        assert!(
+            PROMETHEUS_RULES
+                .contains("runifold_workflow_tenant_budget_projection_operations_total")
+        );
     }
 
     #[test]

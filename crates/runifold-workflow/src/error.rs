@@ -1,10 +1,10 @@
 use runifold_agent::AgentError;
 use std::collections::BTreeMap;
 
-use runifold_core::{BudgetExceeded, BudgetReservationMismatch, CheckpointError, JournalError};
+use runifold_core::{BudgetExceeded, CheckpointError, ChildRunError, JournalError};
 use thiserror::Error;
 
-use crate::StepId;
+use crate::{StepId, WorkflowWaitError};
 
 /// Invalid workflow definition.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -25,6 +25,15 @@ pub enum WorkflowBuildError {
     /// Version zero is reserved for invalid or unversioned definitions.
     #[error("workflow version must be greater than zero")]
     InvalidVersion,
+    /// A durable timer duration is invalid.
+    #[error("workflow durable timer must be a positive whole-millisecond duration")]
+    InvalidTimerDuration,
+    /// An external signal name is invalid.
+    #[error("workflow signal name must contain 1..=128 portable ASCII characters")]
+    InvalidSignalName,
+    /// A human-review prompt is blank or exceeds its durable limit.
+    #[error("workflow interrupt prompt must contain 1..=16384 bytes")]
+    InvalidInterruptPrompt,
     /// A parallel group requires at least two branches.
     #[error("parallel workflow step `{0}` requires at least two branches")]
     TooFewParallelBranches(StepId),
@@ -126,12 +135,24 @@ pub enum WorkflowError {
     /// The workflow deadline elapsed.
     #[error("workflow execution deadline elapsed")]
     DeadlineExceeded,
+    /// A durable wait was executed outside the distributed worker boundary.
+    #[error("durable workflow wait requires a distributed WorkflowWorker")]
+    DurableWaitRequiresWorker,
+    /// Stored wake data does not match the checkpoint's durable wait.
+    #[error("workflow wake does not match its persisted wait condition")]
+    WakeMismatch,
+    /// A durable wait or human decision violated its domain invariants.
+    #[error("invalid workflow wait: {0}")]
+    Wait(#[from] WorkflowWaitError),
+    /// A durable wait output could not be represented as canonical JSON.
+    #[error("workflow wait output serialization failed: {0}")]
+    Serialization(#[from] serde_json::Error),
     /// Parallel budget reservation or consumption exceeded a hard limit.
     #[error("workflow budget exceeded: {0}")]
     Budget(#[from] BudgetExceeded),
-    /// An internal reservation did not belong to this workflow's run tree.
-    #[error("workflow budget reservation is invalid: {0}")]
-    BudgetReservation(#[from] BudgetReservationMismatch),
+    /// A child Run rejected its capability or budget scope.
+    #[error("workflow child Run is invalid: {0}")]
+    ChildRun(#[from] ChildRunError),
     /// Recovery would silently retry a possibly partial step.
     #[error("checkpoint contains ambiguous in-flight workflow step `{step}`")]
     AmbiguousCheckpoint {

@@ -23,3 +23,9 @@ futures-executor.workspace = true
 
 [lints]
 workspace = true
+
+[target.wasm32-unknown-unknown.dev-dependencies]
+wasm-bindgen-test = "0.3.76"
+
+[target.wasm32-unknown-unknown.dependencies]
+web-time = "1"

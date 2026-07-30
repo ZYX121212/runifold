@@ -7,20 +7,21 @@ cd "$repo_root"
 publish_order=(
     runifold-core
     runifold-macros
-    runifold-provider-testkit
     runifold-effect
     runifold-model
+    runifold-retrieval
     runifold-tool
+    runifold-provider-testkit
+    runifold-retrieval-pgvector
+    runifold-retrieval-qdrant
     runifold-testkit
-    runifold-provider-anthropic
-    runifold-provider-gemini
-    runifold-provider-ollama
-    runifold-provider-openai
-    runifold-observability-otel
+    runifold-providers
     runifold-agent
+    runifold-workflow
     runifold-mcp
     runifold-store-sqlite
-    runifold-workflow
+    runifold-observability-otel
+    runifold-store-postgres
     runifold-eval-cli
     runifold
 )
@@ -83,7 +84,7 @@ fi
 
 for crate_name in "${publish_order[@]}"; do
     if curl --fail --silent --show-error \
-        --header "User-Agent: runifold-release-bot (https://github.com/runifold/runifold)" \
+        --header "User-Agent: runifold-release-bot (https://github.com/ZYX121212/runifold)" \
         "https://crates.io/api/v1/crates/$crate_name/$version" >/dev/null 2>&1; then
         echo "$crate_name@$version already exists; skipping"
         continue

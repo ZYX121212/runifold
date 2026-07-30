@@ -22,6 +22,12 @@ groups:
         expr: sum(rate(runifold_mcp_sampling_failures_total[5m])) / clamp_min(sum(rate(runifold_mcp_sampling_requests_total[5m])), 0.000001)
       - record: runifold:sampling_duration_seconds:p95_5m
         expr: histogram_quantile(0.95, sum by (le) (rate(runifold_mcp_sampling_duration_seconds_bucket[5m])))
+      - record: runifold:workflow_budget_denial_ratio:rate5m
+        expr: sum(rate(runifold_workflow_tenant_budget_decisions_total{decision="admission_denied"}[5m])) / clamp_min(sum(rate(runifold_workflow_tenant_budget_decisions_total{decision=~"reserved|admission_denied"}[5m])), 0.000001)
+      - record: runifold:workflow_budget_recovery_forfeits:rate5m
+        expr: sum(rate(runifold_workflow_tenant_budget_decisions_total{decision="forfeited",reason="recovery_expired"}[5m]))
+      - record: runifold:workflow_budget_projection_lease_losses:rate5m
+        expr: sum(rate(runifold_workflow_tenant_budget_projection_operations_total{outcome="lease_lost"}[5m]))
 
   - name: runifold-slo-alerts
     rules:
@@ -34,7 +40,7 @@ groups:
         annotations:
           summary: Runifold Agent error budget is burning rapidly
           description: The 99% success SLO is burning above 14.4x over both 5m and 1h windows.
-          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md
+          runbook_url: https://github.com/ZYX121212/runifold/blob/main/docs/operations-slo.md
       - alert: RunifoldAgentErrorBudgetSlowBurn
         expr: runifold:agent_error_ratio:rate30m > 0.06 and runifold:agent_error_ratio:rate6h > 0.06
         for: 30m
@@ -44,7 +50,7 @@ groups:
         annotations:
           summary: Runifold Agent error budget is burning persistently
           description: The 99% success SLO is burning above 6x over both 30m and 6h windows.
-          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md
+          runbook_url: https://github.com/ZYX121212/runifold/blob/main/docs/operations-slo.md
       - alert: RunifoldAgentP95LatencyHigh
         expr: runifold:agent_duration_seconds:p95_5m > 30
         for: 15m
@@ -53,7 +59,7 @@ groups:
           service: runifold
         annotations:
           summary: Runifold Agent P95 latency exceeds 30 seconds
-          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md
+          runbook_url: https://github.com/ZYX121212/runifold/blob/main/docs/operations-slo.md
       - alert: RunifoldAgentBudgetExhaustionHigh
         expr: runifold:agent_budget_exhaustion_ratio:rate15m > 0.02
         for: 15m
@@ -62,7 +68,7 @@ groups:
           service: runifold
         annotations:
           summary: More than 2% of Agent runs are exhausting their budget
-          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md
+          runbook_url: https://github.com/ZYX121212/runifold/blob/main/docs/operations-slo.md
       - alert: RunifoldSamplingFailureRateHigh
         expr: runifold:sampling_failure_ratio:rate5m > 0.05
         for: 10m
@@ -71,4 +77,31 @@ groups:
           service: runifold
         annotations:
           summary: MCP Sampling failure ratio exceeds 5%
-          runbook_url: https://github.com/runifold/runifold/blob/main/docs/operations-slo.md
+          runbook_url: https://github.com/ZYX121212/runifold/blob/main/docs/operations-slo.md
+      - alert: RunifoldWorkflowBudgetAdmissionDeniedHigh
+        expr: runifold:workflow_budget_denial_ratio:rate5m > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          service: runifold
+        annotations:
+          summary: More than 10% of workflow budget reservations are denied
+          runbook_url: https://github.com/ZYX121212/runifold/blob/main/docs/operations-slo.md
+      - alert: RunifoldWorkflowBudgetRecoveryForfeit
+        expr: runifold:workflow_budget_recovery_forfeits:rate5m > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: runifold
+        annotations:
+          summary: Workflow reservations are expiring without fenced recovery
+          runbook_url: https://github.com/ZYX121212/runifold/blob/main/docs/operations-slo.md
+      - alert: RunifoldWorkflowBudgetProjectionLeaseLoss
+        expr: runifold:workflow_budget_projection_lease_losses:rate5m > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: runifold
+        annotations:
+          summary: Workflow budget telemetry projectors are repeatedly losing leases
+          runbook_url: https://github.com/ZYX121212/runifold/blob/main/docs/operations-slo.md

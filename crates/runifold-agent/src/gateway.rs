@@ -1,6 +1,8 @@
-use std::{collections::BTreeMap, fmt, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, fmt, sync::Arc};
 
-use runifold_core::{BudgetEvent, CapabilitySet, ChildEvent, RunContext, RunEventKind, Usage};
+use runifold_core::{
+    BudgetEvent, CapabilitySet, ChildEvent, Instant, RunContext, RunEventKind, Usage,
+};
 use runifold_model::ToolSpec;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -221,7 +223,9 @@ pub(crate) async fn execute_route(
         .record(RunEventKind::Budget(BudgetEvent::Updated { usage }), None)
         .map_err(observability_error)?;
 
-    let mut child = parent.child(route.capabilities.clone());
+    let mut child = parent.child(route.capabilities.clone()).map_err(|error| {
+        GatewayError::new(GatewayErrorKind::AuthorityEscalation, error.to_string())
+    })?;
     child
         .metadata_mut()
         .insert(DELEGATION_DEPTH_KEY.into(), Value::from(depth + 1));

@@ -13,37 +13,83 @@ publish.workspace = true
 
 [features]
 default = []
-anthropic = ["dep:runifold-provider-anthropic"]
-gemini = ["dep:runifold-provider-gemini"]
-ollama = ["dep:runifold-provider-ollama"]
-openai = ["dep:runifold-provider-openai"]
+anthropic = ["dep:runifold-providers", "runifold-providers/anthropic"]
+azure = ["openai"]
+bedrock = ["dep:runifold-providers", "runifold-providers/bedrock"]
+gemini = ["dep:runifold-providers", "runifold-providers/gemini"]
+ollama = ["dep:runifold-providers", "runifold-providers/ollama"]
+openai = ["dep:runifold-providers", "runifold-providers/openai"]
+ark = ["openai"]
+deepseek = ["openai"]
+groq = ["openai"]
+minimax = ["openai"]
+mistral = ["openai"]
+openrouter = ["openai"]
+perplexity = ["openai"]
+qwen = ["openai"]
+siliconflow = ["openai"]
+together = ["openai"]
+xai = ["openai"]
+zhipu = ["openai"]
 otel = ["dep:runifold-observability-otel"]
 mcp = ["dep:runifold-mcp"]
 sqlite = ["dep:runifold-store-sqlite"]
 sqlite-bundled = ["sqlite", "runifold-store-sqlite/bundled"]
+qdrant = ["dep:runifold-retrieval-qdrant"]
+pgvector = ["dep:runifold-retrieval-pgvector"]
+workflow-postgres = ["dep:runifold-store-postgres"]
+archive-s3 = [
+    "dep:reqwest",
+    "dep:sha2",
+    "dep:base64",
+    "dep:serde_json",
+    "dep:time",
+    "dep:hmac",
+
+    "dep:secrecy",
+]
 
 [dependencies]
 runifold-agent.workspace = true
 runifold-core.workspace = true
 runifold-effect.workspace = true
-runifold-mcp = { version = "0.1.0", path = "../runifold-mcp", optional = true }
+runifold-mcp = { version = "0.2.0", path = "../runifold-mcp", optional = true }
 runifold-model.workspace = true
 runifold-macros.workspace = true
-runifold-observability-otel = { version = "0.1.0", path = "../runifold-observability-otel", optional = true }
-runifold-provider-anthropic = { workspace = true, optional = true }
-runifold-provider-gemini = { workspace = true, optional = true }
-runifold-provider-ollama = { workspace = true, optional = true }
-runifold-provider-openai = { workspace = true, optional = true }
+runifold-observability-otel = { version = "0.2.0", path = "../runifold-observability-otel", optional = true }
+runifold-providers = { workspace = true, optional = true }
+runifold-retrieval.workspace = true
+runifold-retrieval-pgvector = { workspace = true, optional = true }
+runifold-retrieval-qdrant = { workspace = true, optional = true }
 runifold-store-sqlite = { workspace = true, optional = true }
 runifold-tool.workspace = true
 runifold-workflow.workspace = true
 schemars.workspace = true
+runifold-store-postgres = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+sha2 = { version = "0.10", optional = true }
+base64 = { version = "0.22", optional = true }
+serde_json = { workspace = true, optional = true }
+time = { version = "=0.3.41", optional = true, features = ["formatting"] }
+hmac = { version = "0.12", optional = true }
+secrecy = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.104"
 futures-executor.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+
+[target.wasm32-unknown-unknown.dev-dependencies]
+futures-timer = { version = "3", features = ["wasm-bindgen"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4.76"
+wasm-bindgen-test = "0.3.76"
+web-sys = { version = "0.3", features = ["RtcPeerConnection", "RtcDataChannel", "RtcDataChannelEvent", "RtcConfiguration", "RtcIceConnectionState", "RtcIceGatheringState", "RtcIceServer", "RtcIceTransportPolicy", "RtcPeerConnectionState", "RtcSessionDescription", "RtcSessionDescriptionInit", "RtcSdpType", "MessageEvent", "Event"] }
 
 [lints]
 workspace = true

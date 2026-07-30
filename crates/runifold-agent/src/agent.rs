@@ -1,13 +1,13 @@
-use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 
 use futures_util::{
     StreamExt,
     future::{Either, select},
 };
 use runifold_core::{
-    BudgetEvent, CapabilitySet, DomainEvent, EffectId, EffectKind, EffectRequest, EventId,
-    InvocationId, LifecycleEvent, RetrySafety, RunContext, RunError, RunErrorKind, RunEventKind,
-    Usage,
+    Budget, BudgetEvent, BudgetTracker, CapabilitySet, DomainEvent, EffectId, EffectKind,
+    EffectRequest, EventId, Instant, InvocationId, LifecycleEvent, RetrySafety, RunContext,
+    RunError, RunErrorKind, RunEventKind, Usage,
 };
 use runifold_effect::{
     EffectExecutionContext, EffectExecutor, EffectExecutorErrorKind, EffectFuture, EffectHandler,
@@ -18,6 +18,7 @@ use runifold_model::{
     ModelRef, ModelRequest, ModelResponse, ModelStreamAccumulator, OutputFormat, Role, ToolCall,
     ToolResult,
 };
+use runifold_retrieval::{Document, Retriever};
 use runifold_tool::{ToolError, ToolErrorKind, ToolOutput, ToolRegistry};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -34,9 +35,32 @@ mod callable;
 mod checkpointing;
 mod execution;
 mod observability;
+mod retrieval;
 
 /// A boxed, sendable future returned by an agent.
+#[cfg(not(target_arch = "wasm32"))]
 pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// A boxed future returned by an agent on single-threaded WASM.
+#[cfg(target_arch = "wasm32")]
+pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+/// One dynamic, capability-gated context source.
+#[derive(Clone)]
+pub(crate) struct DynamicContext {
+    pub(crate) limit: usize,
+    pub(crate) retriever: Arc<dyn Retriever>,
+}
+
+impl std::fmt::Debug for DynamicContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DynamicContext")
+            .field("limit", &self.limit)
+            .field("retriever", self.retriever.descriptor())
+            .finish()
+    }
+}
 
 /// How the agent handles tool failures that are safe for model recovery.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -77,6 +101,8 @@ pub struct Agent {
     pub(crate) model: Arc<dyn Model>,
     pub(crate) model_ref: ModelRef,
     pub(crate) instructions: Vec<Message>,
+    pub(crate) context: Vec<Document>,
+    pub(crate) dynamic_context: Vec<DynamicContext>,
     pub(crate) tools: ToolRegistry,
     pub(crate) agents: AgentGateway,
     pub(crate) effects: EffectExecutor,
@@ -102,6 +128,8 @@ impl Agent {
             model,
             model_ref,
             instructions: Vec::new(),
+            context: Vec::new(),
+            dynamic_context: Vec::new(),
             tools: ToolRegistry::new(),
             agents: AgentGateway::new(),
             effects: EffectExecutor::new(Arc::new(InMemoryEffectStore::new())),
@@ -204,7 +232,25 @@ impl Agent {
                 capabilities.grant(descriptor.capability());
             }
         }
+        for source in &self.dynamic_context {
+            capabilities.grant(source.retriever.descriptor().capability());
+        }
         capabilities
+    }
+
+    /// Creates a root context for the ergonomic prompt surface.
+    ///
+    /// The context has no hard budget limits and grants only the Tool and child
+    /// Agent capabilities explicitly registered on this Agent. Applications
+    /// that need deadlines, tighter budgets, narrower authority, durable
+    /// journals, or shared run trees should construct a [`RunContext`] and use
+    /// [`Self::run`] instead.
+    #[must_use]
+    pub fn default_run_context(&self) -> RunContext {
+        RunContext::root(
+            BudgetTracker::new(Budget::default()),
+            self.callable_capabilities(),
+        )
     }
 }
 
@@ -215,6 +261,8 @@ impl std::fmt::Debug for Agent {
             .field("name", &self.name)
             .field("model_ref", &self.model_ref)
             .field("instructions", &self.instructions)
+            .field("context", &self.context)
+            .field("dynamic_context", &self.dynamic_context)
             .field("tools", &self.tools)
             .field("agents", &self.agents)
             .field("effects", &self.effects)

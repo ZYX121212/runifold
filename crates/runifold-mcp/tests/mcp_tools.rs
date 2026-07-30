@@ -16,8 +16,8 @@ use runifold_core::{
 };
 use runifold_mcp::{
     CallToolParams, Implementation, JsonRpcRequest, JsonRpcResponse, McpClient, McpClientConfig,
-    McpErrorKind, McpRemoteTool, McpServer, McpTool, RemoteToolPolicy, RequestId, StdioTransport,
-    serve_io,
+    McpErrorKind, McpProtocolMode, McpRemoteTool, McpResultType, McpServer, McpTool,
+    RemoteToolPolicy, RequestId, STATELESS_PROTOCOL_VERSION, StdioTransport, serve_io,
 };
 use runifold_tool::{
     Tool, ToolContext, ToolDescriptor, ToolError, ToolErrorKind, ToolFuture, ToolOutput,
@@ -150,6 +150,97 @@ async fn unsupported_versions_fail_during_initialization() {
                 "protocolVersion": "2099-01-01",
                 "capabilities": {},
                 "clientInfo": {"name": "future", "version": "1"}
+            })),
+        })
+        .await;
+
+    assert!(matches!(
+        response,
+        JsonRpcResponse::Error {
+            error: runifold_mcp::JsonRpcError { code: -32602, .. },
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn discovery_is_stateless_and_preserves_legacy_initialization() {
+    let session = McpServer::new(
+        Arc::new(ToolRegistry::new()),
+        authority_for([]),
+        Implementation::new("discoverable-server", "1"),
+    )
+    .session();
+    let client = McpClient::new(
+        Arc::new(session),
+        McpClientConfig::new(Implementation::new("discovering-client", "1")),
+    );
+
+    let discovered = client.discover().await.unwrap();
+    assert_eq!(discovered.result_type, McpResultType::Complete);
+    assert_eq!(discovered.supported_versions, ["2026-07-28", "2025-11-25"]);
+    assert_eq!(discovered.metadata.server_info.name, "discoverable-server");
+
+    let initialized = client.initialize().await.unwrap();
+    assert_eq!(initialized.protocol_version, "2025-11-25");
+}
+
+#[tokio::test]
+async fn stateless_connect_lists_and_calls_tools_without_initialization() {
+    let echo = Arc::new(EchoTool::new("echo"));
+    let mut registry = ToolRegistry::new();
+    registry.register(echo.clone()).unwrap();
+    let client = McpClient::new(
+        Arc::new(
+            McpServer::new(
+                Arc::new(registry),
+                authority_for([echo.as_ref().descriptor()]),
+                Implementation::new("stateless-server", "1"),
+            )
+            .session(),
+        ),
+        McpClientConfig::new(Implementation::new("stateless-client", "1")),
+    );
+
+    assert_eq!(client.connect().await.unwrap(), McpProtocolMode::Stateless);
+    assert_eq!(
+        client.server_info().await.unwrap().protocol_version,
+        STATELESS_PROTOCOL_VERSION
+    );
+    assert_eq!(client.list_tools().await.unwrap().len(), 1);
+    let result = client
+        .call_tool(CallToolParams {
+            name: "echo".into(),
+            arguments: Some(serde_json::Map::from_iter([(
+                "mode".into(),
+                json!("stateless"),
+            )])),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result.structured_content,
+        Some(json!({"mode": "stateless"}))
+    );
+}
+
+#[tokio::test]
+async fn discovery_requires_stateless_request_metadata() {
+    let session = McpServer::new(
+        Arc::new(ToolRegistry::new()),
+        authority_for([]),
+        Implementation::new("test-server", "1"),
+    )
+    .session();
+    let response = session
+        .handle_request(JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: RequestId::Number(1),
+            method: "server/discover".into(),
+            params: Some(json!({
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": STATELESS_PROTOCOL_VERSION
+                }
             })),
         })
         .await;
@@ -304,6 +395,8 @@ async fn stdio_transport_multiplexes_concurrent_tool_calls() {
         McpClientConfig::new(Implementation::new("test-client", "1"))
             .with_request_timeout(Duration::from_secs(1)),
     );
+    let discovered = client.discover().await.unwrap();
+    assert_eq!(discovered.supported_versions, ["2026-07-28", "2025-11-25"]);
     client.initialize().await.unwrap();
 
     let calls = (0..32).map(|index| {

@@ -92,6 +92,12 @@ pub struct ListResourcesResult {
     /// Optional continuation cursor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// Server-provided freshness lifetime in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+    /// Visibility of this response across authorization contexts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<crate::CacheScope>,
 }
 
 /// Model-facing description of a parameterized MCP resource.
@@ -139,6 +145,12 @@ pub struct ListResourceTemplatesResult {
     /// Optional continuation cursor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// Server-provided freshness lifetime in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+    /// Visibility of this response across authorization contexts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<crate::CacheScope>,
 }
 
 /// Parameters for `resources/read`.
@@ -214,6 +226,12 @@ impl ResourceContents {
 pub struct ReadResourceResult {
     /// One or more content parts for the requested resource.
     pub contents: Vec<ResourceContents>,
+    /// Server-provided freshness lifetime in milliseconds.
+    #[serde(rename = "ttlMs", skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+    /// Visibility of this response across authorization contexts.
+    #[serde(rename = "cacheScope", skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<crate::CacheScope>,
 }
 
 /// One declared prompt argument.
@@ -347,6 +365,12 @@ pub struct ListPromptsResult {
     /// Optional continuation cursor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// Server-provided freshness lifetime in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+    /// Visibility of this response across authorization contexts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<crate::CacheScope>,
 }
 
 /// Parameters for `prompts/get`.

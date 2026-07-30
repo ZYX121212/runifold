@@ -1,24 +1,26 @@
+use eventsource_stream::Eventsource;
+use futures_util::{Stream, StreamExt};
+use reqwest::{
+    Client, Response, StatusCode, Url,
+    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName},
+};
+use secrecy::ExposeSecret;
 use std::{
+    collections::HashMap,
     pin::Pin,
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
-
-use eventsource_stream::Eventsource;
-use futures_util::{Stream, StreamExt};
-use reqwest::{
-    Client, Response, StatusCode, Url,
-    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap},
-};
-use secrecy::ExposeSecret;
 use tokio::sync::{Mutex, broadcast};
 
 use crate::{
     HttpAuthProvider, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    LATEST_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_ID_HEADER, McpError,
-    McpTransport, PeerRequestHandler, ServerNotificationStream, TransportFuture,
+    LATEST_PROTOCOL_VERSION, MCP_METHOD_HEADER, MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_ID_HEADER,
+    McpError, McpTool, McpTransport, PeerRequestHandler, STATELESS_PROTOCOL_VERSION,
+    ServerNotificationStream, StatelessCancellation, TransportFuture,
+    http_headers::{ToolHeaderRule, compile_tool_header_rules, encode_header_value},
 };
 
 const LAST_EVENT_ID_HEADER: &str = "last-event-id";
@@ -65,6 +67,7 @@ impl StreamableHttpTransport {
                 auth: RwLock::new(None),
                 state: Mutex::new(HttpClientState::default()),
                 peer_handler: RwLock::new(None),
+                tool_headers: RwLock::new(HashMap::new()),
                 peer_started: AtomicBool::new(false),
                 notifications: broadcast::channel(256).0,
             }),
@@ -114,6 +117,79 @@ impl StreamableHttpTransport {
                         "received a server request without an installed peer handler",
                     ))?;
                 }
+            }
+        }))
+    }
+
+    async fn listen_stateless(
+        &self,
+        request: JsonRpcRequest,
+    ) -> Result<ServerNotificationStream, McpError> {
+        let id = request.id.clone();
+        let response = self
+            .authorize(
+                self.inner
+                    .client
+                    .post(self.inner.endpoint.clone())
+                    .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
+                    .header(ACCEPT, SSE_MEDIA_TYPE)
+                    .header(MCP_PROTOCOL_VERSION_HEADER, STATELESS_PROTOCOL_VERSION)
+                    .header(MCP_METHOD_HEADER, "subscriptions/listen")
+                    .json(&request),
+            )
+            .send()
+            .await?;
+        self.check_status(&response).await?;
+        ensure_content_type(response.headers(), SSE_MEDIA_TYPE)?;
+        let mut events = response.bytes_stream().eventsource();
+        Ok(Box::pin(async_stream::stream! {
+            while let Some(event) = events.next().await {
+                let event = match event {
+                    Ok(event) => event,
+                    Err(error) => {
+                        yield Err(McpError::protocol(format!(
+                            "invalid MCP subscription SSE stream: {error}"
+                        )));
+                        break;
+                    }
+                };
+                if event.data.trim().is_empty() {
+                    continue;
+                }
+                let value: serde_json::Value = match serde_json::from_str(&event.data) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        yield Err(error.into());
+                        break;
+                    }
+                };
+                if value.get("method").is_some() && value.get("id").is_none() {
+                    match serde_json::from_value::<JsonRpcNotification>(value) {
+                        Ok(notification) => yield Ok(notification),
+                        Err(error) => {
+                            yield Err(error.into());
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                let response = match serde_json::from_value::<JsonRpcResponse>(value) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        yield Err(error.into());
+                        break;
+                    }
+                };
+                if response.id() != &id {
+                    yield Err(McpError::protocol(
+                        "subscription close response id does not match its request",
+                    ));
+                    break;
+                }
+                if let Err(error) = response.into_result() {
+                    yield Err(error);
+                }
+                break;
             }
         }))
     }
@@ -186,7 +262,9 @@ impl StreamableHttpTransport {
                     let response = handler.handle(request).await.unwrap_or_else(|_| {
                         JsonRpcResponse::error(id, -32603, "client peer request failed", None)
                     });
-                    let _ = transport.send_json(&response, false).await;
+                    let _ = transport
+                        .send_json(&response, false, None, None, None, &[])
+                        .await;
                 });
                 continue;
             }
@@ -237,6 +315,10 @@ impl StreamableHttpTransport {
         &self,
         message: &T,
         expects_response: bool,
+        protocol_version: Option<&str>,
+        method: Option<&str>,
+        name: Option<&str>,
+        custom_headers: &[(String, String)],
     ) -> Result<Option<JsonRpcResponse>, McpError> {
         let session_id = self.session_id().await;
         let mut request = self
@@ -246,14 +328,43 @@ impl StreamableHttpTransport {
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
             .header(ACCEPT, format!("{JSON_MEDIA_TYPE}, {SSE_MEDIA_TYPE}"))
             .json(message);
-        if let Some(session_id) = session_id {
-            request = request
-                .header(MCP_SESSION_ID_HEADER, session_id)
-                .header(MCP_PROTOCOL_VERSION_HEADER, LATEST_PROTOCOL_VERSION);
+        if let Some(protocol_version) = protocol_version {
+            request = request.header(MCP_PROTOCOL_VERSION_HEADER, protocol_version);
+        }
+        if let Some(method) = method {
+            request = request.header(MCP_METHOD_HEADER, method);
+        }
+        if let Some(name) = name {
+            request = request.header(crate::MCP_NAME_HEADER, encode_header_value(name));
+        }
+        for (name, value) in custom_headers {
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| McpError::protocol("invalid compiled MCP parameter header name"))?;
+            request = request.header(name, value);
+        }
+        if protocol_version != Some(STATELESS_PROTOCOL_VERSION) {
+            if let Some(session_id) = session_id {
+                request = request
+                    .header(MCP_SESSION_ID_HEADER, session_id)
+                    .header(MCP_PROTOCOL_VERSION_HEADER, LATEST_PROTOCOL_VERSION);
+            }
         }
         let response = self.authorize(request).send().await?;
         if response.status() == StatusCode::ACCEPTED && !expects_response {
             return Ok(None);
+        }
+        if response.status() == StatusCode::BAD_REQUEST
+            && protocol_version == Some(STATELESS_PROTOCOL_VERSION)
+            && expects_response
+        {
+            let body = response.bytes().await?;
+            return match serde_json::from_slice::<JsonRpcResponse>(&body) {
+                Ok(response) => Ok(Some(response)),
+                Err(_) => Err(McpError::HttpStatus {
+                    status: StatusCode::BAD_REQUEST.as_u16(),
+                    message: "Bad Request".into(),
+                }),
+            };
         }
         self.check_status(&response).await?;
 
@@ -313,26 +424,120 @@ impl StreamableHttpTransport {
             _ => Ok(()),
         }
     }
+
+    fn tool_parameter_headers(
+        &self,
+        request: &JsonRpcRequest,
+    ) -> Result<Vec<(String, String)>, McpError> {
+        if request.method != "tools/call" {
+            return Ok(Vec::new());
+        }
+        let params = request
+            .params
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| McpError::protocol("tools/call parameters must be an object"))?;
+        let name = params
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| McpError::protocol("tools/call omitted its Tool name"))?;
+        let rules = self
+            .inner
+            .tool_headers
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                McpError::protocol(
+                    "HTTP Tool metadata is not prepared; call tools/list before tools/call",
+                )
+            })?;
+        let empty = serde_json::Map::new();
+        let arguments = params
+            .get("arguments")
+            .and_then(serde_json::Value::as_object)
+            .unwrap_or(&empty);
+        let mut headers = Vec::with_capacity(rules.len());
+        for rule in &rules {
+            let value = rule
+                .encoded_value(arguments)
+                .map_err(|error| McpError::protocol(error.to_string()))?;
+            if let Some(value) = value {
+                headers.push((rule.header_name(), value));
+            }
+        }
+        Ok(headers)
+    }
 }
 
 impl McpTransport for StreamableHttpTransport {
     fn request(&self, request: JsonRpcRequest) -> TransportFuture<'_, JsonRpcResponse> {
         Box::pin(async move {
-            self.send_json(&request, true)
-                .await?
-                .ok_or_else(|| McpError::protocol("MCP request returned no response"))
+            let is_stateless = request
+                .params
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .and_then(|params| params.get("_meta"))
+                .and_then(serde_json::Value::as_object)
+                .and_then(|metadata| metadata.get("io.modelcontextprotocol/protocolVersion"))
+                .and_then(serde_json::Value::as_str)
+                == Some(STATELESS_PROTOCOL_VERSION);
+            let name = is_stateless.then(|| request_name(&request)).flatten();
+            let custom_headers = if is_stateless {
+                self.tool_parameter_headers(&request)?
+            } else {
+                Vec::new()
+            };
+            self.send_json(
+                &request,
+                true,
+                is_stateless.then_some(STATELESS_PROTOCOL_VERSION),
+                is_stateless.then_some(request.method.as_str()),
+                name,
+                &custom_headers,
+            )
+            .await?
+            .ok_or_else(|| McpError::protocol("MCP request returned no response"))
         })
     }
 
     fn notify(&self, notification: JsonRpcNotification) -> TransportFuture<'_, ()> {
         Box::pin(async move {
-            self.send_json(&notification, false).await?;
+            self.send_json(&notification, false, None, None, None, &[])
+                .await?;
             Ok(())
         })
     }
 
+    fn stateless_cancellation(&self) -> StatelessCancellation {
+        StatelessCancellation::DropRequest
+    }
+
+    fn prepare_tools(&self, tools: Vec<McpTool>) -> Result<Vec<McpTool>, McpError> {
+        let mut prepared = Vec::with_capacity(tools.len());
+        let mut cache = self
+            .inner
+            .tool_headers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for tool in tools {
+            let Ok(rules) = compile_tool_header_rules(&tool.input_schema) else {
+                cache.remove(&tool.name);
+                continue;
+            };
+            cache.insert(tool.name.clone(), rules);
+            prepared.push(tool);
+        }
+        Ok(prepared)
+    }
+
     fn subscribe(&self) -> TransportFuture<'_, ServerNotificationStream> {
         Box::pin(async move { StreamableHttpTransport::subscribe(self).await })
+    }
+
+    fn listen(&self, request: JsonRpcRequest) -> TransportFuture<'_, ServerNotificationStream> {
+        Box::pin(async move { self.listen_stateless(request).await })
     }
 
     fn install_peer_handler(&self, handler: Arc<dyn PeerRequestHandler>) -> Result<(), McpError> {
@@ -376,6 +581,21 @@ impl McpTransport for StreamableHttpTransport {
     }
 }
 
+fn request_name(request: &JsonRpcRequest) -> Option<&str> {
+    let key = match request.method.as_str() {
+        "tools/call" | "prompts/get" => "name",
+        "resources/read" => "uri",
+        "tasks/get" | "tasks/update" | "tasks/cancel" => "taskId",
+        _ => return None,
+    };
+    request
+        .params
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|params| params.get(key))
+        .and_then(serde_json::Value::as_str)
+}
+
 impl std::fmt::Debug for StreamableHttpTransport {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -401,6 +621,7 @@ struct HttpTransportInner {
     auth: RwLock<Option<Arc<dyn HttpAuthProvider>>>,
     state: Mutex<HttpClientState>,
     peer_handler: RwLock<Option<Arc<dyn PeerRequestHandler>>>,
+    tool_headers: RwLock<HashMap<String, Vec<ToolHeaderRule>>>,
     peer_started: AtomicBool,
     notifications: broadcast::Sender<JsonRpcNotification>,
 }
@@ -460,4 +681,24 @@ fn content_type(headers: &HeaderMap) -> Result<&str, McpError> {
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| McpError::protocol("MCP HTTP response omitted Content-Type"))
+}
+
+#[cfg(test)]
+mod task_routing_tests {
+    use serde_json::json;
+
+    use super::request_name;
+    use crate::{JsonRpcRequest, RequestId};
+
+    #[test]
+    fn task_operations_route_by_exact_task_id() {
+        for method in ["tasks/get", "tasks/update", "tasks/cancel"] {
+            let request = JsonRpcRequest::new(
+                RequestId::Number(1),
+                method,
+                Some(json!({"taskId": "opaque-task"})),
+            );
+            assert_eq!(request_name(&request), Some("opaque-task"));
+        }
+    }
 }
