@@ -45,7 +45,7 @@ published=""
 for crate_name in "${publish_order[@]}"; do
     while IFS= read -r dependency; do
         [[ -z "$dependency" ]] && continue
-        if ! rg -qx "$dependency" <<<"$published"; then
+        if ! grep -Fxq "$dependency" <<<"$published"; then
             echo "$crate_name appears before internal dependency $dependency" >&2
             exit 1
         fi
