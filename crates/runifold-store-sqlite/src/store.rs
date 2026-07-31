@@ -12,6 +12,8 @@ use runifold_effect::{EffectExecutorError, EffectExecutorErrorKind, EffectRecord
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
 
+mod conversation;
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS runifold_checkpoints (
     checkpoint_id TEXT PRIMARY KEY NOT NULL,
@@ -41,6 +43,13 @@ CREATE TABLE IF NOT EXISTS runifold_events (
 
 CREATE INDEX IF NOT EXISTS runifold_events_run_sequence
     ON runifold_events (run_id, sequence);
+
+CREATE TABLE IF NOT EXISTS runifold_conversation_state (
+    singleton_id   INTEGER PRIMARY KEY NOT NULL CHECK (singleton_id = 1),
+    format_version INTEGER NOT NULL,
+    state_blob     BLOB NOT NULL,
+    updated_at_ms  INTEGER NOT NULL
+);
 
 PRAGMA user_version = 1;
 ";

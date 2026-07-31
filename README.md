@@ -228,7 +228,8 @@ Runifold is pre-alpha. The implemented foundation includes:
 - revision-safe Agent checkpoints with explicit ambiguous-retry policy;
 - capability-gated write-ahead effects with idempotent replay and conservative recovery;
 - Tool and Agent delegation execution coordinated through the write-ahead effect boundary;
-- optional durable SQLite stores for effects, checkpoints, and journals;
+- optional durable SQLite stores for effects, checkpoints, journals, and the
+  complete local Workflow control plane;
 - cross-process crash recovery proving completed Tool effects are not re-executed;
 - fluent Agent construction across OpenAI, Ark, Qwen, and custom compatible clients;
 - provider-neutral embeddings, capability-gated Agent retrieval, and a deterministic in-memory vector index;
@@ -1138,6 +1139,68 @@ let agent = agent.effect_executor(executor);
 
 SQLite is an optional local adapter, not part of the runtime kernel. A service
 can implement the same traits with PostgreSQL or another transactional store.
+The same `SqliteStore` also implements `ConversationStore`. For a turn that
+must recover without splitting the transcript from its terminal checkpoint,
+use the combined durable entry point:
+
+```rust,ignore
+let checkpoint_id = CheckpointId::new();
+let turn = agent
+    .run_durable_conversation(
+        "Continue our Rust design discussion",
+        &run,
+        store.clone(),
+        DurableConversationRequest {
+            checkpoint_id,
+            conversation_id,
+            namespace,
+            policy,
+        },
+    )
+    .await?;
+
+// After response loss or process restart, this returns a committed outcome
+// without invoking the model again.
+let same_turn = agent
+    .resume_durable_conversation(
+        store,
+        checkpoint_id,
+        &recovered_run,
+        ResumePolicy::RejectAmbiguous,
+    )
+    .await?;
+```
+
+Intermediate revisions remain write-ahead checkpoints. The final transcript
+append and `Completed` checkpoint revision share one SQLite transaction. An
+in-flight external model turn remains explicitly ambiguous and is rejected
+unless the caller selects `RetryInterruptedTurn`.
+
+Local and edge Workflow workers can persist their complete control plane in
+SQLite without deploying PostgreSQL. `SqliteWorkflowStore` covers queue state,
+fenced leases, heartbeats, tenant budgets, durable timers, signals, HITL,
+checkpoint history, cancellation, and fork/replay:
+
+```rust,ignore
+use std::{sync::Arc, time::Duration};
+use runifold::{
+    LeaseDuration, WorkerId, WorkflowWorker,
+    sqlite::SqliteWorkflowStore,
+};
+
+let store = Arc::new(SqliteWorkflowStore::open("runifold.db")?);
+let worker = WorkflowWorker::new(
+    store,
+    registry,
+    WorkerId::parse("local-worker")?,
+    LeaseDuration::new(Duration::from_secs(30))?,
+    Duration::from_secs(10),
+)?;
+```
+
+SQLite serializes write transactions and is intended for local, desktop,
+edge, and low-contention multi-process deployments. Horizontally scaled
+workers should use PostgreSQL.
 
 Distributed Workflow workers use the `workflow-postgres` feature:
 
@@ -1423,7 +1486,7 @@ requirements are documented in the [testing guide](docs/TESTING.md).
 | `runifold-retrieval-pgvector` | Explicit PostgreSQL/pgvector persistence and cosine/HNSW retrieval |
 | `runifold-retrieval-qdrant` | Qdrant REST upsert and query adapter with stable document identity |
 | `runifold-store-postgres` | PostgreSQL conversations, semantic memory, workflow claims, fenced checkpoints, leases, heartbeats, and fencing tokens |
-| `runifold-store-sqlite` | Optional durable effects, checkpoints, and journals in one SQLite database |
+| `runifold-store-sqlite` | Durable local effects, checkpoints, journals, atomic Agent conversations, fenced Workflow tasks, budgets, HITL, history, and fork/replay in SQLite |
 | `runifold-testkit` | Deterministic runtime helpers, quality datasets, async scorers, and regression gates |
 | `runifold-tool` | Tool descriptors, capability gating, registry, and execution |
 

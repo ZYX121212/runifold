@@ -1,7 +1,8 @@
 //! Agent checkpoint state conversion, persistence, and usage validation.
 
 use super::{
-    AgentCheckpointState, AgentError, AgentOutcome, CheckpointCursor, Message, ModelResponse, Usage,
+    AgentCheckpointState, AgentError, AgentOutcome, CheckpointCursor,
+    DurableConversationCheckpoint, Message, ModelResponse, Usage,
 };
 
 pub(super) struct AgentProgress {
@@ -10,6 +11,7 @@ pub(super) struct AgentProgress {
     pub(super) turns: u32,
     pub(super) tool_calls: u32,
     pub(super) delegations: u32,
+    pub(super) durable_conversation: Option<DurableConversationCheckpoint>,
 }
 
 impl From<AgentCheckpointState> for AgentProgress {
@@ -20,6 +22,7 @@ impl From<AgentCheckpointState> for AgentProgress {
             turns: state.turns,
             tool_calls: state.tool_calls,
             delegations: state.delegations,
+            durable_conversation: state.durable_conversation,
         }
     }
 }

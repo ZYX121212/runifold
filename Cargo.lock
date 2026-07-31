@@ -2908,9 +2908,11 @@ dependencies = [
  "runifold-model",
  "runifold-testkit",
  "runifold-tool",
+ "runifold-workflow",
  "rusqlite",
  "serde_json",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 

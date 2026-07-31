@@ -6,6 +6,19 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+- `SqliteStore` now implements `ConversationStore` and the new
+  `DurableConversationStore` boundary. `Agent::run_durable_conversation` and
+  `resume_durable_conversation` use write-ahead Agent checkpoints, then commit
+  the canonical transcript append and terminal checkpoint in one SQLite
+  transaction. Reopen, idempotent completed resume, and rollback-on-conflict
+  contracts are covered by tests.
+- Added `SqliteWorkflowStore`, a complete durable local `WorkflowStore` using
+  SQLite-authoritative time, immediate transactions, fenced lease takeover,
+  persistent tenant budgets and projections, signals/HITL, cancellation,
+  checkpoint history, and fork/replay state. Synchronous SQLite work runs on a
+  Tokio blocking boundary; reopen, reservation takeover, concurrent claim,
+  history/fork, and format-forward-safety contracts are covered by tests.
+
 ## [0.2.0] - 2026-07-31
 
 - Raised the MSRV to Rust 1.88 and upgraded the Bedrock, time, and

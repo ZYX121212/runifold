@@ -25,7 +25,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::checkpoint::CheckpointCursor;
 use crate::stream::{AgentObserver, BufferedObserver, NoopObserver, emit_agent_event};
-use crate::{AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, ResumePolicy};
+use crate::{
+    AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, DurableConversationCheckpoint,
+    ResumePolicy,
+};
 use crate::{
     AgentError, AgentEventStream, AgentGateway, AgentOutcome, AgentStreamEvent, CallableKind,
     GatewayError, GatewayErrorKind, StructuredAgent,

@@ -7,17 +7,19 @@ use super::observability::{consume_budget, emit_usage, record_domain, terminal_e
 use super::{
     Agent, AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, AgentError,
     AgentEventStream, AgentFuture, AgentObserver, AgentOutcome, AgentStreamEvent, Arc,
-    BufferedObserver, CheckpointCursor, ContentPart, Either, EventId, Instant, LifecycleEvent,
-    Message, ModelCallContext, ModelError, ModelErrorKind, ModelRequest, ModelResponse,
-    ModelStreamAccumulator, NoopObserver, ResumePolicy, Role, RunContext, RunEventKind, StreamExt,
-    ToolCall, Usage, emit_agent_event, select,
+    BufferedObserver, CheckpointCursor, ContentPart, DurableConversationCheckpoint, Either,
+    EventId, Instant, LifecycleEvent, Message, ModelCallContext, ModelError, ModelErrorKind,
+    ModelRequest, ModelResponse, ModelStreamAccumulator, NoopObserver, ResumePolicy, Role,
+    RunContext, RunEventKind, StreamExt, ToolCall, Usage, emit_agent_event, select,
 };
 use crate::conversation::{
     AgentConversationError, AgentConversationOutcome, AutomaticConversationSummary,
     ConversationAppend, ConversationContextPolicy, ConversationId, ConversationStore,
-    ConversationSummaryCommit, ConversationSummaryRequest, MemoryNamespace, SemanticMemoryQuery,
+    ConversationSummaryCommit, ConversationSummaryRequest, DurableConversationCommit,
+    DurableConversationRequest, DurableConversationStore, MemoryNamespace, SemanticMemoryQuery,
     is_transient_context, semantic_memory_message, summary_message,
 };
+use runifold_core::{CheckpointId, CheckpointStore};
 use runifold_retrieval::RetrievalContext;
 
 impl Agent {
@@ -60,7 +62,7 @@ impl Agent {
         let input = input.into();
         let state = self.initial_state(input, run.root_run_id().to_string());
         Box::pin(async move {
-            self.execute_state(state, run, None, Arc::new(NoopObserver), true)
+            self.execute_state(state, run, None, Arc::new(NoopObserver), true, true)
                 .await
         })
     }
@@ -121,7 +123,7 @@ impl Agent {
             let state =
                 self.initial_state_from_transcript(transcript, run.root_run_id().to_string());
             let outcome = self
-                .execute_state(state, run, None, Arc::new(NoopObserver), true)
+                .execute_state(state, run, None, Arc::new(NoopObserver), true, true)
                 .await
                 .map_err(AgentConversationError::Run)?;
             let messages = outcome
@@ -227,8 +229,169 @@ impl Agent {
         let state = self.initial_state(input.into(), run.root_run_id().to_string());
         let observer = BufferedObserver::default();
         let events = observer.events();
-        let execution = Box::pin(self.execute_state(state, run, None, Arc::new(observer), true));
+        let execution =
+            Box::pin(self.execute_state(state, run, None, Arc::new(observer), true, true));
         AgentEventStream::new(execution, events)
+    }
+
+    /// Runs one conversational turn with atomic transcript and checkpoint commit.
+    ///
+    /// Intermediate checkpoints are written ahead of model and callable work.
+    /// The terminal checkpoint and transcript append are committed together by
+    /// [`DurableConversationStore`].
+    pub fn run_durable_conversation<'a>(
+        &'a self,
+        input: impl Into<String> + Send + 'a,
+        run: &'a RunContext,
+        store: Arc<dyn DurableConversationStore>,
+        request: DurableConversationRequest,
+    ) -> AgentFuture<'a, Result<AgentConversationOutcome, AgentConversationError>> {
+        let input = input.into();
+        Box::pin(async move {
+            let DurableConversationRequest {
+                checkpoint_id,
+                conversation_id,
+                namespace,
+                policy,
+            } = request;
+            store.create(conversation_id, namespace.clone()).await?;
+            let view = store
+                .load_view(
+                    conversation_id,
+                    namespace.clone(),
+                    policy.window,
+                    policy.summary_batch,
+                )
+                .await?;
+            if view.requires_summary() {
+                return Err(AgentConversationError::SummaryRequired {
+                    conversation_id,
+                    buffered_entries: u64::try_from(view.summary_buffer.len())
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(view.summary_backlog),
+                });
+            }
+            let mut transcript = self.instructions.clone();
+            if let Some(summary) = &view.summary {
+                transcript.push(summary_message(summary));
+            }
+            if let Some(limit) = policy.semantic_memory_limit {
+                let query =
+                    SemanticMemoryQuery::new(namespace.clone(), input.clone(), limit.get())?;
+                let search = store
+                    .search_memory_scoped(query, RetrievalContext::for_run(run))
+                    .await?;
+                if search.usage != Usage::default() {
+                    consume_budget(run, search.usage, None).map_err(AgentConversationError::Run)?;
+                }
+                if let Some(message) = semantic_memory_message(&search.memories) {
+                    transcript.push(message);
+                }
+            }
+            transcript.extend(view.window.iter().map(|entry| entry.message.clone()));
+            let persisted_prefix_len = u64::try_from(transcript.len()).map_err(|_| {
+                AgentConversationError::Run(checkpoint_payload_error(
+                    "conversation context length exceeds durable checkpoint range",
+                ))
+            })?;
+            transcript.push(Message::user(input));
+            let durable = DurableConversationCheckpoint {
+                conversation_id,
+                namespace,
+                expected_version: view.version,
+                persisted_prefix_len,
+            };
+            let mut state =
+                self.initial_state_from_transcript(transcript, checkpoint_id.to_string());
+            state.durable_conversation = Some(durable.clone());
+            state.usage = run.budget().usage();
+            let checkpoint_store: Arc<dyn CheckpointStore> = store.clone();
+            let checkpoint = AgentCheckpoint::existing(checkpoint_id, checkpoint_store);
+            let mut cursor = CheckpointCursor::create(&checkpoint, run, &state)
+                .map_err(AgentConversationError::Run)?;
+            let outcome = self
+                .execute_state(
+                    state,
+                    run,
+                    Some(&mut cursor),
+                    Arc::new(NoopObserver),
+                    true,
+                    false,
+                )
+                .await
+                .map_err(AgentConversationError::Run)?;
+            self.commit_durable_outcome(store.as_ref(), run, &cursor, durable, outcome)
+                .await
+        })
+    }
+
+    /// Resumes a durable conversational turn from its write-ahead checkpoint.
+    pub fn resume_durable_conversation<'a>(
+        &'a self,
+        store: Arc<dyn DurableConversationStore>,
+        checkpoint_id: CheckpointId,
+        run: &'a RunContext,
+        policy: ResumePolicy,
+    ) -> AgentFuture<'a, Result<AgentConversationOutcome, AgentConversationError>> {
+        Box::pin(async move {
+            let checkpoint_store: Arc<dyn CheckpointStore> = store.clone();
+            let checkpoint = AgentCheckpoint::existing(checkpoint_id, checkpoint_store);
+            let (envelope, mut state) = checkpoint
+                .load()
+                .map_err(AgentError::from)
+                .map_err(AgentConversationError::Run)?;
+            self.validate_checkpoint_identity(&state)
+                .map_err(AgentConversationError::Run)?;
+            let durable = state.durable_conversation.clone().ok_or_else(|| {
+                AgentConversationError::Run(checkpoint_payload_error(
+                    "checkpoint is not a durable conversation turn",
+                ))
+            })?;
+            if let Some(outcome) = state.outcome() {
+                let conversation_version = durable
+                    .expected_version
+                    .get()
+                    .checked_add(1)
+                    .map(crate::ConversationVersion::new)
+                    .ok_or_else(|| {
+                        AgentConversationError::Run(checkpoint_payload_error(
+                            "durable conversation version overflow",
+                        ))
+                    })?;
+                return Ok(AgentConversationOutcome {
+                    outcome,
+                    conversation_version,
+                });
+            }
+            if let AgentCheckpointPhase::TurnInFlight { turn } = state.phase {
+                if policy == ResumePolicy::RejectAmbiguous {
+                    return Err(AgentConversationError::Run(
+                        AgentError::AmbiguousCheckpoint { turn },
+                    ));
+                }
+                validate_usage_floor(state.usage, run.budget().usage())
+                    .map_err(AgentConversationError::Run)?;
+                state.usage = run.budget().usage();
+                state.phase = AgentCheckpointPhase::ReadyForTurn;
+            } else {
+                validate_exact_usage(state.usage, run.budget().usage())
+                    .map_err(AgentConversationError::Run)?;
+            }
+            let mut cursor = CheckpointCursor::loaded(&checkpoint, envelope);
+            let outcome = self
+                .execute_state(
+                    state,
+                    run,
+                    Some(&mut cursor),
+                    Arc::new(NoopObserver),
+                    false,
+                    false,
+                )
+                .await
+                .map_err(AgentConversationError::Run)?;
+            self.commit_durable_outcome(store.as_ref(), run, &cursor, durable, outcome)
+                .await
+        })
     }
 
     /// Runs with write-ahead checkpoint persistence.
@@ -243,8 +406,15 @@ impl Agent {
             let mut state = self.initial_state(input, checkpoint.id().to_string());
             state.usage = run.budget().usage();
             let mut cursor = CheckpointCursor::create(checkpoint, run, &state)?;
-            self.execute_state(state, run, Some(&mut cursor), Arc::new(NoopObserver), true)
-                .await
+            self.execute_state(
+                state,
+                run,
+                Some(&mut cursor),
+                Arc::new(NoopObserver),
+                true,
+                true,
+            )
+            .await
         })
     }
 
@@ -273,8 +443,15 @@ impl Agent {
                 validate_exact_usage(state.usage, run.budget().usage())?;
             }
             let mut cursor = CheckpointCursor::loaded(checkpoint, envelope);
-            self.execute_state(state, run, Some(&mut cursor), Arc::new(NoopObserver), false)
-                .await
+            self.execute_state(
+                state,
+                run,
+                Some(&mut cursor),
+                Arc::new(NoopObserver),
+                false,
+                true,
+            )
+            .await
         })
     }
 
@@ -299,6 +476,7 @@ impl Agent {
             delegations: 0,
             usage: Usage::default(),
             phase: AgentCheckpointPhase::ReadyForTurn,
+            durable_conversation: None,
         }
     }
 
@@ -309,6 +487,7 @@ impl Agent {
         mut checkpoint: Option<&mut CheckpointCursor>,
         observer: Arc<dyn AgentObserver>,
         retrieve_context: bool,
+        persist_terminal_checkpoint: bool,
     ) -> Result<AgentOutcome, AgentError> {
         let started = run
             .record(
@@ -335,8 +514,15 @@ impl Agent {
             } else {
                 state
             };
-            self.run_loop(state, run, started, checkpoint, observer.as_ref())
-                .await
+            self.run_loop(
+                state,
+                run,
+                started,
+                checkpoint,
+                observer.as_ref(),
+                persist_terminal_checkpoint,
+            )
+            .await
         }
         .await;
         let terminal = terminal_event(&self.name, &result);
@@ -360,6 +546,7 @@ impl Agent {
         caused_by: Option<EventId>,
         mut checkpoint: Option<&mut CheckpointCursor>,
         observer: &dyn AgentObserver,
+        persist_terminal_checkpoint: bool,
     ) -> Result<AgentOutcome, AgentError> {
         self.validate_config()?;
         let mut progress = AgentProgress::from(state);
@@ -429,16 +616,18 @@ impl Agent {
                         "model stopped for tool calls without emitting a tool call".into(),
                     ));
                 }
-                save_checkpoint(
-                    &mut checkpoint,
-                    &self.checkpoint_state(
-                        &progress,
-                        run,
-                        AgentCheckpointPhase::Completed {
-                            response: Box::new(response.clone()),
-                        },
-                    ),
-                )?;
+                if persist_terminal_checkpoint {
+                    save_checkpoint(
+                        &mut checkpoint,
+                        &self.checkpoint_state(
+                            &progress,
+                            run,
+                            AgentCheckpointPhase::Completed {
+                                response: Box::new(response.clone()),
+                            },
+                        ),
+                    )?;
+                }
                 return Ok(progress.outcome(response, run.budget().usage()));
             }
 
@@ -592,6 +781,69 @@ impl Agent {
             delegations: progress.delegations,
             usage: run.budget().usage(),
             phase,
+            durable_conversation: progress.durable_conversation.clone(),
+        }
+    }
+
+    async fn commit_durable_outcome(
+        &self,
+        store: &dyn DurableConversationStore,
+        run: &RunContext,
+        cursor: &CheckpointCursor,
+        durable: DurableConversationCheckpoint,
+        outcome: AgentOutcome,
+    ) -> Result<AgentConversationOutcome, AgentConversationError> {
+        let persisted_prefix_len = usize::try_from(durable.persisted_prefix_len).map_err(|_| {
+            AgentConversationError::Run(checkpoint_payload_error(
+                "durable conversation prefix does not fit this platform",
+            ))
+        })?;
+        if persisted_prefix_len >= outcome.transcript.len() {
+            return Err(AgentConversationError::Run(checkpoint_payload_error(
+                "durable conversation checkpoint has an invalid transcript prefix",
+            )));
+        }
+        let messages = outcome
+            .transcript
+            .iter()
+            .skip(persisted_prefix_len)
+            .filter(|message| !is_transient_context(message))
+            .cloned()
+            .collect();
+        let state = AgentCheckpointState {
+            execution_id: cursor.id().to_string(),
+            agent: self.name.clone(),
+            model: self.model_ref.clone(),
+            transcript: outcome.transcript.clone(),
+            turns: outcome.turns,
+            tool_calls: outcome.tool_calls,
+            delegations: outcome.delegations,
+            usage: run.budget().usage(),
+            phase: AgentCheckpointPhase::Completed {
+                response: Box::new(outcome.response.clone()),
+            },
+            durable_conversation: Some(durable.clone()),
+        };
+        let checkpoint = cursor.next(&state).map_err(AgentConversationError::Run)?;
+        let command = DurableConversationCommit {
+            namespace: durable.namespace,
+            append: ConversationAppend {
+                conversation_id: durable.conversation_id,
+                expected_version: durable.expected_version,
+                messages,
+            },
+            checkpoint,
+            expected_checkpoint_revision: cursor.revision(),
+        };
+        match store.commit_durable_turn(command).await {
+            Ok(conversation_version) => Ok(AgentConversationOutcome {
+                outcome,
+                conversation_version,
+            }),
+            Err(source) => Err(AgentConversationError::Commit {
+                source,
+                outcome: Box::new(outcome),
+            }),
         }
     }
 
@@ -630,6 +882,11 @@ impl Agent {
         request.output_format.clone_from(&self.output_format);
         Ok(request)
     }
+}
+
+fn checkpoint_payload_error(message: &str) -> AgentError {
+    runifold_core::CheckpointError::new(runifold_core::CheckpointErrorKind::InvalidPayload, message)
+        .into()
 }
 
 fn cancelled_model_error() -> ModelError {

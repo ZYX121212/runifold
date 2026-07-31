@@ -11,6 +11,7 @@ use std::{
 use runifold_core::{
     Budget, Checkpoint, CheckpointError, CheckpointErrorKind, CheckpointId, Usage,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 

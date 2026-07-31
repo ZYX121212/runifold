@@ -7,6 +7,7 @@ use runifold_core::{
 use runifold_model::{Message, ModelRef, ModelResponse};
 use serde::{Deserialize, Serialize};
 
+use crate::conversation::{ConversationId, ConversationVersion, MemoryNamespace};
 use crate::{AgentError, AgentOutcome};
 
 const CHECKPOINT_KIND: &str = "runifold.agent";
@@ -42,6 +43,19 @@ pub enum AgentCheckpointPhase {
     },
 }
 
+/// Conversation commit preconditions carried through crash recovery.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DurableConversationCheckpoint {
+    /// Conversation receiving the completed turn.
+    pub conversation_id: ConversationId,
+    /// Isolation namespace loaded before execution.
+    pub namespace: MemoryNamespace,
+    /// Transcript version loaded before execution.
+    pub expected_version: ConversationVersion,
+    /// Number of leading runtime-only messages excluded from persistence.
+    pub persisted_prefix_len: u64,
+}
+
 /// Versioned Agent state stored in a domain-neutral checkpoint envelope.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AgentCheckpointState {
@@ -63,6 +77,9 @@ pub struct AgentCheckpointState {
     pub usage: Usage,
     /// Current recovery phase.
     pub phase: AgentCheckpointPhase,
+    /// Atomic conversation commit metadata, when this is a durable turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durable_conversation: Option<DurableConversationCheckpoint>,
 }
 
 impl AgentCheckpointState {
@@ -178,6 +195,18 @@ impl CheckpointCursor {
             .compare_and_swap(&next, Some(self.envelope.revision))?;
         self.envelope = next;
         Ok(())
+    }
+
+    pub(crate) fn next(&self, state: &AgentCheckpointState) -> Result<Checkpoint, AgentError> {
+        self.envelope.next(serialize(state)?).map_err(Into::into)
+    }
+
+    pub(crate) const fn revision(&self) -> u64 {
+        self.envelope.revision
+    }
+
+    pub(crate) const fn id(&self) -> CheckpointId {
+        self.envelope.id
     }
 }
 

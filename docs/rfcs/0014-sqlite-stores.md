@@ -98,6 +98,13 @@ SQLite is appropriate for:
 - single-node services;
 - development and deterministic crash-recovery testing.
 
+The adapter also exposes `SqliteWorkflowStore` for the complete local
+`WorkflowStore` control plane. It persists queue state, fenced leases, tenant
+budgets and audit projections, timers, signals, human interrupts, cancellation,
+checkpoint history, and workflow forks in an atomic versioned snapshot. Each
+operation uses an immediate transaction and the SQLite clock; synchronous
+database work crosses an explicit Tokio blocking boundary.
+
 It is not the intended coordination mechanism for horizontally scaled,
 high-write deployments. Those should use another implementation of the same
 traits, such as PostgreSQL.
@@ -112,6 +119,11 @@ traits, such as PostgreSQL.
 6. Reopening the database preserves recovery state.
 7. A completed Tool effect is not physically repeated after process exit and
    checkpoint retry.
+8. A workflow mutation either commits its complete state transition or leaves
+   the previous snapshot intact.
+9. Unknown snapshot format versions fail closed and are never treated as empty
+   workflow state.
+10. Concurrent connections produce at most one successful workflow claim.
 
 ## Deferred decisions
 

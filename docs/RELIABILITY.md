@@ -13,6 +13,9 @@ responses are valuable, but they are not labelled as production verification.
 | PostgreSQL workflow and conversation persistence | Disposable real PostgreSQL/pgvector containers | Mandatory |
 | PostgreSQL outage and restart recovery | Stop/restart of the same writable container layer | Mandatory |
 | SQLite process crash recovery | Child-process termination and durable replay | Mandatory |
+| SQLite WorkflowStore recovery | Lease takeover, budget adoption, HITL, history, and fork survive reopen | Mandatory |
+| SQLite concurrent workflow claim | Independent connections produce exactly one fenced winner | Mandatory |
+| SQLite durable Agent conversation | Transcript and terminal checkpoint commit atomically; reopen resumes without another model call | Mandatory |
 | S3 conditional immutable creation | Real pinned MinIO with Object Lock and SSE-S3 | Mandatory |
 | S3 post-commit response loss | Transparent TCP fault proxy plus checksum HEAD reconciliation | Mandatory |
 | S3 concurrent idempotency | 32 rounds with four writers for one batch per round | Mandatory |

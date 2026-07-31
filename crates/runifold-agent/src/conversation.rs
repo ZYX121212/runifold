@@ -1,7 +1,12 @@
 //! Multi-turn conversation, summary, and semantic-memory boundaries.
 
+mod durable;
 mod store;
 mod summarizer;
+
+pub use durable::{
+    DurableConversationCommit, DurableConversationRequest, DurableConversationStore,
+};
 
 pub use store::{
     AgentConversationError, AgentConversationOutcome, ConversationAppend,

@@ -676,7 +676,7 @@ struct ConversationState {
     memories: BTreeMap<SemanticMemoryId, SemanticMemory>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct StoredConversation {
     namespace: MemoryNamespace,
     version: ConversationVersion,
@@ -684,10 +684,74 @@ struct StoredConversation {
     summary: Option<ConversationSummary>,
 }
 
+const PERSISTENT_SNAPSHOT_VERSION: u32 = 1;
+
+#[derive(Deserialize, Serialize)]
+struct PersistentConversationSnapshot {
+    version: u32,
+    conversations: Vec<(ConversationId, StoredConversation)>,
+    memories: Vec<(SemanticMemoryId, SemanticMemory)>,
+}
+
 impl InMemoryConversationStore {
     /// Creates an empty ephemeral store.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Encodes the complete reference state for a durable adapter.
+    #[doc(hidden)]
+    pub fn export_persistent_snapshot(&self) -> Result<Vec<u8>, ConversationStoreError> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let snapshot = PersistentConversationSnapshot {
+            version: PERSISTENT_SNAPSHOT_VERSION,
+            conversations: state
+                .conversations
+                .iter()
+                .map(|(id, conversation)| (*id, conversation.clone()))
+                .collect(),
+            memories: state
+                .memories
+                .iter()
+                .map(|(id, memory)| (*id, memory.clone()))
+                .collect(),
+        };
+        serde_json::to_vec(&snapshot).map_err(|error| {
+            ConversationStoreError::new(
+                ConversationStoreErrorKind::Storage,
+                format!("conversation snapshot encoding failed: {error}"),
+            )
+        })
+    }
+
+    /// Restores the complete reference state for a durable adapter.
+    #[doc(hidden)]
+    pub fn from_persistent_snapshot(encoded: &[u8]) -> Result<Self, ConversationStoreError> {
+        let snapshot: PersistentConversationSnapshot =
+            serde_json::from_slice(encoded).map_err(|error| {
+                ConversationStoreError::new(
+                    ConversationStoreErrorKind::Storage,
+                    format!("conversation snapshot decoding failed: {error}"),
+                )
+            })?;
+        if snapshot.version != PERSISTENT_SNAPSHOT_VERSION {
+            return Err(ConversationStoreError::new(
+                ConversationStoreErrorKind::Storage,
+                format!(
+                    "unsupported conversation snapshot version {}",
+                    snapshot.version
+                ),
+            ));
+        }
+        Ok(Self {
+            state: Arc::new(Mutex::new(ConversationState {
+                conversations: snapshot.conversations.into_iter().collect(),
+                memories: snapshot.memories.into_iter().collect(),
+            })),
+        })
     }
 }
 

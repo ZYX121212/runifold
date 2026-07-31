@@ -487,7 +487,7 @@ pub enum WorkflowWaitOutcome {
 }
 
 /// Idempotent external event targeted at one workflow checkpoint.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct WorkflowSignal {
     /// Stable publication identity.
     pub signal_id: WorkflowSignalId,

@@ -1,14 +1,15 @@
 use super::{
     Arc, BTreeMap, Budget, Checkpoint, CheckpointError, CheckpointErrorKind, CheckpointId,
-    ClaimedWorkflow, Duration, LeaseDuration, Mutex, MutexGuard, Reverse, SystemWorkflowClock,
-    Usage, WorkerId, WorkflowBudgetAuditCursor, WorkflowBudgetAuditEvent, WorkflowBudgetAuditKind,
-    WorkflowBudgetAuditLimit, WorkflowBudgetAuditProjectionId, WorkflowBudgetAuditProjectionLease,
-    WorkflowBudgetForfeitReason, WorkflowBudgetReservationOutcome, WorkflowCancelOutcome,
-    WorkflowCheckpointHistoryLimit, WorkflowCheckpointPhase, WorkflowCheckpointRevision,
-    WorkflowClock, WorkflowDisposition, WorkflowForkCommand, WorkflowForkOutcome,
-    WorkflowInterruptRequest, WorkflowLease, WorkflowLineage, WorkflowSignal, WorkflowSignalId,
-    WorkflowSignalOutcome, WorkflowSignalRetention, WorkflowSignalSnapshot, WorkflowSignalState,
-    WorkflowStore, WorkflowStoreError, WorkflowStoreErrorKind, WorkflowStoreFuture, WorkflowTask,
+    ClaimedWorkflow, Deserialize, Duration, LeaseDuration, Mutex, MutexGuard, Reverse, Serialize,
+    SystemWorkflowClock, Usage, WorkerId, WorkflowBudgetAuditCursor, WorkflowBudgetAuditEvent,
+    WorkflowBudgetAuditKind, WorkflowBudgetAuditLimit, WorkflowBudgetAuditProjectionId,
+    WorkflowBudgetAuditProjectionLease, WorkflowBudgetForfeitReason,
+    WorkflowBudgetReservationOutcome, WorkflowCancelOutcome, WorkflowCheckpointHistoryLimit,
+    WorkflowCheckpointPhase, WorkflowCheckpointRevision, WorkflowClock, WorkflowDisposition,
+    WorkflowForkCommand, WorkflowForkOutcome, WorkflowInterruptRequest, WorkflowLease,
+    WorkflowLineage, WorkflowSignal, WorkflowSignalId, WorkflowSignalOutcome,
+    WorkflowSignalRetention, WorkflowSignalSnapshot, WorkflowSignalState, WorkflowStore,
+    WorkflowStoreError, WorkflowStoreErrorKind, WorkflowStoreFuture, WorkflowTask,
     WorkflowTaskSnapshot, WorkflowTaskStatus, WorkflowTenantBudgetPolicy,
     WorkflowTenantBudgetSnapshot, WorkflowTenantId, WorkflowTenantListLimit, WorkflowTenantPolicy,
     WorkflowWait, WorkflowWake, decode_revision, fork_checkpoint,
@@ -70,7 +71,7 @@ impl std::fmt::Debug for InMemoryWorkflowStore {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct AdmissionState {
     tenants: BTreeMap<WorkflowTenantId, StoredTenant>,
     budgets: BTreeMap<WorkflowTenantId, StoredTenantBudget>,
@@ -79,13 +80,13 @@ struct AdmissionState {
     next_claim_sequence: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 struct StoredTenant {
     policy: WorkflowTenantPolicy,
     last_claim_sequence: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct StoredTenantBudget {
     policy: WorkflowTenantBudgetPolicy,
     window_started_at_ms: u64,
@@ -96,7 +97,7 @@ struct StoredTenantBudget {
     audit_events: Vec<StoredBudgetAuditEvent>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 struct StoredBudgetReservation {
     baseline: Usage,
     amount: Usage,
@@ -104,7 +105,7 @@ struct StoredBudgetReservation {
     expires_at_ms: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 struct StoredBudgetAuditEvent {
     cursor: WorkflowBudgetAuditCursor,
     checkpoint_id: Option<CheckpointId>,
@@ -117,7 +118,7 @@ struct StoredBudgetAuditEvent {
     reserved: Usage,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct StoredBudgetAuditProjection {
     cursor: WorkflowBudgetAuditCursor,
     owner: Option<WorkerId>,
@@ -125,7 +126,7 @@ struct StoredBudgetAuditProjection {
     expires_at_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct StoredTask {
     task: WorkflowTask,
     state: StoredState,
@@ -137,13 +138,13 @@ struct StoredTask {
     updated_at_ms: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct StoredCheckpoints {
     latest: BTreeMap<CheckpointId, Checkpoint>,
     history: BTreeMap<(CheckpointId, u64), Checkpoint>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 enum StoredState {
     Queued {
         available_at_ms: u64,
@@ -167,13 +168,145 @@ enum StoredState {
     Cancelled,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct StoredSignal {
     tenant_id: WorkflowTenantId,
     signal: WorkflowSignal,
     consumed: bool,
     dead_lettered: bool,
     accepted_at_ms: u64,
+}
+
+const PERSISTENT_SNAPSHOT_VERSION: u32 = 1;
+
+#[derive(Deserialize, Serialize)]
+struct PersistentWorkflowSnapshot {
+    version: u32,
+    tasks: Vec<(CheckpointId, StoredTask)>,
+    checkpoints: Vec<(CheckpointId, Checkpoint)>,
+    checkpoint_history: Vec<(CheckpointId, u64, Checkpoint)>,
+    signals: Vec<(WorkflowSignalId, StoredSignal)>,
+    tenants: Vec<(WorkflowTenantId, StoredTenant)>,
+    budgets: Vec<(WorkflowTenantId, StoredTenantBudget)>,
+    budget_audit_projections: Vec<(
+        WorkflowTenantId,
+        WorkflowBudgetAuditProjectionId,
+        StoredBudgetAuditProjection,
+    )>,
+    next_claim_sequence: u64,
+}
+
+impl InMemoryWorkflowStore {
+    /// Encodes the complete deterministic state machine for a durable adapter.
+    ///
+    /// This adapter boundary is intentionally byte-oriented so storage crates do
+    /// not depend on Runifold's private in-memory representation.
+    #[doc(hidden)]
+    pub fn export_persistent_snapshot(&self) -> Result<Vec<u8>, WorkflowStoreError> {
+        let tasks = self.tasks();
+        let checkpoints = self
+            .checkpoints
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let signals = self
+            .signals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let snapshot = PersistentWorkflowSnapshot {
+            version: PERSISTENT_SNAPSHOT_VERSION,
+            tasks: tasks.iter().map(|(id, task)| (*id, task.clone())).collect(),
+            checkpoints: checkpoints
+                .latest
+                .iter()
+                .map(|(id, checkpoint)| (*id, checkpoint.clone()))
+                .collect(),
+            checkpoint_history: checkpoints
+                .history
+                .iter()
+                .map(|((id, revision), checkpoint)| (*id, *revision, checkpoint.clone()))
+                .collect(),
+            signals: signals
+                .iter()
+                .map(|(id, signal)| (*id, signal.clone()))
+                .collect(),
+            tenants: admission
+                .tenants
+                .iter()
+                .map(|(id, tenant)| (id.clone(), *tenant))
+                .collect(),
+            budgets: admission
+                .budgets
+                .iter()
+                .map(|(id, budget)| (id.clone(), budget.clone()))
+                .collect(),
+            budget_audit_projections: admission
+                .budget_audit_projections
+                .iter()
+                .map(|((tenant_id, projection_id), projection)| {
+                    (tenant_id.clone(), projection_id.clone(), projection.clone())
+                })
+                .collect(),
+            next_claim_sequence: admission.next_claim_sequence,
+        };
+        serde_json::to_vec(&snapshot).map_err(|error| {
+            WorkflowStoreError::new(
+                WorkflowStoreErrorKind::Storage,
+                format!("workflow snapshot encoding failed: {error}"),
+            )
+        })
+    }
+
+    /// Restores a complete deterministic state machine for a durable adapter.
+    #[doc(hidden)]
+    pub fn from_persistent_snapshot(
+        encoded: &[u8],
+        clock: Arc<dyn WorkflowClock>,
+    ) -> Result<Self, WorkflowStoreError> {
+        let snapshot: PersistentWorkflowSnapshot =
+            serde_json::from_slice(encoded).map_err(|error| {
+                WorkflowStoreError::new(
+                    WorkflowStoreErrorKind::Storage,
+                    format!("workflow snapshot decoding failed: {error}"),
+                )
+            })?;
+        if snapshot.version != PERSISTENT_SNAPSHOT_VERSION {
+            return Err(WorkflowStoreError::new(
+                WorkflowStoreErrorKind::Storage,
+                format!("unsupported workflow snapshot version {}", snapshot.version),
+            ));
+        }
+        let checkpoints = StoredCheckpoints {
+            latest: snapshot.checkpoints.into_iter().collect(),
+            history: snapshot
+                .checkpoint_history
+                .into_iter()
+                .map(|(id, revision, checkpoint)| ((id, revision), checkpoint))
+                .collect(),
+        };
+        let admission = AdmissionState {
+            tenants: snapshot.tenants.into_iter().collect(),
+            budgets: snapshot.budgets.into_iter().collect(),
+            budget_audit_projections: snapshot
+                .budget_audit_projections
+                .into_iter()
+                .map(|(tenant_id, projection_id, projection)| {
+                    ((tenant_id, projection_id), projection)
+                })
+                .collect(),
+            next_claim_sequence: snapshot.next_claim_sequence,
+        };
+        Ok(Self {
+            tasks: Arc::new(Mutex::new(snapshot.tasks.into_iter().collect())),
+            checkpoints: Arc::new(Mutex::new(checkpoints)),
+            signals: Arc::new(Mutex::new(snapshot.signals.into_iter().collect())),
+            admission: Arc::new(Mutex::new(admission)),
+            clock,
+        })
+    }
 }
 
 impl InMemoryWorkflowStore {

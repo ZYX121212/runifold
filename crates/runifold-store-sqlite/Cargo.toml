@@ -1,6 +1,6 @@
 [package]
 name = "runifold-store-sqlite"
-description = "Durable SQLite stores for Runifold effects, checkpoints, and journals"
+description = "Durable SQLite stores for Runifold effects, checkpoints, journals, and workflows"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,19 +16,22 @@ default = []
 bundled = ["rusqlite/bundled"]
 
 [dependencies]
+futures-executor.workspace = true
+runifold-agent.workspace = true
 runifold-core.workspace = true
 runifold-effect.workspace = true
+runifold-workflow.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { version = "1.53.1", features = ["rt"] }
 uuid.workspace = true
 
 [dev-dependencies]
-futures-executor.workspace = true
-runifold-agent.workspace = true
 runifold-model.workspace = true
 runifold-testkit.workspace = true
 runifold-tool.workspace = true
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }
 
 [lints]
 workspace = true

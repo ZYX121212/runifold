@@ -1,13 +1,14 @@
 use super::{
-    Budget, CheckpointId, Duration, Error, Future, NonZeroU32, NonZeroU64, Pin, Usage, Value,
-    WorkflowInterruptRequest, WorkflowLineage, WorkflowWait, WorkflowWake,
+    Budget, CheckpointId, Deserialize, Duration, Error, Future, NonZeroU32, NonZeroU64, Pin,
+    Serialize, Usage, Value, WorkflowInterruptRequest, WorkflowLineage, WorkflowWait, WorkflowWake,
 };
 
 /// A boxed asynchronous workflow-store operation.
 pub type WorkflowStoreFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Validated isolation identity for workflow admission and control-plane access.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct WorkflowTenantId(String);
 
 impl WorkflowTenantId {
@@ -44,7 +45,7 @@ impl Default for WorkflowTenantId {
 }
 
 /// Per-tenant workflow admission limits.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkflowTenantPolicy {
     max_outstanding_tasks: NonZeroU32,
     max_concurrent_leases: NonZeroU32,
@@ -136,7 +137,7 @@ impl Default for WorkflowTenantListLimit {
 }
 
 /// Persistent aggregate budget policy for one workflow tenant.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkflowTenantBudgetPolicy {
     limit: Budget,
     window_ms: NonZeroU64,
@@ -215,7 +216,8 @@ pub struct WorkflowTenantBudgetSnapshot {
 }
 
 /// Stable cursor for incrementally consuming one tenant's durable budget audit.
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct WorkflowBudgetAuditCursor(u64);
 
 impl WorkflowBudgetAuditCursor {
@@ -265,7 +267,8 @@ impl Default for WorkflowBudgetAuditLimit {
 }
 
 /// Stable identity of one independent tenant-budget audit projection.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct WorkflowBudgetAuditProjectionId(String);
 
 impl WorkflowBudgetAuditProjectionId {
@@ -345,7 +348,7 @@ impl WorkflowBudgetAuditProjectionLease {
 }
 
 /// Why uncertain reserved capacity was conservatively committed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum WorkflowBudgetForfeitReason {
     /// An operator cancelled the workflow before settlement.
@@ -355,7 +358,7 @@ pub enum WorkflowBudgetForfeitReason {
 }
 
 /// One durable tenant-budget decision.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum WorkflowBudgetAuditKind {
     /// A policy was created or replaced.
@@ -412,7 +415,8 @@ pub enum WorkflowBudgetReservationOutcome {
 }
 
 /// Stable identity of a distributed workflow worker.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
 pub struct WorkerId(String);
 
 impl WorkerId {
@@ -471,7 +475,7 @@ impl LeaseDuration {
 }
 
 /// One durable workflow task awaiting execution.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct WorkflowTask {
     /// Checkpoint identity shared across every retry and worker claim.
     pub checkpoint_id: CheckpointId,
@@ -561,7 +565,7 @@ impl WorkflowTask {
 }
 
 /// Fenced ownership of one workflow task.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkflowLease {
     /// Claimed workflow checkpoint.
     pub checkpoint_id: CheckpointId,

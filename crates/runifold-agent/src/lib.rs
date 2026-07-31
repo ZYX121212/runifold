@@ -14,7 +14,10 @@ mod structured;
 
 pub use agent::{Agent, AgentConfig, AgentFuture, ToolErrorPolicy};
 pub use builder::{AgentBuildError, AgentBuilder, AgentPromptError};
-pub use checkpoint::{AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, ResumePolicy};
+pub use checkpoint::{
+    AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, DurableConversationCheckpoint,
+    ResumePolicy,
+};
 pub use conversation::{
     AgentConversationError, AgentConversationOutcome, AutomaticConversationSummary,
     ConversationAppend, ConversationContextPolicy, ConversationCreateOutcome, ConversationId,
@@ -23,6 +26,7 @@ pub use conversation::{
     ConversationSummarizerFuture, ConversationSummary, ConversationSummaryBatch,
     ConversationSummaryCommit, ConversationSummaryPassLimit, ConversationSummaryRequest,
     ConversationTranscriptEntry, ConversationVersion, ConversationView, ConversationWindow,
+    DurableConversationCommit, DurableConversationRequest, DurableConversationStore,
     InMemoryConversationStore, MemoryNamespace, SemanticMemory, SemanticMemoryId,
     SemanticMemoryQuery, SemanticMemorySearchOutcome, SemanticMemorySource, SemanticMemoryUpsert,
     SemanticMemoryUpsertOutcome,
