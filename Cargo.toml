@@ -35,7 +35,7 @@ publish = ["crates-io"]
 
 [workspace.dependencies]
 async-stream = "0.3"
-event-listener = "5"
+event-listener = "5.4.2"
 eventsource-stream = "0.2"
 futures-executor = "0.3"
 futures-core = "0.3"
