@@ -8,6 +8,10 @@ breaking changes require a minor-version increment.
 
 ## [0.2.0] - 2026-07-31
 
+- Raised the MSRV to Rust 1.88 and upgraded the Bedrock, time, and
+  Testcontainers dependency families to remove vulnerable or unmaintained TLS,
+  archive, and date-time implementations. Bedrock now selects only the modern
+  AWS HTTPS client instead of also enabling its legacy Rustls transport.
 - Split the MCP client, MCP server, Streamable HTTP adapter, durable workflow
   store/worker, and deterministic evaluation internals into focused private
   modules without changing their public APIs.
@@ -104,7 +108,7 @@ breaking changes require a minor-version increment.
   environment identities, bounded machine-readable JSON, and retained CI
   artifacts. A public reliability matrix distinguishes verified behavior from
   planned AWS, WASM, soak, and independent benchmark evidence.
-- Added a mandatory Rust 1.85 WASM edge gate that compiles the provider-neutral
+- Added a mandatory Rust 1.88 WASM edge gate that compiles the provider-neutral
   facade for `wasm32-unknown-unknown`, executes UUID identity, authority
   attenuation, hierarchical cancellation, and atomic budget semantics under a
   pinned Node test runner, and retains a non-sensitive machine-readable CI
@@ -171,7 +175,7 @@ breaking changes require a minor-version increment.
   text-only capability validation, directly encoding single-text messages,
   keeping common Chat decoder events inline, omitting redundant automatic Tool
   choice, and unifying the workspace on `reqwest` 0.13 without raising the Rust
-  1.85 MSRV.
+  1.88 MSRV.
 - `RunContext::child` now rejects capabilities absent from the parent instead
   of relying on each orchestration layer to enforce attenuation.
 - `RunContext::child_reserved` now validates both capability authority and

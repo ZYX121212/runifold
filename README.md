@@ -63,7 +63,7 @@ Production claims, mandatory fault tests, machine-readable evidence, and
 explicitly unverified areas are tracked in the
 [reliability matrix](docs/RELIABILITY.md).
 The provider-neutral facade is compiled for `wasm32-unknown-unknown` on the
-declared Rust 1.85 MSRV, with core identity, authority, cancellation, and
+declared Rust 1.88 MSRV, with core identity, authority, cancellation, and
 budget semantics executed in the mandatory edge-runtime CI gate.
 OpenAI-compatible, Anthropic, Gemini and Ollama Agent paths plus native
 embeddings are exercised in pinned headless Chrome through real CORS, Fetch,

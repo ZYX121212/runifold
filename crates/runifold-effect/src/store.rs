@@ -111,13 +111,13 @@ impl EffectStore for InMemoryEffectStore {
 
         if let Some(key) = &record.request.idempotency_key {
             let index = (record.request.capability_id, key.clone());
-            if let Some(existing) = state.idempotency.get(&index) {
-                if *existing != record.request.effect_id {
-                    return Err(EffectExecutorError::new(
-                        EffectExecutorErrorKind::IdempotencyConflict,
-                        "idempotency key already belongs to another effect",
-                    ));
-                }
+            if let Some(existing) = state.idempotency.get(&index)
+                && *existing != record.request.effect_id
+            {
+                return Err(EffectExecutorError::new(
+                    EffectExecutorErrorKind::IdempotencyConflict,
+                    "idempotency key already belongs to another effect",
+                ));
             }
             state.idempotency.insert(index, record.request.effect_id);
         }

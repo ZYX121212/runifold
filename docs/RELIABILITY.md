@@ -16,7 +16,7 @@ responses are valuable, but they are not labelled as production verification.
 | S3 conditional immutable creation | Real pinned MinIO with Object Lock and SSE-S3 | Mandatory |
 | S3 post-commit response loss | Transparent TCP fault proxy plus checksum HEAD reconciliation | Mandatory |
 | S3 concurrent idempotency | 32 rounds with four writers for one batch per round | Mandatory |
-| WASM provider-neutral facade build | Rust 1.85 `wasm32-unknown-unknown` compile of `runifold` without platform adapters | Mandatory |
+| WASM provider-neutral facade build | Rust 1.88 `wasm32-unknown-unknown` compile of `runifold` without platform adapters | Mandatory |
 | WASM edge kernel runtime | Node execution of identity, authority, cancellation, and budget semantics | Mandatory |
 | WASM browser Agents, embeddings, OpenAI control plane, and Realtime WebSocket/WebRTC | Pinned headless Chrome with OpenAI, Anthropic, Gemini and Ollama protocols, real CORS, Fetch/WebSocket/WebRTC, fragmented streams, embeddings, model listing, multipart upload, Batch lifecycle, Realtime text/audio/media, local STUN, digest-pinned coturn relay-only peers, coturn-stop ICE partition, Peer/ICE state, reconnect safety, cancellation, deadline, and 429 cassettes | Mandatory |
 | OpenAI Realtime ephemeral credential rotation | Two live `/v1/realtime/client_secrets` requests, distinct secret/session assertions, bounded TTL, and credential-free evidence | Manual opt-in |
@@ -63,7 +63,7 @@ The remaining `RUNIFOLD_MINIO_*` connection variables are documented in
 The `WASM edge runtime` CI job writes
 `target/reliability-evidence/wasm-edge.json`. It cross-compiles the
 provider-neutral `runifold` facade with no default features using the declared
-Rust 1.85 MSRV, then executes `runifold-core` safety semantics through the
+Rust 1.88 MSRV, then executes `runifold-core` safety semantics through the
 pinned `wasm-bindgen-test-runner` in Node.
 
 The executable smoke test covers:

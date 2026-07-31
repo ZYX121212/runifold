@@ -524,10 +524,10 @@ fn spawn_response_reader<R>(
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .clone();
-                        if let Some(handler) = handler {
-                            if handler.notify(notification.clone()).is_err() {
-                                continue;
-                            }
+                        if let Some(handler) = handler
+                            && handler.notify(notification.clone()).is_err()
+                        {
+                            continue;
                         }
                         let _ = notifications.send(notification);
                         continue;

@@ -57,7 +57,7 @@ profiles and provisioned throughput.
 
 The AWS SDK and Smithy types are fully optional and enter the graph only with
 the `bedrock` feature. Their versions are constrained to a release family
-validated by the workspace Rust 1.85 gate. Upgrades are deliberate because an
+validated by the workspace Rust 1.88 gate. Upgrades are deliberate because an
 unbounded Smithy dependency update can raise the effective compiler floor.
 
 This integration remains a module rather than a provider-specific crate

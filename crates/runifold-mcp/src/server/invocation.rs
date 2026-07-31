@@ -86,10 +86,10 @@ impl McpSession {
         let cancellation = child.cancellation().clone();
         self.lock_inflight().insert(id.clone(), cancellation);
         let _guard = InflightGuard::new(id.clone(), Arc::clone(&self.inner.inflight));
-        if era == RequestEra::Stateless {
-            if let Some(response) = self.mrtr_tool_response(&id, &params, child.clone()).await {
-                return response;
-            }
+        if era == RequestEra::Stateless
+            && let Some(response) = self.mrtr_tool_response(&id, &params, child.clone()).await
+        {
+            return response;
         }
         if let Some(response) = self
             .task_tool_response(&id, &params, era, child.clone())

@@ -6,7 +6,7 @@ artifacts, then publishing immutable versions to crates.io.
 
 ## Compatibility policy
 
-- Rust 1.85 is the minimum supported Rust version (MSRV).
+- Rust 1.88 is the minimum supported Rust version (MSRV).
 - All public crates use Semantic Versioning.
 - Before 1.0, a breaking public API change requires a minor release.
 - After 1.0, a breaking public API change requires a major release.

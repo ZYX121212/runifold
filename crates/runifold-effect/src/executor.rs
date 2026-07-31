@@ -121,11 +121,11 @@ impl EffectExecutor {
             validate_same_effect(&record.request, &request)?;
             return Ok((record, false));
         }
-        if let Some(key) = &request.idempotency_key {
-            if let Some(record) = self.store.find_by_idempotency(request.capability_id, key)? {
-                validate_same_effect(&record.request, &request)?;
-                return Ok((record, false));
-            }
+        if let Some(key) = &request.idempotency_key
+            && let Some(record) = self.store.find_by_idempotency(request.capability_id, key)?
+        {
+            validate_same_effect(&record.request, &request)?;
+            return Ok((record, false));
         }
         let record = EffectRecord::prepared(request);
         self.store.compare_and_swap(&record, None)?;

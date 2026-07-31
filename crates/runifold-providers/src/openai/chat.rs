@@ -345,14 +345,14 @@ impl ChatCompletionsDecoder {
                     text: reasoning.into(),
                 });
             }
-            if let Some(text) = delta.get("content").and_then(Value::as_str) {
-                if !text.is_empty() {
-                    let index = self.ensure_text(&mut events)?;
-                    events.push(ModelStreamEvent::TextDelta {
-                        index,
-                        text: text.into(),
-                    });
-                }
+            if let Some(text) = delta.get("content").and_then(Value::as_str)
+                && !text.is_empty()
+            {
+                let index = self.ensure_text(&mut events)?;
+                events.push(ModelStreamEvent::TextDelta {
+                    index,
+                    text: text.into(),
+                });
             }
             if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
                 for call in tool_calls {

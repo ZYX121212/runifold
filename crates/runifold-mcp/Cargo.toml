@@ -32,7 +32,7 @@ secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
-time = { version = "=0.3.41", features = ["parsing", "formatting"] }
+time = { version = "=0.3.47", features = ["parsing", "formatting"] }
 tokio = { version = "1.53.1", features = ["io-util", "io-std", "process", "rt", "sync", "time", "macros", "rt-multi-thread", "net"] }
 url.workspace = true
 uuid = { workspace = true, optional = true }

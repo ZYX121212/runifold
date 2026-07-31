@@ -8,7 +8,7 @@ Implemented.
 
 Runifold defines its first portable edge boundary as the provider-neutral
 facade with no default features. The mandatory gate compiles `runifold` for
-`wasm32-unknown-unknown` on Rust 1.85 and executes kernel safety semantics in
+`wasm32-unknown-unknown` on Rust 1.88 and executes kernel safety semantics in
 Node through a version-pinned `wasm-bindgen` runner.
 
 This boundary includes core identity, cancellation, capability, budget,

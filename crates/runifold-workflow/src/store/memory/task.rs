@@ -77,12 +77,12 @@ pub(super) fn lease_lost() -> WorkflowStoreError {
 pub(super) fn validate_disposition(
     disposition: &WorkflowDisposition,
 ) -> Result<(), WorkflowStoreError> {
-    if let WorkflowDisposition::Failed(reason) = disposition {
-        if reason.trim().is_empty() || reason.len() > 1_024 {
-            return Err(WorkflowStoreError::invalid_input(
-                "workflow failure reason must contain 1..=1024 bytes",
-            ));
-        }
+    if let WorkflowDisposition::Failed(reason) = disposition
+        && (reason.trim().is_empty() || reason.len() > 1_024)
+    {
+        return Err(WorkflowStoreError::invalid_input(
+            "workflow failure reason must contain 1..=1024 bytes",
+        ));
     }
     if let WorkflowDisposition::RetryAfter(delay) = disposition {
         duration_millis(*delay)?;

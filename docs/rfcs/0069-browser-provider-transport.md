@@ -41,7 +41,7 @@ remains explicitly safe and preserves exposed retry metadata.
 
 ## Evidence
 
-CI pins Rust 1.85, `wasm-bindgen` 0.2.126, Chrome Headless Shell
+CI pins Rust 1.88, `wasm-bindgen` 0.2.126, Chrome Headless Shell
 150.0.7871.124 and the matching ChromeDriver. It runs a real CORS-enabled
 fragmented SSE/NDJSON and WebSocket server and nine asynchronous tests inside
 Chrome.

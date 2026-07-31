@@ -483,14 +483,14 @@ fn check<T>(resource: BudgetResource, limit: Option<T>, attempted: T) -> Result<
 where
     T: Copy + Into<u128> + Ord,
 {
-    if let Some(limit) = limit {
-        if attempted > limit {
-            return Err(BudgetExceeded {
-                resource,
-                limit: limit.into(),
-                attempted: attempted.into(),
-            });
-        }
+    if let Some(limit) = limit
+        && attempted > limit
+    {
+        return Err(BudgetExceeded {
+            resource,
+            limit: limit.into(),
+            attempted: attempted.into(),
+        });
     }
     Ok(())
 }

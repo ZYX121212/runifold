@@ -20,7 +20,7 @@ invariants:
 
 1. Every crate inherits the same version, MSRV, README, license, repository, and
    crates.io-only publication policy.
-2. CI checks current stable Rust and the declared Rust 1.85 MSRV.
+2. CI checks current stable Rust and the declared Rust 1.88 MSRV.
 3. Cargo packages and recompiles the complete workspace through its temporary
    local registry before release.
 4. Public APIs are compared with the latest release tag using

@@ -155,10 +155,10 @@ async fn wait_before_retry(
     );
     let backoff = policy.delay(failed_attempt, entropy);
     let delay = retry_after(error).map_or(backoff, |server| server.max(backoff));
-    if let Some(remaining) = context.remaining() {
-        if delay >= remaining {
-            return RetryWait::Stop(retry_deadline(delay, remaining));
-        }
+    if let Some(remaining) = context.remaining()
+        && delay >= remaining
+    {
+        return RetryWait::Stop(retry_deadline(delay, remaining));
     }
     if context.cancellation().is_cancelled() {
         return RetryWait::Stop(cancelled_retry());

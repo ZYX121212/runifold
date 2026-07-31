@@ -99,13 +99,12 @@ impl S3TombstoneArchiveConfig {
                 "S3 archive prefix must contain at most 128 printable bytes",
             ));
         }
-        if let S3ArchiveEncryption::Kms { key_id } = &encryption {
-            if key_id.trim().is_empty()
+        if let S3ArchiveEncryption::Kms { key_id } = &encryption
+            && (key_id.trim().is_empty()
                 || key_id.len() > 512
-                || key_id.chars().any(char::is_control)
-            {
-                return Err(config_error("S3 KMS key ID is invalid"));
-            }
+                || key_id.chars().any(char::is_control))
+        {
+            return Err(config_error("S3 KMS key ID is invalid"));
         }
         Ok(Self {
             bucket,

@@ -52,36 +52,36 @@ impl OllamaChunkDecoder {
             });
         }
         if let Some(message) = chunk.get("message") {
-            if let Some(thinking) = message.get("thinking").and_then(Value::as_str) {
-                if !thinking.is_empty() {
-                    if self.open_blocks.insert(0) {
-                        events.push(ModelStreamEvent::ContentBlockStarted {
-                            index: 0,
-                            kind: ContentBlockKind::Reasoning {
-                                signature: None,
-                                redacted: false,
-                            },
-                        });
-                    }
-                    events.push(ModelStreamEvent::ReasoningDelta {
+            if let Some(thinking) = message.get("thinking").and_then(Value::as_str)
+                && !thinking.is_empty()
+            {
+                if self.open_blocks.insert(0) {
+                    events.push(ModelStreamEvent::ContentBlockStarted {
                         index: 0,
-                        text: thinking.into(),
+                        kind: ContentBlockKind::Reasoning {
+                            signature: None,
+                            redacted: false,
+                        },
                     });
                 }
+                events.push(ModelStreamEvent::ReasoningDelta {
+                    index: 0,
+                    text: thinking.into(),
+                });
             }
-            if let Some(text) = message.get("content").and_then(Value::as_str) {
-                if !text.is_empty() {
-                    if self.open_blocks.insert(1) {
-                        events.push(ModelStreamEvent::ContentBlockStarted {
-                            index: 1,
-                            kind: ContentBlockKind::Text,
-                        });
-                    }
-                    events.push(ModelStreamEvent::TextDelta {
+            if let Some(text) = message.get("content").and_then(Value::as_str)
+                && !text.is_empty()
+            {
+                if self.open_blocks.insert(1) {
+                    events.push(ModelStreamEvent::ContentBlockStarted {
                         index: 1,
-                        text: text.into(),
+                        kind: ContentBlockKind::Text,
                     });
                 }
+                events.push(ModelStreamEvent::TextDelta {
+                    index: 1,
+                    text: text.into(),
+                });
             }
             if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
                 for call in calls {

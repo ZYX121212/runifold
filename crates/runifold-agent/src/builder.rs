@@ -136,10 +136,10 @@ impl AgentBuilder {
     /// Registers a shared, type-erased Tool.
     #[must_use]
     pub fn shared_tool(mut self, tool: Arc<dyn Tool>) -> Self {
-        if self.error.is_none() {
-            if let Err(error) = self.agent.tools.register(tool) {
-                self.error = Some(error.into());
-            }
+        if self.error.is_none()
+            && let Err(error) = self.agent.tools.register(tool)
+        {
+            self.error = Some(error.into());
         }
         self
     }

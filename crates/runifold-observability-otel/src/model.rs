@@ -510,10 +510,10 @@ fn add_captured_request(
     if let Ok(encoded) = serde_json::to_string(&input) {
         attributes.push(KeyValue::new("gen_ai.input.messages", encoded));
     }
-    if matches!(capture, ContentCapture::MessagesAndTools) {
-        if let Ok(encoded) = serde_json::to_string(&request.tools) {
-            attributes.push(KeyValue::new("gen_ai.tool.definitions", encoded));
-        }
+    if matches!(capture, ContentCapture::MessagesAndTools)
+        && let Ok(encoded) = serde_json::to_string(&request.tools)
+    {
+        attributes.push(KeyValue::new("gen_ai.tool.definitions", encoded));
     }
 }
 

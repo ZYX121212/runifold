@@ -183,7 +183,7 @@ impl Model for BedrockClient {
                 .inference_config(encoded.inference)
                 .set_tool_config(encoded.tools)
                 .set_additional_model_request_fields(encoded.additional_fields);
-            let output = scoped(operation.send(), &context)
+            let output = Box::pin(scoped(operation.send(), &context))
                 .await?
                 .map_err(|error| map_open_error(&error))?;
             let mut stream = output.stream;

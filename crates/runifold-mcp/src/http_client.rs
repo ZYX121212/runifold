@@ -268,21 +268,21 @@ impl StreamableHttpTransport {
                 });
                 continue;
             }
-            if value.get("method").is_some() && value.get("id").is_none() {
-                if let Ok(notification) =
+            if value.get("method").is_some()
+                && value.get("id").is_none()
+                && let Ok(notification) =
                     serde_json::from_value::<JsonRpcNotification>(value.clone())
+            {
+                if let Some(handler) = self
+                    .inner
+                    .peer_handler
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_ref()
                 {
-                    if let Some(handler) = self
-                        .inner
-                        .peer_handler
-                        .read()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .as_ref()
-                    {
-                        let _ = handler.notify(notification.clone());
-                    }
-                    let _ = self.inner.notifications.send(notification);
+                    let _ = handler.notify(notification.clone());
                 }
+                let _ = self.inner.notifications.send(notification);
             }
         }
         self.inner.peer_started.store(false, Ordering::Release);
@@ -342,12 +342,12 @@ impl StreamableHttpTransport {
                 .map_err(|_| McpError::protocol("invalid compiled MCP parameter header name"))?;
             request = request.header(name, value);
         }
-        if protocol_version != Some(STATELESS_PROTOCOL_VERSION) {
-            if let Some(session_id) = session_id {
-                request = request
-                    .header(MCP_SESSION_ID_HEADER, session_id)
-                    .header(MCP_PROTOCOL_VERSION_HEADER, LATEST_PROTOCOL_VERSION);
-            }
+        if protocol_version != Some(STATELESS_PROTOCOL_VERSION)
+            && let Some(session_id) = session_id
+        {
+            request = request
+                .header(MCP_SESSION_ID_HEADER, session_id)
+                .header(MCP_PROTOCOL_VERSION_HEADER, LATEST_PROTOCOL_VERSION);
         }
         let response = self.authorize(request).send().await?;
         if response.status() == StatusCode::ACCEPTED && !expects_response {

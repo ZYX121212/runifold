@@ -71,21 +71,20 @@ impl OpenAiEventDecoder {
                         _ => {}
                     }
                 }
-                if let Some(event_type) = event_type {
-                    if is_known_success_event(&event_type)
-                        && !contains_raw_event(&events, &event_type, &raw_payload)
-                    {
-                        let position = events
-                            .iter()
-                            .position(|event| {
-                                matches!(event, ModelStreamEvent::ResponseCompleted { .. })
-                            })
-                            .unwrap_or(events.len());
-                        events.insert(
-                            position,
-                            provider_event_for(&provider, &event_type, raw_payload),
-                        );
-                    }
+                if let Some(event_type) = event_type
+                    && is_known_success_event(&event_type)
+                    && !contains_raw_event(&events, &event_type, &raw_payload)
+                {
+                    let position = events
+                        .iter()
+                        .position(|event| {
+                            matches!(event, ModelStreamEvent::ResponseCompleted { .. })
+                        })
+                        .unwrap_or(events.len());
+                    events.insert(
+                        position,
+                        provider_event_for(&provider, &event_type, raw_payload),
+                    );
                 }
                 events
             })
@@ -261,10 +260,10 @@ impl OpenAiEventDecoder {
     }
 
     fn tool_index(&self, payload: &Value) -> Result<u32, ModelError> {
-        if let Some(item_id) = payload.get("item_id").and_then(Value::as_str) {
-            if let Ok(index) = self.lookup(&tool_key(item_id)) {
-                return Ok(index);
-            }
+        if let Some(item_id) = payload.get("item_id").and_then(Value::as_str)
+            && let Ok(index) = self.lookup(&tool_key(item_id))
+        {
+            return Ok(index);
         }
         self.lookup(&tool_output_key(integer(payload, "output_index")?))
     }

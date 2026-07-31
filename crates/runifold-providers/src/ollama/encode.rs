@@ -97,10 +97,10 @@ pub fn encode_request(request: &ModelRequest) -> Result<Value, ModelError> {
 }
 
 fn encode_message(role: Role, parts: &[ContentPart]) -> Result<Value, ModelError> {
-    if parts.len() == 1 {
-        if let ContentPart::ToolResult(result) = &parts[0] {
-            return encode_tool_result(result);
-        }
+    if parts.len() == 1
+        && let ContentPart::ToolResult(result) = &parts[0]
+    {
+        return encode_tool_result(result);
     }
     let mut content = String::new();
     let mut thinking = String::new();

@@ -284,10 +284,10 @@ pub(super) fn response_for_request(
             );
         }
     };
-    if let Some(session_id) = session_id {
-        if let Ok(value) = HeaderValue::from_str(session_id) {
-            response.headers_mut().insert(MCP_SESSION_ID_HEADER, value);
-        }
+    if let Some(session_id) = session_id
+        && let Ok(value) = HeaderValue::from_str(session_id)
+    {
+        response.headers_mut().insert(MCP_SESSION_ID_HEADER, value);
     }
     response
 }

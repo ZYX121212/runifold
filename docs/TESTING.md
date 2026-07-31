@@ -92,18 +92,18 @@ credentials, tenant IDs, object keys, payloads, URLs, or provider error bodies.
 Set `RUNIFOLD_MINIO_STRESS_ITERATIONS` to `1..=1000` for a larger local run.
 
 The provider-neutral facade must compile for `wasm32-unknown-unknown` on the
-declared Rust 1.85 MSRV, and core security semantics must execute under the
+declared Rust 1.88 MSRV, and core security semantics must execute under the
 pinned `wasm-bindgen` Node runner:
 
 ```bash
-rustup target add wasm32-unknown-unknown --toolchain 1.85.0
+rustup target add wasm32-unknown-unknown --toolchain 1.88.0
 cargo install wasm-bindgen-cli --version 0.2.126 --locked
-cargo +1.85.0 check -p runifold \
+cargo +1.88.0 check -p runifold \
   --target wasm32-unknown-unknown \
   --no-default-features \
   --locked
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
-  cargo +1.85.0 test -p runifold-core \
+  cargo +1.88.0 test -p runifold-core \
     --target wasm32-unknown-unknown \
     --test wasm_edge \
     --locked
@@ -147,7 +147,7 @@ cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
-cargo +1.85.0 check --workspace --all-targets --all-features
+cargo +1.88.0 check --workspace --all-targets --all-features
 ```
 
 CI also verifies the zero-feature contracts for `runifold` and

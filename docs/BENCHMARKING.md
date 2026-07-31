@@ -41,7 +41,7 @@ let plan = BenchmarkPlan::new(NonZeroUsize::new(1_000).unwrap())
     .with_warmup(50)
     .with_concurrency(NonZeroUsize::new(32).unwrap())
     .with_environment("framework.version", env!("CARGO_PKG_VERSION"))
-    .with_environment("rust.version", "1.85.0")
+    .with_environment("rust.version", "1.88.0")
     .with_environment("target", "aarch64-apple-darwin")
     .with_environment("provider", "bedrock")
     .with_environment("model", "model-or-inference-profile-id");
