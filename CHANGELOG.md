@@ -6,6 +6,8 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-31
+
 - `SqliteStore` now implements `ConversationStore` and the new
   `DurableConversationStore` boundary. `Agent::run_durable_conversation` and
   `resume_durable_conversation` use write-ahead Agent checkpoints, then commit

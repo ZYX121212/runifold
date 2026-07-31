@@ -48,8 +48,12 @@ if ((${#new_packages[@]} > 0)); then
     printf '  %s\n' "${new_packages[@]}"
 fi
 
-cargo semver-checks \
-    --workspace \
-    --all-features \
-    --baseline-rev "$baseline" \
-    "${exclusions[@]}"
+semver_args=(
+    --workspace
+    --all-features
+    --baseline-rev "$baseline"
+)
+if ((${#exclusions[@]} > 0)); then
+    semver_args+=("${exclusions[@]}")
+fi
+cargo semver-checks "${semver_args[@]}"
