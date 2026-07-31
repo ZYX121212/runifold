@@ -660,10 +660,22 @@ fn write_response(
         stream.flush()?;
     }
     if !response.disconnect {
-        write!(stream, "0\r\n\r\n")?;
-        stream.flush()?;
+        match stream.write_all(b"0\r\n\r\n").and_then(|()| stream.flush()) {
+            Ok(()) => {}
+            Err(error) if peer_closed(&error) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     Ok(())
+}
+
+fn peer_closed(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+    )
 }
 
 fn write_simple_error(stream: &mut TcpStream) -> Result<(), CassetteError> {
@@ -710,7 +722,21 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{CassetteServer, HttpExchange, ResponseChunk, ScriptedResponse};
+    use super::{CassetteServer, HttpExchange, ResponseChunk, ScriptedResponse, peer_closed};
+
+    #[test]
+    fn peer_close_is_tolerated_only_after_the_scripted_body() {
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::ConnectionReset,
+        ] {
+            assert!(peer_closed(&std::io::Error::from(kind)));
+        }
+        assert!(!peer_closed(&std::io::Error::from(
+            std::io::ErrorKind::TimedOut
+        )));
+    }
 
     #[test]
     fn captures_json_and_redacts_credentials() {

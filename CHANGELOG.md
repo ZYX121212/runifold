@@ -17,7 +17,9 @@ breaking changes require a minor-version increment.
   modules without changing their public APIs.
 - Hardened the real HTTP cassette harness so an expected client timeout or
   cancellation cannot prevent later scripted exchanges from running, removing
-  an order-dependent control-plane reliability test failure.
+  an order-dependent control-plane reliability test failure. A client closing
+  after the complete scripted body also no longer turns the final HTTP chunk
+  terminator into a false concurrent-test failure.
 - Added typed OpenAI GA Realtime WebSocket sessions on native Rust and WASM,
   including validated session/text/audio/response commands, PCM24/PCMU/PCMA
   formats, bounded Base64 audio and output transcripts, lossless unknown
