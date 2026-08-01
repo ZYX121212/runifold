@@ -12,10 +12,11 @@ responses are valuable, but they are not labelled as production verification.
 | Provider concurrency isolation | Repeated concurrent loopback requests | Mandatory |
 | PostgreSQL workflow and conversation persistence | Disposable real PostgreSQL/pgvector containers | Mandatory |
 | PostgreSQL outage and restart recovery | Stop/restart of the same writable container layer | Mandatory |
-| SQLite process crash recovery | Child-process termination and durable replay | Mandatory |
-| SQLite WorkflowStore recovery | Lease takeover, budget adoption, HITL, history, and fork survive reopen | Mandatory |
+| SQLite forced process-kill recovery | Parent kills a synchronized child after the durable effect boundary; completed work replays once | Mandatory |
+| SQLite WorkflowStore recovery | Forced worker kill, fenced lease takeover, budget adoption, HITL, history, and fork survive reopen | Mandatory |
 | SQLite concurrent workflow claim | Independent connections produce exactly one fenced winner | Mandatory |
 | SQLite durable Agent conversation | Transcript and terminal checkpoint commit atomically; reopen resumes without another model call | Mandatory |
+| PostgreSQL durable Agent conversation | Conversation and workflow adapters are independently durable; no combined atomic transaction exists yet | Planned |
 | S3 conditional immutable creation | Real pinned MinIO with Object Lock and SSE-S3 | Mandatory |
 | S3 post-commit response loss | Transparent TCP fault proxy plus checksum HEAD reconciliation | Mandatory |
 | S3 concurrent idempotency | 32 rounds with four writers for one batch per round | Mandatory |

@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -29,6 +29,26 @@ macro_rules! define_id {
             }
         }
 
+        impl FromStr for $name {
+            type Err = uuid::Error;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Uuid::parse_str(value).map(Self)
+            }
+        }
+
+        impl From<Uuid> for $name {
+            fn from(value: Uuid) -> Self {
+                Self::from_uuid(value)
+            }
+        }
+
+        impl From<$name> for Uuid {
+            fn from(value: $name) -> Self {
+                value.as_uuid()
+            }
+        }
+
         impl Default for $name {
             fn default() -> Self {
                 Self::new()
@@ -52,7 +72,7 @@ define_id!(CheckpointId, "A globally unique checkpoint identifier.");
 
 #[cfg(test)]
 mod tests {
-    use super::RunId;
+    use super::{CapabilityId, RunId};
 
     #[test]
     fn generated_ids_are_distinct_and_v7() {
@@ -61,5 +81,14 @@ mod tests {
 
         assert_ne!(first, second);
         assert_eq!(first.as_uuid().get_version_num(), 7);
+    }
+
+    #[test]
+    fn stable_ids_round_trip_through_configuration_strings() {
+        let configured = "018f6f7e-6f1d-7f2a-9c40-7f4f8f0a3d21";
+
+        let parsed: CapabilityId = configured.parse().expect("configured UUID is valid");
+
+        assert_eq!(parsed.to_string(), configured);
     }
 }

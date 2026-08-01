@@ -35,6 +35,10 @@ let answer = agent
 # }
 ```
 
+`ProviderRuntime` is long-lived application state. Construct it once during
+startup and clone it into request handlers. Clones share retry and
+circuit-breaker state; rebuilding it for every request resets route health.
+
 Compatible providers have first-class modules without separate crates:
 
 ```console
@@ -962,6 +966,8 @@ probe; all concurrent requests continue to other routes. Terminal success
 closes the circuit, while a failed or abandoned probe reopens it.
 `router.route_health()` returns immutable health snapshots suitable for
 metrics and readiness diagnostics.
+Build the router once during application startup and reuse it or its clones;
+clones share route health, while rebuilding starts with closed circuits.
 
 Retry is also opt-in. `max_attempts` includes the initial call, and every retry
 gets a distinct invocation identity. The effective wait is the greater of
@@ -989,10 +995,12 @@ let child = Arc::new(Agent::new(
     child_model,
     ModelRef::new("qwen", "your-child-model"),
 ));
+let stable_id = "018f6f7e-6f1d-7f2a-9c40-7f4f8f0a3d21".parse()?;
 let descriptor = AgentDescriptor::new(
     "ask_researcher",
     "Delegate focused research to the researcher agent",
-);
+)
+.with_id(stable_id);
 let mut gateway = AgentGateway::new();
 gateway.register(AgentRoute::new(descriptor.clone(), child))?;
 
@@ -1007,6 +1015,11 @@ let parent = Agent::new(
 # Ok(())
 # }
 ```
+
+`AgentDescriptor::new` generates a fresh identity and is appropriate for
+ephemeral routes. Applications that persist grants, policies, or audit records
+must load a stable `CapabilityId` from configuration or storage and apply it
+with `with_id`, as above.
 
 Gateway middleware uses an around-call boundary. It may inspect or transform
 input, deny execution, observe results, or explicitly retry:
@@ -1170,6 +1183,19 @@ let same_turn = agent
     )
     .await?;
 ```
+
+Runifold 0.3.x uses `rusqlite` 0.39 / `libsqlite3-sys` 0.37. It can coexist with
+SQLx 0.9, but not SQLx 0.8.x, whose SQLite driver selects the incompatible
+`libsqlite3-sys` 0.30 line. Because both native packages declare
+`links = "sqlite3"`, applications using SQLx 0.8 must upgrade SQLx or disable
+Runifold's `sqlite` and `sqlite-bundled` features.
+
+The combined atomic `DurableConversationStore` implementation is currently
+available for `SqliteStore`. `PostgresConversationStore` and
+`PostgresWorkflowStore` are independently durable, but they do not form one
+conversation-and-checkpoint transaction and must not be composed as if they
+did. PostgreSQL support for this boundary requires a shared asynchronous
+transaction contract and is not part of the 0.3.x API.
 
 Intermediate revisions remain write-ahead checkpoints. The final transcript
 append and `Completed` checkpoint revision share one SQLite transaction. An

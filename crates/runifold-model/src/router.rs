@@ -241,6 +241,11 @@ impl std::fmt::Debug for ModelRouterBuilder {
 
 /// Ordered, provider-neutral fallback routing behind the canonical [`Model`]
 /// boundary.
+///
+/// A router owns process-local retry and circuit-breaker state. Applications
+/// should build it once and reuse this value or its clones for the lifetime of
+/// the service. Clones share route health; rebuilding a router intentionally
+/// starts with fresh health state.
 #[derive(Clone)]
 pub struct ModelRouter {
     logical: ModelRef,

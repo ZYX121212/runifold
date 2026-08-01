@@ -23,7 +23,11 @@ pub struct AgentDescriptor {
 }
 
 impl AgentDescriptor {
-    /// Creates an agent contract with the canonical delegation schema.
+    /// Creates an agent contract with a fresh ephemeral capability identity.
+    ///
+    /// Rebuilding this descriptor produces a different identity. Applications
+    /// that persist grants, policies, or audit records must restore the same
+    /// [`CapabilityId`] and call [`Self::with_id`].
     pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
             id: CapabilityId::new(),
@@ -33,6 +37,17 @@ impl AgentDescriptor {
             risk: RiskLevel::Medium,
             metadata: BTreeMap::new(),
         }
+    }
+
+    /// Replaces the capability identity with an application-owned stable ID.
+    ///
+    /// The ID should be loaded from durable configuration or storage and reused
+    /// across process restarts whenever grants or audit records outlive one
+    /// process.
+    #[must_use]
+    pub const fn with_id(mut self, id: CapabilityId) -> Self {
+        self.id = id;
+        self
     }
 
     /// Converts this descriptor into a grantable agent capability.
@@ -89,4 +104,32 @@ fn output_schema() -> Value {
         "required": ["agent", "content", "turns", "tool_calls", "delegations"],
         "additionalProperties": false
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use runifold_core::CapabilityId;
+
+    use super::AgentDescriptor;
+
+    #[test]
+    fn configured_identity_survives_descriptor_reconstruction() {
+        let id: CapabilityId = "018f6f7e-6f1d-7f2a-9c40-7f4f8f0a3d21"
+            .parse()
+            .expect("configured UUID is valid");
+
+        let first = AgentDescriptor::new("researcher", "delegate research").with_id(id);
+        let second = AgentDescriptor::new("researcher", "delegate research").with_id(id);
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.capability().id, second.capability().id);
+    }
+
+    #[test]
+    fn default_construction_remains_ephemeral() {
+        let first = AgentDescriptor::new("researcher", "delegate research");
+        let second = AgentDescriptor::new("researcher", "delegate research");
+
+        assert_ne!(first.id, second.id);
+    }
 }

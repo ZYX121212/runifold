@@ -98,3 +98,8 @@ Circuit state is currently process-local. Persisting health across restarts is
 deliberately deferred: outage memory has different consistency and expiry
 requirements from Agent checkpoints and write-ahead effects. Restarting begins
 with closed circuits.
+
+Applications must also retain the same `ModelRouter` or one of its clones
+across requests. Clones share each route's synchronized health state. Building
+a new router creates new routes and therefore intentionally starts with closed
+circuits; a router is application state, not request-local state.

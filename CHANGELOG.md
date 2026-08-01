@@ -6,6 +6,25 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-01
+
+- Added stable identity reconstruction for every UUID-backed core identifier
+  through `FromStr`, plus `AgentDescriptor::with_id`. The default constructor
+  remains intentionally ephemeral and is now documented and regression-tested.
+- Clarified that `ModelRouter` and `ProviderRuntime` are long-lived runtime
+  state: clones share circuit-breaker state, while rebuilding either value
+  creates a fresh circuit. A clone-sharing regression test now protects the
+  contract.
+- Strengthened SQLite crash-recovery evidence by synchronizing parent and child
+  processes and terminating the child with `Child::kill` after the durable
+  boundary. Completed effects, workflow leases, and reserved budgets recover
+  without duplicate execution.
+- Corrected SQLite documentation: `SqliteWorkflowStore` is a complete durable
+  local `WorkflowStore`, and `SqliteStore` supports atomic durable Agent turns.
+  Documented the native SQLite compatibility boundary with SQLx 0.9 and 0.8.
+- Explicitly documented that PostgreSQL conversation and workflow adapters do
+  not yet provide the combined atomic `DurableConversationStore` transaction.
+
 ## [0.3.0] - 2026-07-31
 
 - `SqliteStore` now implements `ConversationStore` and the new

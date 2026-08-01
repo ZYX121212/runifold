@@ -466,6 +466,37 @@ fn open_circuit_skips_the_unhealthy_route_without_calling_it() {
 }
 
 #[test]
+fn cloned_router_shares_circuit_state() {
+    let primary = Arc::new(TestModel::new(Script::OpenError(error(
+        ModelErrorKind::Transport,
+        RetrySafety::Safe,
+    ))));
+    let backup = Arc::new(TestModel::new(Script::Events(completed(
+        ModelRef::new("backup", "model"),
+        "ok",
+    ))));
+    let router = ModelRouter::builder(logical())
+        .route(
+            "primary",
+            primary.clone(),
+            ModelRef::new("primary", "model"),
+        )
+        .route("backup", backup.clone(), ModelRef::new("backup", "model"))
+        .circuit_breaker(CircuitBreakerConfig::new(1, Duration::from_secs(30)).unwrap())
+        .clock(Arc::new(ManualClock::new()))
+        .build()
+        .unwrap();
+    let shared = router.clone();
+
+    futures_executor::block_on(router.invoke(request(), ModelCallContext::new())).unwrap();
+    futures_executor::block_on(shared.invoke(request(), ModelCallContext::new())).unwrap();
+
+    assert_eq!(primary.calls(), 1);
+    assert_eq!(backup.calls(), 2);
+    assert_eq!(shared.route_health()[0].state, CircuitState::Open);
+}
+
+#[test]
 fn safe_failure_retries_the_same_route_before_fallback() {
     let model = Arc::new(SequenceModel::new([
         Script::OpenError(error(ModelErrorKind::Transport, RetrySafety::Safe)),

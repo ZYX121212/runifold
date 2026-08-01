@@ -24,6 +24,12 @@ Each `AgentRoute` binds:
 - a child `Agent`;
 - the exact capability set requested for the child run.
 
+`AgentDescriptor::new` creates a fresh identity for ephemeral routes. A route
+whose grants, policies, or audit history survive process restart must load its
+`CapabilityId` from durable application configuration and apply it with
+`AgentDescriptor::with_id`. Route names are presentation, not authorization
+identity.
+
 The descriptor becomes `CapabilityKind::Agent`, not
 `CapabilityKind::Tool`. Its canonical model-facing input is:
 

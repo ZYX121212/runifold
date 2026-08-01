@@ -6,8 +6,10 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, ExitStatus},
+    process::{Child, Command},
     sync::Arc,
+    thread,
+    time::{Duration, Instant},
 };
 
 use runifold_agent::{Agent, AgentCheckpoint, ResumePolicy};
@@ -30,23 +32,22 @@ const DATABASE_ENV: &str = "RUNIFOLD_SQLITE_CRASH_DATABASE";
 const SIDE_EFFECT_ENV: &str = "RUNIFOLD_SQLITE_CRASH_SIDE_EFFECT";
 const CHECKPOINT_ENV: &str = "RUNIFOLD_SQLITE_CRASH_CHECKPOINT";
 const CAPABILITY_ENV: &str = "RUNIFOLD_SQLITE_CRASH_CAPABILITY";
-const CRASH_EXIT_CODE: i32 = 86;
-const TEST_NAME: &str = "completed_tool_is_replayed_after_process_crash";
+const READY_ENV: &str = "RUNIFOLD_SQLITE_CRASH_READY";
+const TEST_NAME: &str = "completed_tool_is_replayed_after_forced_process_kill";
 
 #[test]
-fn completed_tool_is_replayed_after_process_crash() {
+fn completed_tool_is_replayed_after_forced_process_kill() {
     if env::var_os(CHILD_ENV).is_some() {
         run_child();
-        panic!("child should terminate at the simulated crash boundary");
+        panic!("child should wait for the parent to kill it");
     }
 
     let fixture = CrashFixture::new();
-    let status = fixture.spawn_child();
-    assert_eq!(
-        status.code(),
-        Some(CRASH_EXIT_CODE),
-        "child did not terminate at the intended crash boundary"
-    );
+    let mut child = fixture.spawn_child();
+    fixture.wait_until_ready(&mut child);
+    child.kill().expect("effect child can be forcibly killed");
+    let status = child.wait().expect("killed effect child can be reaped");
+    assert!(!status.success());
     assert_eq!(fixture.side_effect_count(), 1);
 
     let store = Arc::new(SqliteStore::open(&fixture.database).unwrap());
@@ -83,9 +84,11 @@ fn run_child() {
     let side_effect = required_path(SIDE_EFFECT_ENV);
     let checkpoint_id = checkpoint_id(&required(CHECKPOINT_ENV));
     let capability_id = capability_id(&required(CAPABILITY_ENV));
+    let ready = required_path(READY_ENV);
     let store = Arc::new(SqliteStore::open(database).unwrap());
     let crashing_checkpoints = Arc::new(CrashOnStableCheckpoint {
         inner: store.clone(),
+        ready,
     });
     let checkpoint = AgentCheckpoint::existing(checkpoint_id, crashing_checkpoints);
     let model = tool_call_model();
@@ -226,6 +229,7 @@ impl Tool for FileAppendTool {
 
 struct CrashOnStableCheckpoint {
     inner: Arc<SqliteStore>,
+    ready: PathBuf,
 }
 
 impl CheckpointStore for CrashOnStableCheckpoint {
@@ -239,7 +243,8 @@ impl CheckpointStore for CrashOnStableCheckpoint {
         expected_revision: Option<u64>,
     ) -> Result<(), CheckpointError> {
         if checkpoint.revision == 2 {
-            std::process::exit(CRASH_EXIT_CODE);
+            fs::write(&self.ready, b"ready").expect("child publishes the forced-kill boundary");
+            thread::sleep(Duration::from_secs(60));
         }
         CheckpointStore::compare_and_swap(self.inner.as_ref(), checkpoint, expected_revision)
     }
@@ -249,6 +254,7 @@ struct CrashFixture {
     directory: PathBuf,
     database: PathBuf,
     side_effect: PathBuf,
+    ready: PathBuf,
     checkpoint_id: CheckpointId,
     capability_id: CapabilityId,
 }
@@ -260,13 +266,14 @@ impl CrashFixture {
         Self {
             database: directory.join("runifold.sqlite3"),
             side_effect: directory.join("effect.log"),
+            ready: directory.join("ready"),
             directory,
             checkpoint_id: CheckpointId::new(),
             capability_id: CapabilityId::new(),
         }
     }
 
-    fn spawn_child(&self) -> ExitStatus {
+    fn spawn_child(&self) -> Child {
         Command::new(env::current_exe().unwrap())
             .arg("--exact")
             .arg(TEST_NAME)
@@ -276,8 +283,21 @@ impl CrashFixture {
             .env(SIDE_EFFECT_ENV, &self.side_effect)
             .env(CHECKPOINT_ENV, self.checkpoint_id.to_string())
             .env(CAPABILITY_ENV, self.capability_id.to_string())
-            .status()
+            .env(READY_ENV, &self.ready)
+            .spawn()
             .unwrap()
+    }
+
+    fn wait_until_ready(&self, child: &mut Child) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.ready.exists() {
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("effect child did not reach the forced-kill boundary");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn side_effect_count(&self) -> usize {

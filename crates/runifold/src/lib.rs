@@ -188,6 +188,11 @@ impl<T> ProviderModelExt for T where T: ProviderModel + Sized + 'static {}
 /// the canonical streaming [`Model`] boundary. Agents built from it inherit
 /// budget, capability, cancellation, observability, and durable workflow
 /// semantics from Runifold's provider-neutral runtime layers.
+///
+/// This is long-lived application state, not a per-request builder result.
+/// Store one runtime in the application container and clone it for request
+/// handlers. Clones share circuit state; calling [`ProviderModelExt::runtime`]
+/// again creates an independent runtime with fresh health state.
 #[derive(Clone)]
 pub struct ProviderRuntime {
     model: std::sync::Arc<dyn Model>,

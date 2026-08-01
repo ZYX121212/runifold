@@ -3,9 +3,9 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::{Command, ExitStatus},
+    process::{Child, Command},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use runifold_core::{Budget, CheckpointId, Usage};
@@ -20,19 +20,22 @@ use uuid::Uuid;
 const CHILD_ENV: &str = "RUNIFOLD_SQLITE_WORKFLOW_CRASH_CHILD";
 const DATABASE_ENV: &str = "RUNIFOLD_SQLITE_WORKFLOW_CRASH_DATABASE";
 const CHECKPOINT_ENV: &str = "RUNIFOLD_SQLITE_WORKFLOW_CRASH_CHECKPOINT";
-const CRASH_EXIT_CODE: i32 = 87;
-const TEST_NAME: &str = "leased_workflow_and_budget_are_recovered_after_process_crash";
+const READY_ENV: &str = "RUNIFOLD_SQLITE_WORKFLOW_CRASH_READY";
+const TEST_NAME: &str = "leased_workflow_and_budget_are_recovered_after_forced_process_kill";
 
 #[test]
-fn leased_workflow_and_budget_are_recovered_after_process_crash() {
+fn leased_workflow_and_budget_are_recovered_after_forced_process_kill() {
     if env::var_os(CHILD_ENV).is_some() {
         run_child();
-        panic!("child should terminate at the simulated crash boundary");
+        panic!("child should wait for the parent to kill it");
     }
 
     let fixture = CrashFixture::new();
-    let status = fixture.spawn_child();
-    assert_eq!(status.code(), Some(CRASH_EXIT_CODE));
+    let mut child = fixture.spawn_child();
+    fixture.wait_until_ready(&mut child);
+    child.kill().expect("workflow child can be forcibly killed");
+    let status = child.wait().expect("killed workflow child can be reaped");
+    assert!(!status.success());
     thread::sleep(Duration::from_millis(150));
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -86,6 +89,7 @@ fn leased_workflow_and_budget_are_recovered_after_process_crash() {
 fn run_child() {
     let database = required_path(DATABASE_ENV);
     let checkpoint_id = checkpoint_id(&required(CHECKPOINT_ENV));
+    let ready = required_path(READY_ENV);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("child Tokio runtime builds");
@@ -123,7 +127,8 @@ fn run_child() {
             .reserve_budget(claimed.lease, workflow_budget(), Usage::default())
             .await
             .expect("child reservation persists");
-        std::process::exit(CRASH_EXIT_CODE);
+        fs::write(ready, b"ready").expect("child publishes the forced-kill boundary");
+        thread::sleep(Duration::from_secs(60));
     });
 }
 
@@ -145,6 +150,7 @@ fn lease(duration: Duration) -> LeaseDuration {
 struct CrashFixture {
     directory: PathBuf,
     database: PathBuf,
+    ready: PathBuf,
     checkpoint_id: CheckpointId,
 }
 
@@ -154,12 +160,13 @@ impl CrashFixture {
         fs::create_dir(&directory).expect("test crash directory is created");
         Self {
             database: directory.join("runifold.sqlite3"),
+            ready: directory.join("ready"),
             directory,
             checkpoint_id: CheckpointId::new(),
         }
     }
 
-    fn spawn_child(&self) -> ExitStatus {
+    fn spawn_child(&self) -> Child {
         Command::new(env::current_exe().expect("test executable is available"))
             .arg("--exact")
             .arg(TEST_NAME)
@@ -167,8 +174,21 @@ impl CrashFixture {
             .env(CHILD_ENV, "1")
             .env(DATABASE_ENV, &self.database)
             .env(CHECKPOINT_ENV, self.checkpoint_id.to_string())
-            .status()
+            .env(READY_ENV, &self.ready)
+            .spawn()
             .expect("workflow crash child starts")
+    }
+
+    fn wait_until_ready(&self, child: &mut Child) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.ready.exists() {
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("workflow child did not reach the forced-kill boundary");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn cleanup(&self) {

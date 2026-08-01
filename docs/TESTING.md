@@ -48,6 +48,12 @@ storage failure within five seconds, restarts the same writable layer,
 rediscovers the mapped host port, reconnects, and verifies the committed
 transcript.
 
+SQLite crash-recovery tests use a parent/child synchronization marker and then
+call `Child::kill` from the parent at the exact durable boundary. The child does
+not execute a normal shutdown path. Separate tests prove that a completed Tool
+effect is replayed once and that an expired workflow lease adopts and settles
+the crashed budget reservation with a higher fencing token.
+
 The MCP Task recovery test also always owns its database. It durably creates a
 workflow-backed Task, verifies that a stopped database becomes a bounded
 JSON-RPC storage failure, restarts the same writable layer, constructs a fresh

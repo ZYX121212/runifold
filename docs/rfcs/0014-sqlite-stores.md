@@ -5,12 +5,18 @@
 
 ## Summary
 
-`SqliteStore` is the first durable reference implementation of Runifold's
-three persistence boundaries:
+`SqliteStore` is the durable local reference implementation for Runifold's
+Agent persistence boundaries:
 
 - `EffectStore`;
 - `CheckpointStore`;
-- `Journal`.
+- `Journal`;
+- `ConversationStore`;
+- `DurableConversationStore`.
+
+The companion `SqliteWorkflowStore` implements the complete local
+`WorkflowStore` control plane. Both adapters may use the same database file;
+local durable workflows do not require an in-memory store.
 
 SQLite is not part of the runtime kernel and is not required for ephemeral
 execution. It demonstrates that Runifold's recovery and compare-and-swap
@@ -23,6 +29,12 @@ The adapter lives in the independent `runifold-store-sqlite` crate. The
 `runifold` facade exposes it under the `sqlite` feature. The separate
 `sqlite-bundled` feature compiles SQLite from source for applications that
 prefer a self-contained build.
+
+Runifold 0.3.x uses `rusqlite` 0.39 and `libsqlite3-sys` 0.37. This is
+compatible with SQLx 0.9, whose SQLite driver accepts `libsqlite3-sys` versions
+below 0.38. SQLx 0.8.x requires the older 0.30 line and cannot coexist in one
+Cargo graph because both native packages declare `links = "sqlite3"`; those
+applications must upgrade SQLx or omit Runifold's SQLite feature.
 
 Core, Model, Tool, Agent, and Effect crates do not depend on SQLite.
 
@@ -67,8 +79,9 @@ The child:
 
 1. writes a real Tool side effect to a file;
 2. durably completes the corresponding EffectRecord;
-3. exits the process before the Agent can persist its stable post-turn
-   checkpoint.
+3. publishes a synchronization marker before the Agent can persist its stable
+   post-turn checkpoint;
+4. is forcibly killed by the parent process without running a normal exit path.
 
 The parent process opens a fresh SQLite connection, resumes the in-flight
 checkpoint with explicit retry authority, and supplies the same logical model
@@ -117,7 +130,7 @@ traits, such as PostgreSQL.
 4. Journal events are immutable and uniquely sequenced per Run.
 5. Persisted public records round-trip without domain-specific projection.
 6. Reopening the database preserves recovery state.
-7. A completed Tool effect is not physically repeated after process exit and
+7. A completed Tool effect is not physically repeated after forced process kill and
    checkpoint retry.
 8. A workflow mutation either commits its complete state transition or leaves
    the previous snapshot intact.
