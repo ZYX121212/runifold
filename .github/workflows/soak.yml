@@ -1,0 +1,52 @@
+name: Multi-hour reliability soak
+
+on:
+  schedule:
+    - cron: "17 18 * * 6"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Bounded soak duration, 5 through 360 minutes
+        required: true
+        default: "180"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reliability-soak
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 370
+    env:
+      CARGO_TERM_COLOR: always
+      RUNIFOLD_SOAK_MINUTES: ${{ inputs.minutes || '180' }}
+      RUNIFOLD_SOAK_EVIDENCE_PATH: ${{ github.workspace }}/target/reliability-evidence/soak.json
+      RUNIFOLD_EVIDENCE_REVISION: ${{ github.sha }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Cache Cargo
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-soak-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Execute repeated real-boundary suites
+        run: scripts/run-soak.sh
+
+      - name: Upload soak evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reliability-soak-${{ github.sha }}
+          path: target/reliability-evidence/soak.json
+          if-no-files-found: error
+          retention-days: 90

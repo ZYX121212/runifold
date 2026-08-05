@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use futures_util::future::join_all;
 use runifold_model::{
     Message, Model, ModelCallContext, ModelErrorKind, ModelRef, ModelRequest, ModelUsage,
+    ResponseMode,
 };
 use runifold_provider_testkit::{
     CassetteServer, HttpExchange, ResponseChunk, ScriptedResponse, SuccessContract, verify_success,
@@ -68,6 +69,42 @@ async fn delayed_sse_body_is_deadline_exceeded() {
         .unwrap_err();
 
     assert_eq!(error.kind, ModelErrorKind::DeadlineExceeded);
+}
+
+#[tokio::test]
+async fn complete_responses_body_uses_the_canonical_model_path() {
+    let server = CassetteServer::start(vec![HttpExchange::new(
+        "POST",
+        "/v1/responses",
+        ScriptedResponse::json(
+            200,
+            &serde_json::json!({
+                "id": "resp_complete",
+                "model": "gpt-test",
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "complete"}]
+                }],
+                "usage": {"input_tokens": 2, "output_tokens": 1}
+            }),
+        )
+        .unwrap(),
+    )])
+    .unwrap();
+    let request = request().response_mode(ResponseMode::Complete);
+
+    let response = client(&server)
+        .invoke(request, ModelCallContext::new())
+        .await
+        .unwrap();
+
+    assert_eq!(response.text(), "complete");
+    assert_eq!(response.usage.input_tokens, 2);
+    let observed = server.observed_requests();
+    let body: serde_json::Value = serde_json::from_slice(&observed[0].body).unwrap();
+    assert_eq!(body["stream"], false);
+    server.assert_finished().unwrap();
 }
 
 #[tokio::test]

@@ -160,7 +160,8 @@ async fn drop_tables(connection_url: &str, table: &str) {
     });
     client
         .batch_execute(&format!(
-            "DROP TABLE {table}_memory, {table}_transcript, {table}"
+            "DROP TABLE {table}_effects, {table}_checkpoints, \
+             {table}_memory, {table}_transcript, {table}"
         ))
         .await
         .unwrap();

@@ -75,6 +75,27 @@ writes only a marker. `Full` must be selected explicitly.
 - `ReadOnly`;
 - `IdempotentWrite` with an idempotency key.
 
+Applications whose remote system exposes operation lookup can use
+`EffectExecutor::execute_reconciled`. Its `EffectReconciler` queries by the
+stable remote/idempotency identity before recovery:
+
+- `Completed(output)` durably records and replays the observed remote result;
+- `NotExecuted` is proof that even a non-idempotent handler may now execute;
+- `Ambiguous` retains the normal recovery policy and never grants retry by
+  itself;
+- reconciliation transport failures return `Reconciliation` and leave the
+  Effect in `Started` for a later attempt.
+
+Handler failures classified as `RequiresIdempotency`,
+`UnsafeAfterVisibleOutput`, `UnsafeAfterSideEffect`, or `Unknown` also retain
+the durable `Started` state. They are never converted into a false terminal
+`Failed` record merely because the response channel closed. A later call can
+reconcile the remote operation or apply the explicit safe-retry policy.
+
+The reconciler is a recovery boundary, not a distributed transaction. A
+remote system that cannot query a stable operation identity cannot close the
+post-commit/pre-`Completed` crash window safely.
+
 It rejects:
 
 - `NonIdempotentWrite`;
@@ -118,7 +139,6 @@ state solely from events.
 - The in-memory store is not process durable.
 - External exactly-once behavior still depends on the remote system honoring
   its idempotency key.
-- Handler-specific reconciliation APIs are deferred.
 - Leases, heartbeats, attempt identities, backoff, and distributed ownership
   are deferred.
 - Tool and Agent delegation execution use this boundary as specified by

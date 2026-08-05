@@ -1,5 +1,10 @@
 # Provider support
 
+Provider-only installations can select the lightweight kernel with
+`--no-default-features`. The compatible default includes `runtime` for examples
+using `ProviderModelExt::runtime`, Agent, Tool, Effect, Retrieval, or Workflow
+APIs.
+
 Runifold separates provider identity from wire protocol. Native providers keep
 their native event semantics; OpenAI-compatible providers share one hardened
 transport and decoder without creating one crate per endpoint.
@@ -14,7 +19,7 @@ transport and decoder without creating one crate per endpoint.
 | Anthropic | `anthropic` | Messages SSE | `AnthropicClient::from_api_key` | offline real HTTP cassette |
 | Gemini | `gemini` | GenerateContent SSE | `GeminiClient::from_api_key` | offline real HTTP cassette |
 | Ollama | `ollama` | Chat NDJSON | `OllamaClient::new` | offline real HTTP cassette |
-| Volcengine Ark | `ark` | Responses | `ark::client` | protocol conformance |
+| Volcengine Ark | `ark` | Responses | `ark::client` | offline HTTP cassette + manual live canary |
 | Alibaba Qwen | `qwen` | Chat Completions | `qwen::client` | protocol conformance |
 | DeepSeek | `deepseek` | Chat Completions | `deepseek::client` | protocol conformance |
 | OpenRouter | `openrouter` | Chat Completions | `openrouter::client` | protocol conformance |
@@ -34,6 +39,43 @@ classification. “Protocol conformance” means endpoint selection, canonical
 request encoding, fragmented stream decoding, provider identity, tools,
 reasoning fields, and detailed token usage are deterministic tests; it does not
 claim a live request against the vendor on every CI run.
+
+Ark additionally has a manually dispatched live gate covering strict JSON
+Schema, native `web_search`, mixed native/function tools, and both streamed and
+complete Responses delivery. Its artifact excludes credentials and response
+content.
+
+## Ark Responses example
+
+Ark's verified Responses baseline declares function tools, structured output,
+image/document input, and hosted web search as native. Model-specific limits
+can still be narrowed with `with_capabilities`.
+
+```rust,no_run
+use runifold::{ProviderModelExt, ResponseMode, ark};
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let runtime = ark::client(std::env::var("ARK_API_KEY")?)?
+    .runtime("doubao-seed-2-0-lite-260428")?;
+
+let answer = runtime
+    .agent("researcher")
+    .system("Return precise, sourced JSON.")
+    .provider_tool(ark::ArkWebSearchTool::new().limit(8).max_keyword(5).into())
+    .temperature(0.2)
+    .max_output_tokens(4_096)
+    .response_mode(ResponseMode::Complete)
+    .provider_options("ark", serde_json::json!({"thinking": {"type": "enabled"}}))
+    .prompt_text("Research the requested company.")
+    .await?;
+# let _ = answer;
+# Ok(())
+# }
+```
+
+Function tools registered through `.tool(...)` and Ark hosted tools registered
+through `.provider_tool(...)` are encoded into one `tools` array without using
+conflicting raw `provider_options`.
 
 The Bedrock binary cassette executes the AWS SDK over a real loopback HTTP
 socket. It verifies `SigV4` request construction, temporary-credential

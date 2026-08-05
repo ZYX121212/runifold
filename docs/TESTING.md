@@ -24,6 +24,23 @@ performs no model inference, prints no secret, and persists only redacted
 assertions. GitHub users should prefer the manual `Live OpenAI Realtime
 canary` workflow, which also scans the artifact for credential-shaped values.
 
+The ignored Ark canary verifies strict JSON Schema, hosted `web_search` mixed
+with a function tool, and streamed plus complete Responses delivery:
+
+```bash
+RUNIFOLD_LIVE_ARK_MODEL=doubao-seed-2-0-lite-260428 \
+RUNIFOLD_LIVE_EVIDENCE_PATH=target/reliability-evidence/ark-live.json \
+cargo test -p runifold-providers \
+  --features openai \
+  --test ark_live \
+  -- --ignored
+```
+
+`ARK_API_KEY` must already exist in the process environment. Prefer the manual
+`Live Ark Responses canary` workflow; it fails when the repository secret is
+missing and uploads only model identity and pass/fail assertions, never model
+content or credentials.
+
 PostgreSQL integration tests do not silently skip. By default they use
 Testcontainers to start disposable `pgvector/pgvector:pg16` databases, so a
 working Docker-compatible daemon is required. Containers and their writable

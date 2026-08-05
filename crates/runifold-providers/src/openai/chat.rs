@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use runifold_model::{
     ContentBlockKind, ContentPart, FinishReason, MediaSource, ModelError, ModelErrorKind, ModelRef,
-    ModelRequest, ModelStreamEvent, ModelUsage, OutputFormat, ProviderEvent, Role, ToolChoice,
+    ModelRequest, ModelStreamEvent, ModelUsage, OutputFormat, ProviderEvent, ResponseMode, Role,
+    ToolChoice,
 };
 use serde_json::{Map, Value, json};
 use smallvec::SmallVec;
@@ -28,7 +29,18 @@ pub fn encode_chat_request(request: &ModelRequest, provider: &str) -> Result<Val
         "messages".into(),
         Value::Array(encode_chat_messages(request)?),
     );
-    body.insert("stream".into(), Value::Bool(true));
+    if !request.provider_tools().is_empty() {
+        return Err(unsupported(
+            "provider-native hosted tools require the Responses protocol",
+        ));
+    }
+    body.insert(
+        "stream".into(),
+        Value::Bool(matches!(
+            request.selected_response_mode(),
+            ResponseMode::Streaming
+        )),
+    );
     insert_optional(
         &mut body,
         "temperature",

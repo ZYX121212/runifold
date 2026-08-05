@@ -13,10 +13,11 @@ responses are valuable, but they are not labelled as production verification.
 | PostgreSQL workflow and conversation persistence | Disposable real PostgreSQL/pgvector containers | Mandatory |
 | PostgreSQL outage and restart recovery | Stop/restart of the same writable container layer | Mandatory |
 | SQLite forced process-kill recovery | Parent kills a synchronized child after the durable effect boundary; completed work replays once | Mandatory |
+| External Effect outcome reconciliation | Uncertain handler failures remain `Started`; completed, proven-not-executed, unresolved, and lookup-failure branches are fail-closed contracts | Mandatory |
 | SQLite WorkflowStore recovery | Forced worker kill, fenced lease takeover, budget adoption, HITL, history, and fork survive reopen | Mandatory |
 | SQLite concurrent workflow claim | Independent connections produce exactly one fenced winner | Mandatory |
 | SQLite durable Agent conversation | Transcript and terminal checkpoint commit atomically; reopen resumes without another model call | Mandatory |
-| PostgreSQL durable Agent conversation | Conversation and workflow adapters are independently durable; no combined atomic transaction exists yet | Planned |
+| PostgreSQL durable Agent conversation and Effect store | Real PostgreSQL transaction proves transcript/checkpoint atomicity, rollback on stale checkpoint, reconnect replay, Effect CAS, and idempotency conflict | Mandatory |
 | S3 conditional immutable creation | Real pinned MinIO with Object Lock and SSE-S3 | Mandatory |
 | S3 post-commit response loss | Transparent TCP fault proxy plus checksum HEAD reconciliation | Mandatory |
 | S3 concurrent idempotency | 32 rounds with four writers for one batch per round | Mandatory |
@@ -24,10 +25,12 @@ responses are valuable, but they are not labelled as production verification.
 | WASM edge kernel runtime | Node execution of identity, authority, cancellation, and budget semantics | Mandatory |
 | WASM browser Agents, embeddings, OpenAI control plane, and Realtime WebSocket/WebRTC | Pinned headless Chrome with OpenAI, Anthropic, Gemini and Ollama protocols, real CORS, Fetch/WebSocket/WebRTC, fragmented streams, embeddings, model listing, multipart upload, Batch lifecycle, Realtime text/audio/media, local STUN, digest-pinned coturn relay-only peers, coturn-stop ICE partition, Peer/ICE state, reconnect safety, cancellation, deadline, and 429 cassettes | Mandatory |
 | OpenAI Realtime ephemeral credential rotation | Two live `/v1/realtime/client_secrets` requests, distinct secret/session assertions, bounded TTL, and credential-free evidence | Manual opt-in |
+| Ark strict structured Responses, hosted/function tools, and delivery modes | Two live Ark requests plus content-free evidence | Manual opt-in |
 | AWS S3 IAM/KMS integration | Not yet verified | Planned |
-| Multi-hour network/database soak | Not yet verified | Planned |
+| Multi-hour network/database soak | Scheduled three-hour repetition of real PostgreSQL, Effect, and Provider fault suites with credential-free evidence | Scheduled |
 | Browser Service Workers | Not yet verified | Planned |
-| Independent third-party framework benchmark | Internal reproducible Rig comparison exists; independent reproduction is not yet available | Planned |
+| Reproducible Rig framework benchmark | Scheduled 20×1000 paired rounds, alternating order, raw artifacts, bootstrap confidence intervals, and non-regression enforcement | Scheduled |
+| Independent third-party reproduction | Requires an external maintainer to run and attest the public benchmark contract | External evidence required |
 
 ## MinIO evidence artifact
 

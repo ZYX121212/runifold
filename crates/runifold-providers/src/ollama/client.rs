@@ -84,6 +84,15 @@ impl Model for OllamaClient {
         context: ModelCallContext,
     ) -> ModelFuture<'_, Result<ModelEventStream, ModelError>> {
         Box::pin(async move {
+            if !matches!(
+                request.selected_response_mode(),
+                runifold_model::ResponseMode::Streaming
+            ) {
+                return Err(ModelError::local(
+                    ModelErrorKind::UnsupportedFeature,
+                    "Ollama adapter currently requires streaming response mode",
+                ));
+            }
             if request.model.provider != "ollama" {
                 return Err(invalid("Ollama client requires provider `ollama`"));
             }

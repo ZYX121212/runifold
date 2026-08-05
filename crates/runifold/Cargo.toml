@@ -12,7 +12,16 @@ readme.workspace = true
 publish.workspace = true
 
 [features]
-default = []
+default = ["runtime"]
+runtime = [
+    "dep:runifold-agent",
+    "dep:runifold-effect",
+    "dep:runifold-macros",
+    "dep:runifold-retrieval",
+    "dep:runifold-tool",
+    "dep:runifold-workflow",
+    "dep:schemars",
+]
 anthropic = ["dep:runifold-providers", "runifold-providers/anthropic"]
 azure = ["openai"]
 bedrock = ["dep:runifold-providers", "runifold-providers/bedrock"]
@@ -32,13 +41,14 @@ together = ["openai"]
 xai = ["openai"]
 zhipu = ["openai"]
 otel = ["dep:runifold-observability-otel"]
-mcp = ["dep:runifold-mcp"]
-sqlite = ["dep:runifold-store-sqlite"]
+mcp = ["runtime", "dep:runifold-mcp"]
+sqlite = ["runtime", "dep:runifold-store-sqlite"]
 sqlite-bundled = ["sqlite", "runifold-store-sqlite/bundled"]
-qdrant = ["dep:runifold-retrieval-qdrant"]
-pgvector = ["dep:runifold-retrieval-pgvector"]
-workflow-postgres = ["dep:runifold-store-postgres"]
+qdrant = ["runtime", "dep:runifold-retrieval-qdrant"]
+pgvector = ["runtime", "dep:runifold-retrieval-pgvector"]
+workflow-postgres = ["runtime", "dep:runifold-store-postgres"]
 archive-s3 = [
+    "runtime",
     "dep:reqwest",
     "dep:sha2",
     "dep:base64",
@@ -50,21 +60,21 @@ archive-s3 = [
 ]
 
 [dependencies]
-runifold-agent.workspace = true
+runifold-agent = { workspace = true, optional = true }
 runifold-core.workspace = true
-runifold-effect.workspace = true
-runifold-mcp = { version = "0.3.1", path = "../runifold-mcp", optional = true }
+runifold-effect = { workspace = true, optional = true }
+runifold-mcp = { version = "0.3.2", path = "../runifold-mcp", optional = true }
 runifold-model.workspace = true
-runifold-macros.workspace = true
-runifold-observability-otel = { version = "0.3.1", path = "../runifold-observability-otel", optional = true }
+runifold-macros = { workspace = true, optional = true }
+runifold-observability-otel = { version = "0.3.2", path = "../runifold-observability-otel", optional = true }
 runifold-providers = { workspace = true, optional = true }
-runifold-retrieval.workspace = true
+runifold-retrieval = { workspace = true, optional = true }
 runifold-retrieval-pgvector = { workspace = true, optional = true }
 runifold-retrieval-qdrant = { workspace = true, optional = true }
 runifold-store-sqlite = { workspace = true, optional = true }
-runifold-tool.workspace = true
-runifold-workflow.workspace = true
-schemars.workspace = true
+runifold-tool = { workspace = true, optional = true }
+runifold-workflow = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 runifold-store-postgres = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 sha2 = { version = "0.10", optional = true }
@@ -90,6 +100,38 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4.76"
 wasm-bindgen-test = "0.3.76"
 web-sys = { version = "0.3", features = ["RtcPeerConnection", "RtcDataChannel", "RtcDataChannelEvent", "RtcConfiguration", "RtcIceConnectionState", "RtcIceGatheringState", "RtcIceServer", "RtcIceTransportPolicy", "RtcPeerConnectionState", "RtcSessionDescription", "RtcSessionDescriptionInit", "RtcSdpType", "MessageEvent", "Event"] }
+
+[[example]]
+name = "error_context"
+required-features = ["runtime"]
+
+[[example]]
+name = "parallel_workflow"
+required-features = ["runtime"]
+
+[[example]]
+name = "quickstart"
+required-features = ["runtime"]
+
+[[example]]
+name = "race_workflow"
+required-features = ["runtime"]
+
+[[example]]
+name = "workflow_chain"
+required-features = ["runtime"]
+
+[[test]]
+name = "typed_tool_macro"
+required-features = ["runtime"]
+
+[[test]]
+name = "lightweight_ark"
+required-features = ["ark"]
+
+[[test]]
+name = "wasm_browser_provider"
+required-features = ["runtime"]
 
 [lints]
 workspace = true

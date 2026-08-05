@@ -100,6 +100,12 @@ optimization or public comparison should use at least 20 paired rounds and
 1,000 measured requests per framework per round, repeat with the opposite
 starting order, and retain both artifacts.
 
+The scheduled `Reproducible Rig comparison` workflow executes that 20×1000
+profile with aggregate non-regression enforcement and retains the raw rounds
+and confidence intervals for 90 days. This is public reproducibility evidence;
+it becomes independent evidence only when an unaffiliated maintainer runs the
+same locked contract and publishes their artifact.
+
 ## Regression gates
 
 `compare_benchmarks` evaluates:

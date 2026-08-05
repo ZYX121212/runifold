@@ -110,6 +110,17 @@ jobs:
       - name: Check all targets and features
         run: cargo check --workspace --all-targets --all-features --locked
 
+      - name: Enforce lightweight Ark facade dependency boundary
+        shell: bash
+        run: |
+          tree="$(cargo tree -p runifold --no-default-features --features ark -e normal --depth 1 --locked)"
+          forbidden='runifold-(agent|effect|macros|retrieval|tool|workflow)'
+          if grep -E -q "$forbidden" <<<"$tree"; then
+            echo "::error title=Facade dependency regression::Lightweight Ark pulled a full runtime crate."
+            printf '%s\n' "$tree"
+            exit 1
+          fi
+
       - name: Lint
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
@@ -336,7 +347,7 @@ jobs:
           cargo +1.88.0 test -p runifold \
             --target wasm32-unknown-unknown \
             --no-default-features \
-            --features anthropic,gemini,ollama,openai \
+            --features runtime,anthropic,gemini,ollama,openai \
             --test wasm_browser_provider \
             --locked \
             -- --nocapture

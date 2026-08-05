@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use futures_util::future::{Either, select};
 use runifold_core::{
-    EffectClass, EffectEvent, EffectId, EffectRequest, Instant, RunContext, RunError, RunEventKind,
+    EffectClass, EffectEvent, EffectId, EffectRequest, Instant, RetrySafety, RunContext, RunError,
+    RunEventKind,
 };
 use serde_json::Value;
 
 use crate::{
     EffectExecutionContext, EffectExecutorError, EffectExecutorErrorKind, EffectHandler,
-    EffectRecord, EffectStatus, EffectStore,
+    EffectReconciler, EffectReconciliation, EffectRecord, EffectStatus, EffectStore,
 };
 
 /// Recovery behavior for a record whose handler may have executed.
@@ -82,6 +83,41 @@ impl EffectExecutor {
         handler: &dyn EffectHandler,
         recovery: EffectRecoveryPolicy,
     ) -> Result<EffectOutcome, EffectExecutorError> {
+        self.execute_inner(request, run, handler, recovery, None)
+            .await
+    }
+
+    /// Executes an effect and consults a remote-state reconciler before
+    /// deciding whether an ambiguously started record may be retried.
+    ///
+    /// This closes the common crash window where the remote side committed but
+    /// the local `Completed` record did not. It does not create a distributed
+    /// transaction: unresolved remote state still returns `Ambiguous`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EffectExecutorError`] for authority, persistence, lifecycle,
+    /// reconciliation, ambiguity, handler, or observability failures.
+    pub async fn execute_reconciled(
+        &self,
+        request: EffectRequest,
+        run: &RunContext,
+        handler: &dyn EffectHandler,
+        reconciler: &dyn EffectReconciler,
+        recovery: EffectRecoveryPolicy,
+    ) -> Result<EffectOutcome, EffectExecutorError> {
+        self.execute_inner(request, run, handler, recovery, Some(reconciler))
+            .await
+    }
+
+    async fn execute_inner(
+        &self,
+        request: EffectRequest,
+        run: &RunContext,
+        handler: &dyn EffectHandler,
+        recovery: EffectRecoveryPolicy,
+        reconciler: Option<&dyn EffectReconciler>,
+    ) -> Result<EffectOutcome, EffectExecutorError> {
         preflight(&request, run)?;
         let (record, created) = self.resolve(request)?;
         if created {
@@ -102,6 +138,19 @@ impl EffectExecutor {
             EffectStatus::Failed { error } => Err(EffectExecutorError::handler(error.clone())),
             EffectStatus::Prepared => self.start(record, run, handler).await,
             EffectStatus::Started => {
+                if let Some(reconciler) = reconciler {
+                    match self.reconcile(&record, run, reconciler).await? {
+                        EffectReconciliation::Completed(output) => {
+                            let mut outcome = self.complete(&record, output, run)?;
+                            outcome.replayed = true;
+                            return Ok(outcome);
+                        }
+                        EffectReconciliation::NotExecuted => {
+                            return self.start(record, run, handler).await;
+                        }
+                        EffectReconciliation::Ambiguous => {}
+                    }
+                }
                 if recovery != EffectRecoveryPolicy::RetrySafe || !retry_safe(&record.request) {
                     return Err(EffectExecutorError::new(
                         EffectExecutorErrorKind::Ambiguous,
@@ -113,6 +162,24 @@ impl EffectExecutor {
                 }
                 self.start(record, run, handler).await
             }
+        }
+    }
+
+    async fn reconcile(
+        &self,
+        record: &EffectRecord,
+        run: &RunContext,
+        reconciler: &dyn EffectReconciler,
+    ) -> Result<EffectReconciliation, EffectExecutorError> {
+        let context = EffectExecutionContext::for_run(run);
+        let cancellation = context.cancellation().clone();
+        let reconciliation = reconciler.reconcile(&record.request, context);
+        match select(Box::pin(cancellation.cancelled()), Box::pin(reconciliation)).await {
+            Either::Left(_) => Err(EffectExecutorError::new(
+                EffectExecutorErrorKind::Cancelled,
+                "effect reconciliation was cancelled and remains ambiguous",
+            )),
+            Either::Right((result, _)) => result.map_err(EffectExecutorError::reconciliation),
         }
     }
 
@@ -163,6 +230,9 @@ impl EffectExecutor {
 
         match result {
             Ok(output) => self.complete(&started, output, run),
+            Err(error) if outcome_is_ambiguous(&error) => {
+                Err(EffectExecutorError::ambiguous_handler(error))
+            }
             Err(error) => self.fail(&started, error, run),
         }
     }
@@ -277,6 +347,16 @@ fn retry_safe(request: &EffectRequest) -> bool {
         && request.idempotency_key.is_some()
 }
 
+fn outcome_is_ambiguous(error: &RunError) -> bool {
+    matches!(
+        error.retry_safety,
+        RetrySafety::RequiresIdempotency
+            | RetrySafety::UnsafeAfterVisibleOutput
+            | RetrySafety::UnsafeAfterSideEffect
+            | RetrySafety::Unknown
+    )
+}
+
 fn record_event(run: &RunContext, kind: RunEventKind) -> Result<(), EffectExecutorError> {
     run.record(kind, None)?;
     Ok(())
@@ -295,14 +375,14 @@ mod tests {
     use runifold_core::{
         Budget, BudgetTracker, CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilitySet,
         EffectClass, EffectEvent, EffectId, EffectKind, EffectRequest, InMemoryJournal,
-        InvocationId, RiskLevel, RunContext, RunError, RunEventKind,
+        InvocationId, RetrySafety, RiskLevel, RunContext, RunError, RunErrorKind, RunEventKind,
     };
     use serde_json::{Value, json};
 
     use crate::{
         EffectEventPayloadPolicy, EffectExecutionContext, EffectExecutor, EffectExecutorErrorKind,
-        EffectFuture, EffectHandler, EffectRecord, EffectRecoveryPolicy, EffectStatus, EffectStore,
-        InMemoryEffectStore,
+        EffectFuture, EffectHandler, EffectReconciler, EffectReconciliation, EffectRecord,
+        EffectRecoveryPolicy, EffectStatus, EffectStore, InMemoryEffectStore,
     };
 
     struct CountingHandler {
@@ -326,6 +406,73 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let input = request.input.clone();
             Box::pin(async move { Ok(json!({"echo": input})) })
+        }
+    }
+
+    struct AmbiguousHandler;
+
+    impl EffectHandler for AmbiguousHandler {
+        fn execute(
+            &self,
+            _request: &EffectRequest,
+            _context: EffectExecutionContext,
+        ) -> EffectFuture<'_, Result<Value, RunError>> {
+            Box::pin(async {
+                Err(RunError {
+                    kind: RunErrorKind::Transport,
+                    message: "connection closed after request body was sent".into(),
+                    retry_safety: RetrySafety::UnsafeAfterSideEffect,
+                    metadata: BTreeMap::new(),
+                })
+            })
+        }
+    }
+
+    struct CompletedReconciler;
+
+    impl EffectReconciler for CompletedReconciler {
+        fn reconcile(
+            &self,
+            _request: &EffectRequest,
+            _context: EffectExecutionContext,
+        ) -> EffectFuture<'_, Result<EffectReconciliation, RunError>> {
+            Box::pin(async {
+                Ok(EffectReconciliation::Completed(
+                    json!({"remote": "committed"}),
+                ))
+            })
+        }
+    }
+
+    struct FixedReconciler(EffectReconciliation);
+
+    impl EffectReconciler for FixedReconciler {
+        fn reconcile(
+            &self,
+            _request: &EffectRequest,
+            _context: EffectExecutionContext,
+        ) -> EffectFuture<'_, Result<EffectReconciliation, RunError>> {
+            let outcome = self.0.clone();
+            Box::pin(async move { Ok(outcome) })
+        }
+    }
+
+    struct FailedReconciler;
+
+    impl EffectReconciler for FailedReconciler {
+        fn reconcile(
+            &self,
+            _request: &EffectRequest,
+            _context: EffectExecutionContext,
+        ) -> EffectFuture<'_, Result<EffectReconciliation, RunError>> {
+            Box::pin(async {
+                Err(RunError {
+                    kind: RunErrorKind::Transport,
+                    message: "remote lookup unavailable".into(),
+                    retry_safety: RetrySafety::Unknown,
+                    metadata: BTreeMap::new(),
+                })
+            })
         }
     }
 
@@ -451,6 +598,147 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind, EffectExecutorErrorKind::Ambiguous);
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn remote_reconciliation_closes_completed_but_unrecorded_crash_window() {
+        let capability = capability(EffectClass::NonIdempotentWrite);
+        let run = run_with(&capability, None);
+        let store = Arc::new(InMemoryEffectStore::new());
+        let request = request(
+            &capability,
+            Some("remote-operation-7"),
+            json!({"charge": 10}),
+        );
+        let prepared = EffectRecord::prepared(request.clone());
+        store.compare_and_swap(&prepared, None).unwrap();
+        let started = prepared.next(EffectStatus::Started).unwrap();
+        store.compare_and_swap(&started, Some(0)).unwrap();
+        let executor = EffectExecutor::new(store.clone());
+        let handler = CountingHandler::new();
+
+        let outcome = futures_executor::block_on(executor.execute_reconciled(
+            request,
+            &run,
+            &handler,
+            &CompletedReconciler,
+            EffectRecoveryPolicy::RejectAmbiguous,
+        ))
+        .unwrap();
+
+        assert!(outcome.replayed);
+        assert_eq!(outcome.output, json!({"remote": "committed"}));
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            store.load(outcome.effect_id).unwrap().unwrap().status,
+            EffectStatus::Completed { .. }
+        ));
+    }
+
+    #[test]
+    fn uncertain_handler_failure_stays_started_until_remote_reconciliation() {
+        let capability = capability(EffectClass::IdempotentWrite);
+        let run = run_with(&capability, None);
+        let store = Arc::new(InMemoryEffectStore::new());
+        let executor = EffectExecutor::new(store.clone());
+        let request = request(
+            &capability,
+            Some("remote-operation-response-loss"),
+            json!({"charge": 10}),
+        );
+
+        let error = futures_executor::block_on(executor.execute(
+            request.clone(),
+            &run,
+            &AmbiguousHandler,
+            EffectRecoveryPolicy::RejectAmbiguous,
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind, EffectExecutorErrorKind::Ambiguous);
+        assert!(matches!(
+            store.load(request.effect_id).unwrap().unwrap().status,
+            EffectStatus::Started
+        ));
+
+        let outcome = futures_executor::block_on(executor.execute_reconciled(
+            request,
+            &run,
+            &CountingHandler::new(),
+            &CompletedReconciler,
+            EffectRecoveryPolicy::RejectAmbiguous,
+        ))
+        .unwrap();
+        assert!(outcome.replayed);
+        assert_eq!(outcome.output, json!({"remote": "committed"}));
+    }
+
+    #[test]
+    fn reconciliation_reexecutes_only_after_remote_not_executed_proof() {
+        let capability = capability(EffectClass::NonIdempotentWrite);
+        let run = run_with(&capability, None);
+        let store = Arc::new(InMemoryEffectStore::new());
+        let request = request(
+            &capability,
+            Some("remote-operation-8"),
+            json!({"charge": 11}),
+        );
+        let prepared = EffectRecord::prepared(request.clone());
+        store.compare_and_swap(&prepared, None).unwrap();
+        let started = prepared.next(EffectStatus::Started).unwrap();
+        store.compare_and_swap(&started, Some(0)).unwrap();
+        let executor = EffectExecutor::new(store);
+        let handler = CountingHandler::new();
+
+        let outcome = futures_executor::block_on(executor.execute_reconciled(
+            request,
+            &run,
+            &handler,
+            &FixedReconciler(EffectReconciliation::NotExecuted),
+            EffectRecoveryPolicy::RejectAmbiguous,
+        ))
+        .unwrap();
+
+        assert!(!outcome.replayed);
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn unresolved_or_failed_reconciliation_never_runs_the_handler() {
+        let capability = capability(EffectClass::NonIdempotentWrite);
+        let run = run_with(&capability, None);
+        let store = Arc::new(InMemoryEffectStore::new());
+        let request = request(
+            &capability,
+            Some("remote-operation-9"),
+            json!({"charge": 12}),
+        );
+        let prepared = EffectRecord::prepared(request.clone());
+        store.compare_and_swap(&prepared, None).unwrap();
+        let started = prepared.next(EffectStatus::Started).unwrap();
+        store.compare_and_swap(&started, Some(0)).unwrap();
+        let executor = EffectExecutor::new(store);
+        let handler = CountingHandler::new();
+
+        let ambiguous = futures_executor::block_on(executor.execute_reconciled(
+            request.clone(),
+            &run,
+            &handler,
+            &FixedReconciler(EffectReconciliation::Ambiguous),
+            EffectRecoveryPolicy::RejectAmbiguous,
+        ))
+        .unwrap_err();
+        let failed = futures_executor::block_on(executor.execute_reconciled(
+            request,
+            &run,
+            &handler,
+            &FailedReconciler,
+            EffectRecoveryPolicy::RejectAmbiguous,
+        ))
+        .unwrap_err();
+
+        assert_eq!(ambiguous.kind, EffectExecutorErrorKind::Ambiguous);
+        assert_eq!(failed.kind, EffectExecutorErrorKind::Reconciliation);
         assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
     }
 

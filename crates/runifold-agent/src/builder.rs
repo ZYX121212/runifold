@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use runifold_core::CapabilitySet;
 use runifold_effect::{EffectExecutor, EffectRecoveryPolicy};
-use runifold_model::{FeaturePolicy, Message, Model, ModelRef, OutputFormat};
+use runifold_model::{
+    FeaturePolicy, GenerationOptions, Message, Model, ModelRef, OutputFormat, ProviderToolSpec,
+    ResponseMode,
+};
 use runifold_retrieval::{Document, RetrievalError, Retriever};
 use runifold_tool::{Tool, ToolRegistrationError};
 use schemars::JsonSchema;
@@ -219,6 +222,59 @@ impl AgentBuilder {
         self.output_format(OutputFormat::typed::<T>(name))
     }
 
+    /// Adds a provider-hosted tool such as Ark web search.
+    #[must_use]
+    pub fn provider_tool(mut self, tool: ProviderToolSpec) -> Self {
+        self.agent.provider_tools.push(tool);
+        self
+    }
+
+    /// Replaces common model generation controls for every Agent turn.
+    #[must_use]
+    pub fn generation(mut self, generation: GenerationOptions) -> Self {
+        self.agent.generation = generation;
+        self
+    }
+
+    /// Sets the sampling temperature for every Agent turn.
+    #[must_use]
+    pub fn temperature(mut self, temperature: f64) -> Self {
+        self.agent.generation.temperature = Some(temperature);
+        self
+    }
+
+    /// Sets nucleus sampling for every Agent turn.
+    #[must_use]
+    pub fn top_p(mut self, top_p: f64) -> Self {
+        self.agent.generation.top_p = Some(top_p);
+        self
+    }
+
+    /// Sets the maximum number of output tokens for every Agent turn.
+    #[must_use]
+    pub fn max_output_tokens(mut self, max_output_tokens: u64) -> Self {
+        self.agent.generation.max_output_tokens = Some(max_output_tokens);
+        self
+    }
+
+    /// Selects streaming or complete response delivery for every Agent turn.
+    #[must_use]
+    pub const fn response_mode(mut self, response_mode: ResponseMode) -> Self {
+        self.agent.response_mode = response_mode;
+        self
+    }
+
+    /// Adds namespaced provider options to every Agent turn.
+    #[must_use]
+    pub fn provider_options(
+        mut self,
+        provider: impl Into<String>,
+        options: serde_json::Value,
+    ) -> Self {
+        self.agent.provider_options.insert(provider.into(), options);
+        self
+    }
+
     /// Replaces all local Agent configuration.
     #[must_use]
     pub const fn config(mut self, config: AgentConfig) -> Self {
@@ -338,7 +394,10 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     use runifold_core::{CapabilityId, CapabilitySet, EffectClass, RiskLevel};
-    use runifold_model::{ContentPart, FinishReason, ModelRef, ModelStreamEvent, OutputFormat};
+    use runifold_model::{
+        ContentPart, FinishReason, ModelRef, ModelStreamEvent, OutputFormat, ProviderToolSpec,
+        ResponseMode,
+    };
     use runifold_testkit::ScriptedModel;
     use runifold_tool::{Tool, ToolContext, ToolDescriptor, ToolError, ToolFuture, ToolOutput};
     use schemars::JsonSchema;
@@ -403,6 +462,31 @@ mod tests {
         assert!(agent.tools.contains("lookup"));
         assert_eq!(agent.config.max_turns, 4);
         assert_eq!(agent.callable_capabilities().len(), 1);
+    }
+
+    #[test]
+    fn builder_retains_generation_provider_and_delivery_controls() {
+        let provider_tool = ProviderToolSpec::new("ark", "web_search").unwrap();
+        let agent = Agent::builder(
+            "researcher",
+            Arc::new(ScriptedModel::new()),
+            ModelRef::new("ark", "doubao"),
+        )
+        .temperature(0.2)
+        .top_p(0.8)
+        .max_output_tokens(4_096)
+        .response_mode(ResponseMode::Complete)
+        .provider_tool(provider_tool)
+        .provider_options("ark", json!({"thinking": {"type": "enabled"}}))
+        .build()
+        .unwrap();
+
+        assert_eq!(agent.generation.temperature, Some(0.2));
+        assert_eq!(agent.generation.top_p, Some(0.8));
+        assert_eq!(agent.generation.max_output_tokens, Some(4_096));
+        assert_eq!(agent.response_mode, ResponseMode::Complete);
+        assert_eq!(agent.provider_tools[0].tool_type, "web_search");
+        assert_eq!(agent.provider_options["ark"]["thinking"]["type"], "enabled");
     }
 
     #[test]

@@ -878,6 +878,12 @@ impl Agent {
         request.messages.extend_from_slice(rest);
         request.tools = self.tools.model_specs();
         request.tools.extend(self.agents.model_specs());
+        for tool in &self.provider_tools {
+            request = request.provider_tool(tool.clone());
+        }
+        request.generation.clone_from(&self.generation);
+        request = request.response_mode(self.response_mode);
+        request.provider_options.clone_from(&self.provider_options);
         request.feature_policy = self.config.feature_policy;
         request.output_format.clone_from(&self.output_format);
         Ok(request)

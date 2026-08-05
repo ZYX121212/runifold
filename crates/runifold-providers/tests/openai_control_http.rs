@@ -7,9 +7,9 @@ use runifold_model::ModelCallContext;
 use runifold_provider_testkit::{CassetteServer, HttpExchange, ResponseChunk, ScriptedResponse};
 use runifold_providers::openai::{
     OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus, OpenAiClient, OpenAiConfig,
-    OpenAiControlError, OpenAiFilePurpose, OpenAiFileUpload, OpenAiRealtimeCallRequest,
-    OpenAiRealtimeClientSecretRequest, OpenAiRealtimeModality, OpenAiRealtimeSdpOffer,
-    OpenAiWireProtocol,
+    OpenAiControlError, OpenAiFilePurpose, OpenAiFileStatus, OpenAiFileUpload,
+    OpenAiFileWaitPolicy, OpenAiRealtimeCallRequest, OpenAiRealtimeClientSecretRequest,
+    OpenAiRealtimeModality, OpenAiRealtimeSdpOffer, OpenAiWireProtocol,
 };
 use secrecy::ExposeSecret;
 use serde_json::json;
@@ -36,8 +36,96 @@ fn batch(status: &str) -> serde_json::Value {
     })
 }
 
+fn file(status: &str) -> serde_json::Value {
+    json!({
+        "id":"file_test", "filename":"batch.jsonl", "purpose":"batch",
+        "bytes":12, "created_at":7, "status":status
+    })
+}
+
 #[tokio::test]
-async fn model_file_and_batch_lifecycle_is_typed_and_credential_free() {
+async fn file_lifecycle_is_complete_and_credential_free() {
+    let server = CassetteServer::start(vec![
+        HttpExchange::new(
+            "POST",
+            "/v1/files",
+            ScriptedResponse::json(200, &file("processing")).unwrap(),
+        ),
+        HttpExchange::new(
+            "GET",
+            "/v1/files/file_test",
+            ScriptedResponse::json(200, &file("processing")).unwrap(),
+        ),
+        HttpExchange::new(
+            "GET",
+            "/v1/files",
+            ScriptedResponse::json(200, &json!({"data":[file("processing")]})).unwrap(),
+        ),
+        HttpExchange::new(
+            "GET",
+            "/v1/files/file_test",
+            ScriptedResponse::json(200, &file("active")).unwrap(),
+        ),
+        HttpExchange::new(
+            "DELETE",
+            "/v1/files/file_test",
+            ScriptedResponse::json(200, &json!({"id":"file_test", "deleted":true})).unwrap(),
+        ),
+    ])
+    .unwrap();
+    let control = client(&server).control_plane();
+
+    let upload = OpenAiFileUpload::new(
+        "batch.jsonl",
+        OpenAiFilePurpose::batch(),
+        b"{\"test\":1}\n".to_vec(),
+    )
+    .unwrap();
+    let file = control
+        .upload_file(upload, ModelCallContext::new())
+        .await
+        .unwrap();
+    assert_eq!(file.id, "file_test");
+    assert_eq!(file.lifecycle_status(), OpenAiFileStatus::Processing);
+    let inspected = control
+        .get_file("file_test", ModelCallContext::new())
+        .await
+        .unwrap();
+    assert_eq!(inspected.lifecycle_status(), OpenAiFileStatus::Processing);
+    let files = control.list_files(ModelCallContext::new()).await.unwrap();
+    assert_eq!(files.len(), 1);
+    let active = control
+        .wait_file_active(
+            "file_test",
+            OpenAiFileWaitPolicy::new(Duration::from_millis(1), Duration::from_secs(1)).unwrap(),
+            ModelCallContext::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(active.lifecycle_status(), OpenAiFileStatus::Active);
+    let deletion = control
+        .delete_file("file_test", ModelCallContext::new())
+        .await
+        .unwrap();
+    assert!(deletion.deleted);
+
+    server.assert_finished().unwrap();
+    let observed = server.observed_requests();
+    assert!(
+        observed
+            .iter()
+            .all(|request| !request.headers.contains_key("authorization"))
+    );
+    let upload_request = &observed[0];
+    let multipart = String::from_utf8_lossy(&upload_request.body);
+    assert!(multipart.contains("name=\"purpose\""));
+    assert!(multipart.contains("batch"));
+    assert!(multipart.contains("filename=\"batch.jsonl\""));
+    assert!(multipart.contains("{\"test\":1}"));
+}
+
+#[tokio::test]
+async fn model_and_batch_lifecycle_is_typed() {
     let server = CassetteServer::start(vec![
         HttpExchange::new(
             "GET",
@@ -50,30 +138,12 @@ async fn model_file_and_batch_lifecycle_is_typed_and_credential_free() {
         ),
         HttpExchange::new(
             "POST",
-            "/v1/files",
-            ScriptedResponse::json(
-                200,
-                &json!({
-                    "id":"file_test",
-                    "filename":"batch.jsonl",
-                    "purpose":"batch",
-                    "bytes":12,
-                    "created_at":7,
-                    "status":"processed"
-                }),
-            )
-            .unwrap(),
-        ),
-        HttpExchange::new(
-            "POST",
             "/v1/batches",
             ScriptedResponse::json(200, &batch("validating")).unwrap(),
         )
         .with_json_body(json!({
-            "input_file_id":"file_test",
-            "endpoint":"/v1/responses",
-            "completion_window":"24h",
-            "metadata":{"tenant":"test"}
+            "input_file_id":"file_test", "endpoint":"/v1/responses",
+            "completion_window":"24h", "metadata":{"tenant":"test"}
         })),
         HttpExchange::new(
             "GET",
@@ -91,20 +161,7 @@ async fn model_file_and_batch_lifecycle_is_typed_and_credential_free() {
 
     let models = control.list_models(ModelCallContext::new()).await.unwrap();
     assert_eq!(models[0].id, "gpt-test");
-
-    let upload = OpenAiFileUpload::new(
-        "batch.jsonl",
-        OpenAiFilePurpose::batch(),
-        b"{\"test\":1}\n".to_vec(),
-    )
-    .unwrap();
-    let file = control
-        .upload_file(upload, ModelCallContext::new())
-        .await
-        .unwrap();
-    assert_eq!(file.id, "file_test");
-
-    let request = OpenAiBatchRequest::new(file.id, OpenAiBatchEndpoint::Responses)
+    let request = OpenAiBatchRequest::new("file_test", OpenAiBatchEndpoint::Responses)
         .unwrap()
         .with_metadata("tenant", "test")
         .unwrap();
@@ -123,20 +180,7 @@ async fn model_file_and_batch_lifecycle_is_typed_and_credential_free() {
         .await
         .unwrap();
     assert_eq!(cancelled.status, OpenAiBatchStatus::Cancelling);
-
     server.assert_finished().unwrap();
-    let observed = server.observed_requests();
-    assert!(
-        observed
-            .iter()
-            .all(|request| !request.headers.contains_key("authorization"))
-    );
-    let upload_request = &observed[1];
-    let multipart = String::from_utf8_lossy(&upload_request.body);
-    assert!(multipart.contains("name=\"purpose\""));
-    assert!(multipart.contains("batch"));
-    assert!(multipart.contains("filename=\"batch.jsonl\""));
-    assert!(multipart.contains("{\"test\":1}"));
 }
 
 #[tokio::test]

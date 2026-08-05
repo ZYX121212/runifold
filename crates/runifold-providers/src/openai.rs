@@ -27,8 +27,9 @@ pub use config::{
 };
 pub use control::{
     OpenAiBatch, OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus, OpenAiControlError,
-    OpenAiControlFuture, OpenAiControlPlane, OpenAiFile, OpenAiFilePurpose, OpenAiFileUpload,
-    OpenAiModelInfo, OpenAiRealtimeClientSecret, OpenAiRealtimeClientSecretRequest,
+    OpenAiControlFuture, OpenAiControlPlane, OpenAiFile, OpenAiFileDeletion, OpenAiFilePurpose,
+    OpenAiFileStatus, OpenAiFileUpload, OpenAiFileWaitPolicy, OpenAiModelInfo,
+    OpenAiRealtimeClientSecret, OpenAiRealtimeClientSecretRequest,
 };
 pub use decode::OpenAiEventDecoder;
 pub use embedding::OpenAiEmbeddingModel;
@@ -48,6 +49,54 @@ pub use realtime_reconnect::{
     OpenAiRealtimeReconnectPolicy, OpenAiRealtimeReconnectPolicyError,
     OpenAiRealtimeReconnectStopReason,
 };
+
+/// Ark-hosted web-search configuration for the Responses API.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ArkWebSearchTool {
+    limit: Option<u32>,
+    max_keyword: Option<u32>,
+}
+
+impl ArkWebSearchTool {
+    /// Creates web search with Ark defaults.
+    pub const fn new() -> Self {
+        Self {
+            limit: None,
+            max_keyword: None,
+        }
+    }
+
+    /// Limits the number of returned search results.
+    #[must_use]
+    pub const fn limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Limits the number of generated search keywords.
+    #[must_use]
+    pub const fn max_keyword(mut self, max_keyword: u32) -> Self {
+        self.max_keyword = Some(max_keyword);
+        self
+    }
+}
+
+impl From<ArkWebSearchTool> for runifold_model::ProviderToolSpec {
+    fn from(tool: ArkWebSearchTool) -> Self {
+        let mut options = std::collections::BTreeMap::new();
+        if let Some(limit) = tool.limit {
+            options.insert("limit".into(), serde_json::Value::from(limit));
+        }
+        if let Some(max_keyword) = tool.max_keyword {
+            options.insert("max_keyword".into(), serde_json::Value::from(max_keyword));
+        }
+        Self {
+            provider: "ark".into(),
+            tool_type: "web_search".into(),
+            options,
+        }
+    }
+}
 #[cfg(target_arch = "wasm32")]
 pub use realtime_webrtc::{
     OpenAiRealtimeIceServer, OpenAiRealtimeIceTransportPolicy, OpenAiRealtimePendingWebRtc,

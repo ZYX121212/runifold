@@ -6,6 +6,9 @@ use serde_json::Value;
 
 use crate::{ExtensionMap, Message};
 
+const PROVIDER_TOOLS_METADATA_KEY: &str = "runifold.request.provider_tools.v1";
+const RESPONSE_MODE_METADATA_KEY: &str = "runifold.request.response_mode.v1";
+
 /// A provider-qualified model identity.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ModelRef {
@@ -52,6 +55,18 @@ pub struct GenerationOptions {
     pub seed: Option<u64>,
     /// Stop sequences.
     pub stop: Vec<String>,
+}
+
+/// How the provider should deliver a model response.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ResponseMode {
+    /// Deliver incremental events when the provider supports streaming.
+    #[default]
+    Streaming,
+    /// Request one complete provider response and normalize it into events.
+    Complete,
 }
 
 /// Desired final-output format.
@@ -118,6 +133,69 @@ pub struct ToolSpec {
     pub output_schema: Option<Value>,
     /// Namespaced metadata not automatically exposed to a provider.
     pub metadata: ExtensionMap,
+}
+
+/// A provider-native hosted tool that has no lossless canonical function-tool form.
+///
+/// Adapters only consume entries matching their provider namespace. The `options`
+/// object contains fields beside the wire-level `type`, which is owned by
+/// `tool_type` and cannot be overridden.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ProviderToolSpec {
+    /// Provider namespace, such as `ark` or `openai`.
+    pub provider: String,
+    /// Provider wire-level tool type, such as `web_search`.
+    pub tool_type: String,
+    /// Provider-specific tool configuration excluding `type`.
+    pub options: BTreeMap<String, Value>,
+}
+
+impl ProviderToolSpec {
+    /// Creates a provider-native tool definition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::ModelErrorKind::InvalidRequest`] for blank or unsafe
+    /// provider and tool-type tokens.
+    pub fn new(
+        provider: impl Into<String>,
+        tool_type: impl Into<String>,
+    ) -> Result<Self, crate::ModelError> {
+        let provider = provider.into();
+        let tool_type = tool_type.into();
+        if !is_provider_token(&provider) {
+            return Err(crate::ModelError::local(
+                crate::ModelErrorKind::InvalidRequest,
+                "provider-native tool provider must be a non-empty ASCII token",
+            ));
+        }
+        if !is_provider_token(&tool_type) {
+            return Err(crate::ModelError::local(
+                crate::ModelErrorKind::InvalidRequest,
+                "provider-native tool type must be a non-empty ASCII token",
+            ));
+        }
+        Ok(Self {
+            provider,
+            tool_type,
+            options: BTreeMap::new(),
+        })
+    }
+
+    /// Adds one provider-specific option.
+    #[must_use]
+    pub fn option(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.options.insert(name.into(), value.into());
+        self
+    }
+}
+
+fn is_provider_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 /// How a model may select tools.
@@ -192,6 +270,68 @@ impl ModelRequest {
         self
     }
 
+    /// Adds a provider-hosted tool.
+    #[must_use]
+    pub fn provider_tool(mut self, tool: ProviderToolSpec) -> Self {
+        let mut tools = self.provider_tools();
+        tools.push(tool);
+        self.metadata.insert(
+            PROVIDER_TOOLS_METADATA_KEY.into(),
+            Value::Array(tools.into_iter().map(provider_tool_value).collect()),
+        );
+        self
+    }
+
+    /// Returns provider-hosted tools separately from application function tools.
+    #[must_use]
+    pub fn provider_tools(&self) -> Vec<ProviderToolSpec> {
+        self.metadata
+            .get(PROVIDER_TOOLS_METADATA_KEY)
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// Replaces common generation controls.
+    #[must_use]
+    pub fn generation(mut self, generation: GenerationOptions) -> Self {
+        self.generation = generation;
+        self
+    }
+
+    /// Sets response delivery behavior.
+    #[must_use]
+    pub fn response_mode(mut self, response_mode: ResponseMode) -> Self {
+        let value = match response_mode {
+            ResponseMode::Streaming => "streaming",
+            ResponseMode::Complete => "complete",
+        };
+        self.metadata.insert(
+            RESPONSE_MODE_METADATA_KEY.into(),
+            Value::String(value.into()),
+        );
+        self
+    }
+
+    /// Returns the requested response delivery mode.
+    #[must_use]
+    pub fn selected_response_mode(&self) -> ResponseMode {
+        match self
+            .metadata
+            .get(RESPONSE_MODE_METADATA_KEY)
+            .and_then(Value::as_str)
+        {
+            Some("complete") => ResponseMode::Complete,
+            _ => ResponseMode::Streaming,
+        }
+    }
+
+    /// Adds an adapter-owned namespaced option object.
+    #[must_use]
+    pub fn provider_option(mut self, provider: impl Into<String>, options: Value) -> Self {
+        self.provider_options.insert(provider.into(), options);
+        self
+    }
+
     /// Sets the desired output format.
     #[must_use]
     pub fn output_format(mut self, output_format: OutputFormat) -> Self {
@@ -214,4 +354,19 @@ impl ModelRequest {
         self.feature_policy = feature_policy;
         self
     }
+}
+
+fn provider_tool_value(tool: ProviderToolSpec) -> Value {
+    Value::Object(
+        [
+            ("provider".into(), Value::String(tool.provider)),
+            ("tool_type".into(), Value::String(tool.tool_type)),
+            (
+                "options".into(),
+                Value::Object(tool.options.into_iter().collect()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    )
 }

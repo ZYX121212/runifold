@@ -333,6 +333,171 @@ impl Default for OpenAiEventDecoder {
     }
 }
 
+/// Normalizes one complete Responses API object into the canonical event model.
+///
+/// # Errors
+///
+/// Returns [`ModelError`] when required response fields are malformed or the
+/// Provider reports a failed response.
+pub(crate) fn decode_complete_response(
+    provider: &str,
+    payload: &Value,
+    request_id: Option<String>,
+) -> Result<Vec<ModelStreamEvent>, ModelError> {
+    if payload.get("error").is_some_and(|error| !error.is_null())
+        || payload.get("status").and_then(Value::as_str) == Some("failed")
+    {
+        let envelope = serde_json::json!({"error": payload.get("error")});
+        let mut error = provider_failure(&envelope);
+        error.provider = Some(provider.into());
+        return Err(error);
+    }
+
+    let model = string(payload, "model")?;
+    let mut events = vec![ModelStreamEvent::ResponseStarted {
+        id: optional_string(payload, "id"),
+        model: ModelRef::new(provider, model),
+    }];
+    if let Some(request_id) = request_id {
+        events.push(provider_event_for(
+            provider,
+            "http.request_id",
+            serde_json::json!({"x_request_id": request_id}),
+        ));
+    }
+
+    let output = payload
+        .get("output")
+        .and_then(Value::as_array)
+        .ok_or_else(|| protocol("complete OpenAI response field `output` must be an array"))?;
+    let mut next_index = 0_u32;
+    let mut saw_tool_call = false;
+    for item in output {
+        match item.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                decode_complete_message(provider, item, &mut next_index, &mut events)?;
+            }
+            Some("function_call") => {
+                let index = take_index(&mut next_index)?;
+                let id = optional_string(item, "call_id")
+                    .or_else(|| optional_string(item, "id"))
+                    .ok_or_else(|| protocol("complete function call is missing an identity"))?;
+                let name = string(item, "name")?.to_owned();
+                let arguments = string(item, "arguments")?.to_owned();
+                events.push(ModelStreamEvent::ContentBlockStarted {
+                    index,
+                    kind: ContentBlockKind::ToolCall { id, name },
+                });
+                events.push(ModelStreamEvent::ToolArgumentsDelta {
+                    index,
+                    json: arguments,
+                });
+                events.push(ModelStreamEvent::ContentBlockCompleted { index });
+                saw_tool_call = true;
+            }
+            Some(kind) => events.push(provider_event_for(
+                provider,
+                &format!("response.output_item.{kind}"),
+                item.clone(),
+            )),
+            None => {
+                return Err(protocol(
+                    "complete OpenAI response output item is missing a string `type`",
+                ));
+            }
+        }
+    }
+
+    let usage = decode_usage(payload.get("usage"));
+    let incomplete = payload.get("status").and_then(Value::as_str) == Some("incomplete");
+    let finish_reason = if incomplete {
+        incomplete_reason(payload)
+    } else if saw_tool_call {
+        FinishReason::ToolCalls
+    } else {
+        FinishReason::Stop
+    };
+    events.push(provider_event_for(
+        provider,
+        "response.complete",
+        payload.clone(),
+    ));
+    events.push(ModelStreamEvent::UsageUpdated { usage });
+    events.push(ModelStreamEvent::ResponseCompleted {
+        finish_reason,
+        provider_metadata: response_metadata(payload),
+    });
+    Ok(events)
+}
+
+fn decode_complete_message(
+    provider: &str,
+    message: &Value,
+    next_index: &mut u32,
+    events: &mut Vec<ModelStreamEvent>,
+) -> Result<(), ModelError> {
+    let content = message
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or_else(|| protocol("complete response message content must be an array"))?;
+    for part in content {
+        let index = take_index(next_index)?;
+        match part.get("type").and_then(Value::as_str) {
+            Some("output_text") => {
+                events.push(ModelStreamEvent::ContentBlockStarted {
+                    index,
+                    kind: ContentBlockKind::Text,
+                });
+                events.push(ModelStreamEvent::TextDelta {
+                    index,
+                    text: string(part, "text")?.into(),
+                });
+                events.push(ModelStreamEvent::ContentBlockCompleted { index });
+                if part
+                    .get("annotations")
+                    .is_some_and(|value| !value.is_null())
+                {
+                    events.push(provider_event_for(
+                        provider,
+                        "response.output_text.annotations",
+                        part.clone(),
+                    ));
+                }
+            }
+            Some("refusal") => {
+                events.push(ModelStreamEvent::ContentBlockStarted {
+                    index,
+                    kind: ContentBlockKind::Refusal,
+                });
+                events.push(ModelStreamEvent::RefusalDelta {
+                    index,
+                    text: string(part, "refusal")?.into(),
+                });
+                events.push(ModelStreamEvent::ContentBlockCompleted { index });
+            }
+            Some(kind) => events.push(provider_event_for(
+                provider,
+                &format!("response.content_part.{kind}"),
+                part.clone(),
+            )),
+            None => {
+                return Err(protocol(
+                    "complete response content part is missing a string `type`",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn take_index(next_index: &mut u32) -> Result<u32, ModelError> {
+    let index = *next_index;
+    *next_index = next_index
+        .checked_add(1)
+        .ok_or_else(|| protocol("canonical content index overflow"))?;
+    Ok(index)
+}
+
 fn decode_usage(usage: Option<&Value>) -> ModelUsage {
     let usage = usage.unwrap_or(&Value::Null);
     ModelUsage {
@@ -582,6 +747,32 @@ mod tests {
             panic!("unknown event should be preserved");
         };
         assert_eq!(event.payload, payload);
+    }
+
+    #[test]
+    fn complete_response_uses_the_same_canonical_accumulator() {
+        let payload = serde_json::json!({
+            "id": "resp_complete",
+            "model": "doubao",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "{\"ok\":true}"}]
+            }],
+            "usage": {"input_tokens": 4, "output_tokens": 3}
+        });
+        let events =
+            super::decode_complete_response("ark", &payload, Some("req_1".into())).unwrap();
+        let mut accumulator = ModelStreamAccumulator::new();
+        let response = events
+            .into_iter()
+            .find_map(|event| accumulator.push(event).unwrap())
+            .unwrap();
+
+        assert_eq!(response.model.provider, "ark");
+        assert_eq!(response.content, vec![ContentPart::text("{\"ok\":true}")]);
+        assert_eq!(response.usage.input_tokens, 4);
+        assert_eq!(response.usage.output_tokens, 3);
     }
 
     fn decode_response(

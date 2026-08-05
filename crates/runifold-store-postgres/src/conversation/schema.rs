@@ -97,6 +97,23 @@ impl PostgresConversationStore {
                 ON {table}_memory (namespace, updated_at DESC, memory_id);
             CREATE INDEX IF NOT EXISTS {table}_memory_search_idx
                 ON {table}_memory USING GIN (to_tsvector('simple', content));
+
+            CREATE TABLE IF NOT EXISTS {table}_checkpoints (
+                checkpoint_id UUID PRIMARY KEY,
+                revision BIGINT NOT NULL CHECK (revision >= 0),
+                record_json JSONB NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS {table}_effects (
+                effect_id UUID PRIMARY KEY,
+                capability_id UUID NOT NULL,
+                idempotency_key TEXT,
+                revision BIGINT NOT NULL CHECK (revision >= 0),
+                record_json JSONB NOT NULL,
+                UNIQUE (capability_id, idempotency_key)
+            );
+            CREATE INDEX IF NOT EXISTS {table}_effects_capability_key
+                ON {table}_effects (capability_id, idempotency_key);
             "
         )
     }

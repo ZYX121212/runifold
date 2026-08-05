@@ -105,6 +105,7 @@ impl ModelCapabilities {
         streaming: bool,
     ) -> Result<Vec<ModelWarning>, ModelError> {
         let requires_tools = !request.tools.is_empty()
+            || !request.provider_tools().is_empty()
             || matches!(
                 request.tool_choice,
                 ToolChoice::Required | ToolChoice::Named { .. }

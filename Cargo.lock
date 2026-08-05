@@ -2225,6 +2225,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
 
 [[package]]
+name = "postgres"
+version = "0.19.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33ad20e0aa0b24f5a394eab4f78c781d248982b22b25cecc7e3aa46a681605bd"
+dependencies = [
+ "bytes",
+ "fallible-iterator 0.2.0",
+ "futures-util",
+ "log",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "postgres-protocol"
 version = "0.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2599,7 +2613,7 @@ dependencies = [
 
 [[package]]
 name = "runifold"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2638,7 +2652,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-agent"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-core",
  "futures-executor",
@@ -2658,7 +2672,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "event-listener",
  "futures-executor",
@@ -2672,7 +2686,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-effect"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2684,7 +2698,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-eval-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2699,7 +2713,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-macros"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2708,7 +2722,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-mcp"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-stream",
  "axum",
@@ -2733,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-model"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-stream",
  "futures-core",
@@ -2749,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-observability-otel"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-stream",
  "futures-util",
@@ -2769,7 +2783,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-provider-testkit"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2782,7 +2796,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-providers"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-stream",
  "aws-sdk-bedrockruntime",
@@ -2816,7 +2830,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-retrieval"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2828,7 +2842,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-retrieval-pgvector"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-timer",
  "futures-util",
@@ -2843,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-retrieval-qdrant"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-util",
  "reqwest",
@@ -2861,12 +2875,14 @@ dependencies = [
 
 [[package]]
 name = "runifold-store-postgres"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-util",
  "pgvector",
+ "postgres",
  "runifold-agent",
  "runifold-core",
+ "runifold-effect",
  "runifold-mcp",
  "runifold-model",
  "runifold-retrieval",
@@ -2883,7 +2899,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-store-sqlite"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-executor",
  "runifold-agent",
@@ -2902,7 +2918,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-testkit"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-core",
  "futures-executor",
@@ -2917,7 +2933,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-tool"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2931,7 +2947,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-workflow"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-executor",
  "futures-timer",

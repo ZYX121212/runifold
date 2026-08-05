@@ -13,7 +13,7 @@ use runifold_core::{CancellationToken, Instant};
 use runifold_model::{
     FeatureSupport, Model, ModelCallContext, ModelCapabilities, ModelError, ModelErrorKind,
     ModelEventStream, ModelFuture, ModelRef, ModelRequest, ModelStreamEvent, ModelWarning,
-    ProviderModel, SupportLevel,
+    ProviderModel, ResponseMode, SupportLevel,
 };
 use secrecy::ExposeSecret;
 use serde_json::Value;
@@ -23,8 +23,11 @@ use super::{
     OpenAiControlPlane, OpenAiEmbeddingModel, OpenAiEventDecoder, OpenAiRealtimeClient,
     OpenAiRealtimeError, OpenAiWireProtocol,
     chat::{ChatEvents, encode_chat_request},
+    decode::decode_complete_response,
     encode::encode_request_for,
 };
+
+const MAX_COMPLETE_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 /// `OpenAI` Responses API implementation of Runifold's [`Model`] boundary.
 #[derive(Clone, Debug)]
@@ -37,10 +40,11 @@ pub struct OpenAiClient {
 impl OpenAiClient {
     /// Creates a client with a pooled Rustls HTTP transport.
     pub fn new(config: OpenAiConfig) -> Self {
+        let capabilities = adapter_capabilities_for(&config);
         Self {
             config,
             http: Client::new(),
-            capabilities: adapter_capabilities(),
+            capabilities,
         }
     }
 
@@ -129,21 +133,37 @@ impl OpenAiClient {
                 ),
             ));
         }
-        let warnings = self.capabilities.validate_request(request, true)?;
+        let streaming = matches!(request.selected_response_mode(), ResponseMode::Streaming);
+        let warnings = self.capabilities.validate_request(request, streaming)?;
         let body = match self.config.wire_protocol {
             OpenAiWireProtocol::Responses => encode_request_for(request, &self.config.provider)?,
             OpenAiWireProtocol::ChatCompletions => {
+                if !streaming {
+                    return Err(ModelError::local(
+                        ModelErrorKind::UnsupportedFeature,
+                        "complete response mode is not yet supported by the Chat Completions adapter",
+                    ));
+                }
                 encode_chat_request(request, &self.config.provider)?
             }
         };
         Ok((body, warnings))
     }
 
-    fn request_builder(&self, body: &Value, context: &ModelCallContext) -> RequestBuilder {
+    fn request_builder(
+        &self,
+        body: &Value,
+        context: &ModelCallContext,
+        response_mode: ResponseMode,
+    ) -> RequestBuilder {
+        let accept = match response_mode {
+            ResponseMode::Complete => "application/json",
+            _ => "text/event-stream",
+        };
         let mut builder = self
             .http
             .post(self.config.endpoint_url())
-            .header("Accept", "text/event-stream")
+            .header("Accept", accept)
             .header("X-Client-Request-Id", context.invocation_id().to_string())
             .json(body);
         if let Some(api_key) = &self.config.api_key {
@@ -187,6 +207,7 @@ impl Model for OpenAiClient {
     ) -> ModelFuture<'_, Result<ModelEventStream, ModelError>> {
         Box::pin(async move {
             let (body, warnings) = self.prepare(&request)?;
+            let response_mode = request.selected_response_mode();
             if context
                 .remaining()
                 .is_some_and(|remaining| remaining.is_zero())
@@ -199,7 +220,7 @@ impl Model for OpenAiClient {
             let cancellation = context.cancellation().clone();
             let deadline = context.deadline();
             let response = send_request(
-                self.request_builder(&body, &context),
+                self.request_builder(&body, &context, response_mode),
                 &cancellation,
                 &self.config.provider,
                 deadline,
@@ -220,19 +241,101 @@ impl Model for OpenAiClient {
                     retry_after,
                 ));
             }
-            Ok(event_stream(
-                response,
-                DecoderConfig {
-                    protocol: self.config.wire_protocol,
-                    provider: self.config.provider.clone(),
-                    request_id,
-                    deadline,
-                },
-                cancellation,
-                warnings,
-            ))
+            let decoder_config = DecoderConfig {
+                protocol: self.config.wire_protocol,
+                provider: self.config.provider.clone(),
+                request_id,
+                deadline,
+            };
+            match response_mode {
+                ResponseMode::Complete => {
+                    let payload = read_complete_body(
+                        response,
+                        &cancellation,
+                        &decoder_config.provider,
+                        deadline,
+                    )
+                    .await?;
+                    let events = decode_complete_response(
+                        &decoder_config.provider,
+                        &payload,
+                        decoder_config.request_id,
+                    )?;
+                    Ok(complete_event_stream(events, warnings))
+                }
+                _ => Ok(event_stream(
+                    response,
+                    decoder_config,
+                    cancellation,
+                    warnings,
+                )),
+            }
         })
     }
+}
+
+fn complete_event_stream(
+    events: Vec<ModelStreamEvent>,
+    mut warnings: Vec<ModelWarning>,
+) -> ModelEventStream {
+    let mut normalized = Vec::with_capacity(events.len().saturating_add(warnings.len()));
+    for event in events {
+        let started = matches!(event, ModelStreamEvent::ResponseStarted { .. });
+        normalized.push(Ok(event));
+        if started {
+            normalized.extend(
+                std::mem::take(&mut warnings)
+                    .into_iter()
+                    .map(|warning| Ok(ModelStreamEvent::Warning { warning })),
+            );
+        }
+    }
+    Box::pin(futures_util::stream::iter(normalized))
+}
+
+async fn read_complete_body(
+    response: Response,
+    cancellation: &CancellationToken,
+    provider: &str,
+    deadline: Option<Instant>,
+) -> Result<Value, ModelError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_COMPLETE_RESPONSE_BYTES as u64)
+    {
+        return Err(protocol_error(
+            provider,
+            format!("complete response exceeds {MAX_COMPLETE_RESPONSE_BYTES} bytes"),
+        ));
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    loop {
+        let cancellation_wait = cancellation.cancelled().fuse();
+        let next = stream.next().fuse();
+        pin_mut!(cancellation_wait, next);
+        let chunk = futures_util::select_biased! {
+            () = cancellation_wait => return Err(cancelled()),
+            chunk = next => chunk,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        let chunk = chunk.map_err(|error| transport_error(&error, provider, deadline))?;
+        if body.len().saturating_add(chunk.len()) > MAX_COMPLETE_RESPONSE_BYTES {
+            return Err(protocol_error(
+                provider,
+                format!("complete response exceeds {MAX_COMPLETE_RESPONSE_BYTES} bytes"),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|error| {
+        protocol_error(
+            provider,
+            format!("complete response is not valid JSON: {error}"),
+        )
+    })
 }
 
 impl ProviderModel for OpenAiClient {
@@ -410,6 +513,31 @@ fn adapter_capabilities() -> ModelCapabilities {
     }
 }
 
+fn adapter_capabilities_for(config: &OpenAiConfig) -> ModelCapabilities {
+    let mut capabilities = adapter_capabilities();
+    if matches!(config.provider.as_str(), "openai" | "ark")
+        && config.wire_protocol == OpenAiWireProtocol::Responses
+    {
+        let native = || FeatureSupport::new(SupportLevel::Native);
+        capabilities.tools = native();
+        capabilities.structured_output = native();
+        capabilities.image_input = native();
+        capabilities.document_input = native();
+    }
+    if config.provider == "ark" && config.wire_protocol == OpenAiWireProtocol::Responses {
+        capabilities.reasoning = FeatureSupport::new(SupportLevel::Native);
+        capabilities.extensions.insert(
+            "ark.web_search".into(),
+            FeatureSupport::new(SupportLevel::Native),
+        );
+        capabilities.extensions.insert(
+            "ark.reasoning_generation".into(),
+            FeatureSupport::new(SupportLevel::Native),
+        );
+    }
+    capabilities
+}
+
 fn cancelled() -> ModelError {
     ModelError::local(ModelErrorKind::Cancelled, "OpenAI invocation was cancelled")
 }
@@ -483,7 +611,7 @@ fn http_error(
 #[cfg(test)]
 mod tests {
     use super::super::OpenAiConfig;
-    use super::{OpenAiClient, adapter_capabilities, http_error};
+    use super::{OpenAiClient, adapter_capabilities, adapter_capabilities_for, http_error};
     use reqwest::StatusCode;
     use runifold_model::{ModelErrorKind, SupportLevel};
 
@@ -519,5 +647,36 @@ mod tests {
         let client = OpenAiClient::new(OpenAiConfig::ark("key").unwrap());
 
         assert_eq!(client.provider(), "ark");
+    }
+
+    #[test]
+    fn ark_responses_declares_verified_protocol_capabilities() {
+        let config = OpenAiConfig::ark("key").unwrap();
+        let capabilities = adapter_capabilities_for(&config);
+
+        assert_eq!(capabilities.tools.level, SupportLevel::Native);
+        assert_eq!(capabilities.structured_output.level, SupportLevel::Native);
+        assert_eq!(capabilities.image_input.level, SupportLevel::Native);
+        assert_eq!(capabilities.document_input.level, SupportLevel::Native);
+        assert_eq!(
+            capabilities.extensions["ark.web_search"].level,
+            SupportLevel::Native
+        );
+        assert_eq!(
+            capabilities.extensions["ark.reasoning_generation"].level,
+            SupportLevel::Native
+        );
+        assert_eq!(capabilities.reasoning.level, SupportLevel::Native);
+    }
+
+    #[test]
+    fn public_openai_responses_declares_implemented_wire_features() {
+        let config = OpenAiConfig::new("key").unwrap();
+        let capabilities = adapter_capabilities_for(&config);
+
+        assert_eq!(capabilities.tools.level, SupportLevel::Native);
+        assert_eq!(capabilities.structured_output.level, SupportLevel::Native);
+        assert_eq!(capabilities.image_input.level, SupportLevel::Native);
+        assert_eq!(capabilities.document_input.level, SupportLevel::Native);
     }
 }

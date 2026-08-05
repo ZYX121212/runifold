@@ -1,0 +1,48 @@
+name: Reproducible Rig comparison
+
+on:
+  schedule:
+    - cron: "43 20 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rig-comparison-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      RUNIFOLD_BENCH_ROUNDS: "20"
+      RUNIFOLD_BENCH_RUNS: "1000"
+      RUNIFOLD_BENCH_WARMUP: "100"
+      RUNIFOLD_BENCH_CONCURRENCY: "32"
+      RUNIFOLD_BENCH_ENFORCE: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Cache standalone benchmark dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            benchmarks/rig-compare/target
+          key: cargo-rig-benchmark-${{ runner.os }}-${{ hashFiles('benchmarks/rig-compare/Cargo.lock', 'Cargo.lock') }}
+
+      - name: Execute alternating paired comparison
+        run: cargo run --release --locked --manifest-path benchmarks/rig-compare/Cargo.toml
+
+      - name: Upload raw rounds and aggregate confidence intervals
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rig-comparison-${{ github.sha }}
+          path: benchmarks/rig-compare/target/benchmark-reports/**/comparison.json
+          if-no-files-found: error
+          retention-days: 90

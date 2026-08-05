@@ -14,9 +14,9 @@ use runifold_effect::{
     EffectRecoveryPolicy, InMemoryEffectStore,
 };
 use runifold_model::{
-    ContentPart, FeaturePolicy, Message, Model, ModelCallContext, ModelError, ModelErrorKind,
-    ModelRef, ModelRequest, ModelResponse, ModelStreamAccumulator, OutputFormat, Role, ToolCall,
-    ToolResult,
+    ContentPart, FeaturePolicy, GenerationOptions, Message, Model, ModelCallContext, ModelError,
+    ModelErrorKind, ModelRef, ModelRequest, ModelResponse, ModelStreamAccumulator, OutputFormat,
+    ProviderToolSpec, ResponseMode, Role, ToolCall, ToolResult,
 };
 use runifold_retrieval::{Document, Retriever};
 use runifold_tool::{ToolError, ToolErrorKind, ToolOutput, ToolRegistry};
@@ -112,6 +112,10 @@ pub struct Agent {
     pub(crate) effect_recovery: EffectRecoveryPolicy,
     pub(crate) config: AgentConfig,
     pub(crate) output_format: OutputFormat,
+    pub(crate) generation: GenerationOptions,
+    pub(crate) response_mode: ResponseMode,
+    pub(crate) provider_tools: Vec<ProviderToolSpec>,
+    pub(crate) provider_options: BTreeMap<String, serde_json::Value>,
 }
 
 impl Agent {
@@ -139,6 +143,10 @@ impl Agent {
             effect_recovery: EffectRecoveryPolicy::RejectAmbiguous,
             config: AgentConfig::default(),
             output_format: OutputFormat::Text,
+            generation: GenerationOptions::default(),
+            response_mode: ResponseMode::Streaming,
+            provider_tools: Vec::new(),
+            provider_options: BTreeMap::new(),
         }
     }
 

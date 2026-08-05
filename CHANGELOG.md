@@ -6,6 +6,25 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-05
+
+- Added a lightweight facade mode selected with `--no-default-features`, while
+  preserving the complete Agent/Effect/Retrieval/Tool/Workflow runtime as the
+  compatible default feature set.
+- Completed the Ark Responses surface for strict tools, JSON Schema,
+  reasoning, image/document input, native web search, complete and streamed
+  delivery, Provider file references, and typed Files/Batch/Realtime control
+  operations.
+- Added PostgreSQL checkpoint and Effect CAS persistence plus an atomic
+  `DurableConversationStore` commit covering transcript and terminal
+  checkpoint state in one transaction. Real-container tests prove reconnect,
+  idempotency conflicts, stale-checkpoint rollback, and transcript atomicity.
+- Kept uncertain external-effect handler failures in `Started` state so remote
+  reconciliation can resolve post-commit response loss without converting an
+  ambiguous write into a false terminal failure.
+- Added scheduled three-hour reliability soak and locked Rig comparison
+  workflows with credential-free artifacts and aggregate non-regression gates.
+
 ## [0.3.1] - 2026-08-01
 
 - Added stable identity reconstruction for every UUID-backed core identifier

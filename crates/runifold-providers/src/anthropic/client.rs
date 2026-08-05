@@ -65,6 +65,15 @@ impl AnthropicClient {
     }
 
     fn prepare(&self, request: &ModelRequest) -> Result<(Value, Vec<ModelWarning>), ModelError> {
+        if !matches!(
+            request.selected_response_mode(),
+            runifold_model::ResponseMode::Streaming
+        ) {
+            return Err(ModelError::local(
+                ModelErrorKind::UnsupportedFeature,
+                "Anthropic adapter currently requires streaming response mode",
+            ));
+        }
         if request.model.provider != "anthropic" {
             return Err(ModelError::local(
                 ModelErrorKind::InvalidRequest,

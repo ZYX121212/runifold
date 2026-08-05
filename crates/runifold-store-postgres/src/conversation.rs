@@ -1,5 +1,6 @@
 //! `PostgreSQL` conversation, summary, and semantic-memory adapter.
 
+mod durable;
 mod memory;
 mod schema;
 mod store;
@@ -14,6 +15,8 @@ use runifold_retrieval::EmbeddingModel;
 use thiserror::Error;
 use tokio_postgres::{Client, NoTls};
 
+use crate::blocking::PostgresBlockingClient;
+
 const MAX_CONTENT_BYTES: usize = 262_144;
 
 /// `PostgreSQL` conversation-store configuration or schema failure.
@@ -26,12 +29,17 @@ pub enum PostgresConversationStoreError {
     /// `PostgreSQL` connection or explicit schema setup failed.
     #[error("PostgreSQL conversation store operation failed: {0}")]
     Database(#[from] tokio_postgres::Error),
+    /// The blocking connection worker could not be joined.
+    #[error("PostgreSQL blocking connection task failed: {0}")]
+    ConnectionTask(String),
 }
 
 /// PostgreSQL-backed append-only conversation and semantic-memory store.
 #[derive(Clone)]
 pub struct PostgresConversationStore {
     client: Arc<Client>,
+    transaction_client: Arc<tokio::sync::Mutex<Client>>,
+    blocking: PostgresBlockingClient,
     table: String,
     semantic_embedder: Option<Arc<dyn EmbeddingModel>>,
 }
@@ -60,12 +68,25 @@ impl PostgresConversationStore {
         table: &str,
     ) -> Result<Self, PostgresConversationStoreError> {
         validate_identifier(table)?;
-        let (client, connection) = tokio_postgres::connect(connection, NoTls).await?;
+        let sync_connection = connection.to_owned();
+        let blocking =
+            tokio::task::spawn_blocking(move || PostgresBlockingClient::connect(&sync_connection))
+                .await
+                .map_err(|error| PostgresConversationStoreError::ConnectionTask(error.to_string()))?
+                .map_err(PostgresConversationStoreError::ConnectionTask)?;
+        let (client, primary_connection) = tokio_postgres::connect(connection, NoTls).await?;
         tokio::spawn(async move {
-            let _ = connection.await;
+            let _ = primary_connection.await;
+        });
+        let (transaction_client, transaction_connection) =
+            tokio_postgres::connect(connection, NoTls).await?;
+        tokio::spawn(async move {
+            let _ = transaction_connection.await;
         });
         Ok(Self {
             client: Arc::new(client),
+            transaction_client: Arc::new(tokio::sync::Mutex::new(transaction_client)),
+            blocking,
             table: table.to_owned(),
             semantic_embedder: None,
         })
@@ -76,6 +97,14 @@ impl PostgresConversationStore {
     pub fn with_semantic_memory_embedder(mut self, embedder: Arc<dyn EmbeddingModel>) -> Self {
         self.semantic_embedder = Some(embedder);
         self
+    }
+
+    pub(crate) const fn blocking(&self) -> &PostgresBlockingClient {
+        &self.blocking
+    }
+
+    pub(crate) fn table(&self) -> &str {
+        &self.table
     }
 }
 

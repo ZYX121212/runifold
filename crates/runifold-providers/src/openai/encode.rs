@@ -3,8 +3,8 @@
 use serde_json::{Map, Value, json};
 
 use runifold_model::{
-    ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, Role,
-    ToolChoice, ToolResult,
+    ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, ResponseMode,
+    Role, ToolChoice, ToolResult,
 };
 
 /// Encodes a canonical request as an `OpenAI` Responses API request.
@@ -39,7 +39,13 @@ pub(crate) fn encode_request_for(
     let mut body = Map::new();
     body.insert("model".into(), Value::String(request.model.name.clone()));
     body.insert("input".into(), Value::Array(encode_input(request)?));
-    body.insert("stream".into(), Value::Bool(true));
+    body.insert(
+        "stream".into(),
+        Value::Bool(matches!(
+            request.selected_response_mode(),
+            ResponseMode::Streaming
+        )),
+    );
 
     insert_optional(
         &mut body,
@@ -57,25 +63,23 @@ pub(crate) fn encode_request_for(
         request.generation.max_output_tokens.map(Value::from),
     );
 
-    if !request.tools.is_empty() {
-        body.insert(
-            "tools".into(),
-            Value::Array(
-                request
-                    .tools
-                    .iter()
-                    .map(|tool| {
-                        json!({
-                            "type": "function",
-                            "name": tool.name,
-                            "description": tool.description,
-                            "parameters": tool.input_schema,
-                            "strict": true
-                        })
-                    })
-                    .collect(),
-            ),
-        );
+    let provider_tools = encode_provider_tools(request, provider)?;
+    if !request.tools.is_empty() || !provider_tools.is_empty() {
+        let mut tools = request
+            .tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                    "strict": true
+                })
+            })
+            .collect::<Vec<_>>();
+        tools.extend(provider_tools);
+        body.insert("tools".into(), Value::Array(tools));
     }
     body.insert(
         "tool_choice".into(),
@@ -85,6 +89,30 @@ pub(crate) fn encode_request_for(
     merge_provider_options(&mut body, request, provider)?;
 
     Ok(Value::Object(body))
+}
+
+fn encode_provider_tools(request: &ModelRequest, provider: &str) -> Result<Vec<Value>, ModelError> {
+    request
+        .provider_tools()
+        .into_iter()
+        .map(|tool| {
+            if tool.provider != provider && tool.provider != "openai-compatible" {
+                return Err(invalid(format!(
+                    "provider-native tool for `{}` cannot be sent to `{provider}`",
+                    tool.provider
+                )));
+            }
+            if tool.options.contains_key("type") {
+                return Err(invalid(
+                    "provider-native tool option `type` conflicts with its declared tool type",
+                ));
+            }
+            let mut encoded =
+                Map::from_iter([("type".into(), Value::String(tool.tool_type.clone()))]);
+            encoded.extend(tool.options.clone());
+            Ok(Value::Object(encoded))
+        })
+        .collect()
 }
 
 fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
@@ -103,11 +131,15 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                 }
                 ContentPart::Image { source } => {
                     require_input_role(message.role, "image")?;
-                    message_content.push(encode_image(source)?);
+                    message_content.push(encode_image(source, &request.model.provider)?);
                 }
                 ContentPart::Document { source, name } => {
                     require_input_role(message.role, "document")?;
-                    message_content.push(encode_document(source, name.as_deref())?);
+                    message_content.push(encode_document(
+                        source,
+                        name.as_deref(),
+                        &request.model.provider,
+                    )?);
                 }
                 ContentPart::ToolCall(call) => {
                     flush_message(&mut input, message.role, &mut message_content)?;
@@ -127,7 +159,9 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                     input.push(encode_tool_result(result)?);
                 }
                 ContentPart::ProviderOpaque(data)
-                    if data.provider == "openai" && data.kind == "input_item" =>
+                    if (data.provider == request.model.provider
+                        || data.provider == "openai-compatible")
+                        && data.kind == "input_item" =>
                 {
                     flush_message(&mut input, message.role, &mut message_content)?;
                     input.push(data.value.clone());
@@ -183,7 +217,15 @@ fn flush_message(
     Ok(())
 }
 
-fn encode_image(source: &MediaSource) -> Result<Value, ModelError> {
+fn encode_image(source: &MediaSource, provider: &str) -> Result<Value, ModelError> {
+    if let MediaSource::ProviderFile {
+        provider: owner,
+        file_id,
+    } = source
+    {
+        require_provider_file_owner(owner, provider)?;
+        return Ok(json!({"type": "input_image", "file_id": file_id}));
+    }
     let image_url = match source {
         MediaSource::Url { url, .. } => url.clone(),
         MediaSource::Base64 { media_type, data } => {
@@ -203,7 +245,11 @@ fn encode_image(source: &MediaSource) -> Result<Value, ModelError> {
     Ok(json!({"type": "input_image", "image_url": image_url}))
 }
 
-fn encode_document(source: &MediaSource, name: Option<&str>) -> Result<Value, ModelError> {
+fn encode_document(
+    source: &MediaSource,
+    name: Option<&str>,
+    provider: &str,
+) -> Result<Value, ModelError> {
     match source {
         MediaSource::Url { url, .. } => Ok(json!({
             "type": "input_file",
@@ -217,9 +263,26 @@ fn encode_document(source: &MediaSource, name: Option<&str>) -> Result<Value, Mo
         MediaSource::Artifact { .. } => Err(unsupported(
             "artifact documents must be resolved before provider invocation",
         )),
+        MediaSource::ProviderFile {
+            provider: owner,
+            file_id,
+        } => {
+            require_provider_file_owner(owner, provider)?;
+            Ok(json!({"type": "input_file", "file_id": file_id}))
+        }
         _ => Err(unsupported(
             "document source is newer than this OpenAI adapter",
         )),
+    }
+}
+
+fn require_provider_file_owner(owner: &str, provider: &str) -> Result<(), ModelError> {
+    if owner == provider || owner == "openai-compatible" {
+        Ok(())
+    } else {
+        Err(invalid(format!(
+            "provider file owned by `{owner}` cannot be sent to `{provider}`"
+        )))
     }
 }
 
@@ -351,8 +414,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use runifold_model::{
-        ContentPart, Message, ModelErrorKind, ModelRef, ModelRequest, OutputFormat, Role, ToolCall,
-        ToolSpec,
+        ContentPart, MediaSource, Message, ModelErrorKind, ModelRef, ModelRequest, OutputFormat,
+        ProviderToolSpec, ResponseMode, Role, ToolCall, ToolSpec,
     };
 
     use super::encode_request;
@@ -433,5 +496,57 @@ mod tests {
         let error = encode_request(&request).unwrap_err();
 
         assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
+    }
+
+    #[test]
+    fn ark_native_and_function_tools_share_one_wire_array() {
+        let request = ModelRequest::new(ModelRef::new("ark", "doubao"), Message::user("research"))
+            .tool(ToolSpec {
+                name: "lookup".into(),
+                description: "lookup".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+                metadata: BTreeMap::new(),
+            })
+            .provider_tool(
+                ProviderToolSpec::new("ark", "web_search")
+                    .unwrap()
+                    .option("limit", 8_u32)
+                    .option("max_keyword", 5_u32),
+            );
+
+        let encoded = super::encode_request_for(&request, "ark").unwrap();
+
+        assert_eq!(encoded["tools"][0]["type"], "function");
+        assert_eq!(encoded["tools"][1]["type"], "web_search");
+        assert_eq!(encoded["tools"][1]["limit"], 8);
+    }
+
+    #[test]
+    fn complete_mode_and_provider_file_ids_are_encoded() {
+        let message = Message::new(
+            Role::User,
+            vec![
+                ContentPart::Image {
+                    source: MediaSource::provider_file("ark", "file_image"),
+                },
+                ContentPart::Document {
+                    source: MediaSource::provider_file("ark", "file_document"),
+                    name: Some("report.pdf".into()),
+                },
+            ],
+        )
+        .unwrap();
+        let request = ModelRequest::new(ModelRef::new("ark", "doubao"), message)
+            .response_mode(ResponseMode::Complete);
+
+        let encoded = super::encode_request_for(&request, "ark").unwrap();
+
+        assert_eq!(encoded["stream"], false);
+        assert_eq!(encoded["input"][0]["content"][0]["file_id"], "file_image");
+        assert_eq!(
+            encoded["input"][0]["content"][1]["file_id"],
+            "file_document"
+        );
     }
 }

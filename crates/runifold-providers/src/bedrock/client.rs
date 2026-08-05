@@ -128,6 +128,15 @@ impl BedrockClient {
         ),
         ModelError,
     > {
+        if !matches!(
+            request.selected_response_mode(),
+            runifold_model::ResponseMode::Streaming
+        ) {
+            return Err(ModelError::local(
+                ModelErrorKind::UnsupportedFeature,
+                "Bedrock adapter currently requires streaming response mode",
+            ));
+        }
         if request.model.provider != "bedrock" {
             return Err(invalid(format!(
                 "Bedrock client cannot invoke provider `{}`",

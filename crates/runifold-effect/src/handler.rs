@@ -53,3 +53,28 @@ pub trait EffectHandler: Send + Sync {
         context: EffectExecutionContext,
     ) -> EffectFuture<'_, Result<Value, RunError>>;
 }
+
+/// Result of querying an external system for an ambiguously started effect.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum EffectReconciliation {
+    /// The remote operation completed and this is its canonical output.
+    Completed(Value),
+    /// The remote system proves the operation did not execute.
+    NotExecuted,
+    /// The remote system cannot determine the outcome safely.
+    Ambiguous,
+}
+
+/// Optional remote-state boundary for resolving started effects after a crash.
+///
+/// Implementations should query by the request's stable idempotency key or an
+/// equivalent remote operation identity. They must not perform the effect.
+pub trait EffectReconciler: Send + Sync {
+    /// Queries the external system for the effect's durable outcome.
+    fn reconcile(
+        &self,
+        request: &EffectRequest,
+        context: EffectExecutionContext,
+    ) -> EffectFuture<'_, Result<EffectReconciliation, RunError>>;
+}

@@ -1,4 +1,5 @@
 //! Shared disposable `PostgreSQL`/pgvector integration-test infrastructure.
+#![allow(dead_code)]
 
 use std::{env, time::Duration};
 

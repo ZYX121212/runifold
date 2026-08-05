@@ -46,6 +46,23 @@ pub enum MediaSource {
         /// Optional MIME type.
         media_type: Option<String>,
     },
+    /// A file already uploaded to a provider control plane.
+    ProviderFile {
+        /// Provider namespace that owns the file.
+        provider: String,
+        /// Provider-assigned file identity.
+        file_id: String,
+    },
+}
+
+impl MediaSource {
+    /// Creates a provider-owned file reference.
+    pub fn provider_file(provider: impl Into<String>, file_id: impl Into<String>) -> Self {
+        Self::ProviderFile {
+            provider: provider.into(),
+            file_id: file_id.into(),
+        }
+    }
 }
 
 /// Provider-specific data retained without normalization.

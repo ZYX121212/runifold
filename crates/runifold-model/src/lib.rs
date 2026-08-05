@@ -24,7 +24,8 @@ pub use content::{
 pub use error::{ModelError, ModelErrorKind};
 pub use invocation::{Model, ModelCallContext, ModelEventStream, ModelFuture, ProviderModel};
 pub use request::{
-    FeaturePolicy, GenerationOptions, ModelRef, ModelRequest, OutputFormat, ToolChoice, ToolSpec,
+    FeaturePolicy, GenerationOptions, ModelRef, ModelRequest, OutputFormat, ProviderToolSpec,
+    ResponseMode, ToolChoice, ToolSpec,
 };
 pub use response::{FinishReason, ModelResponse, ModelUsage, ModelWarning};
 pub use retry::{

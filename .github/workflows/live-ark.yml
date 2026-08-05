@@ -1,0 +1,73 @@
+name: Live Ark Responses canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Ark Responses model or endpoint identity
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-ark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  responses:
+    name: Strict schema, tools, and delivery modes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_TERM_COLOR: always
+      ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
+      RUNIFOLD_LIVE_ARK_MODEL: ${{ inputs.model }}
+      RUNIFOLD_LIVE_EVIDENCE_PATH: ${{ github.workspace }}/target/reliability-evidence/ark-live.json
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Require explicit live credential
+        shell: bash
+        run: |
+          if [[ -z "${ARK_API_KEY:-}" ]]; then
+            echo "::error title=Missing live credential::Configure the ARK_API_KEY repository secret before dispatching this workflow."
+            exit 1
+          fi
+
+      - name: Cache Cargo
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-live-ark-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Execute ignored live canary
+        run: |
+          cargo test -p runifold-providers \
+            --features openai \
+            --test ark_live \
+            --locked \
+            -- --ignored
+
+      - name: Reject sensitive evidence
+        shell: bash
+        run: |
+          evidence="$RUNIFOLD_LIVE_EVIDENCE_PATH"
+          [[ -s "$evidence" ]]
+          if grep -E -q 'sk-[A-Za-z0-9_-]{8,}|[A-Fa-f0-9]{8}-[A-Fa-f0-9-]{27,}' "$evidence"; then
+            echo "::error title=Sensitive material in evidence::Ark evidence contained credential-shaped material."
+            exit 1
+          fi
+
+      - name: Upload redacted live evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ark-live-${{ github.sha }}
+          path: target/reliability-evidence/ark-live.json
+          if-no-files-found: error
+          retention-days: 30

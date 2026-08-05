@@ -23,6 +23,8 @@ pub enum EffectExecutorErrorKind {
     DeadlineExceeded,
     /// Stored state violated the protocol.
     Protocol,
+    /// A remote reconciliation query failed without resolving the effect.
+    Reconciliation,
 }
 
 /// Structured failure from effect coordination.
@@ -52,6 +54,22 @@ impl EffectExecutorError {
         Self {
             kind: EffectExecutorErrorKind::Handler,
             message: error.to_string(),
+            source_error: Some(error),
+        }
+    }
+
+    pub(crate) fn reconciliation(error: RunError) -> Self {
+        Self {
+            kind: EffectExecutorErrorKind::Reconciliation,
+            message: error.to_string(),
+            source_error: Some(error),
+        }
+    }
+
+    pub(crate) fn ambiguous_handler(error: RunError) -> Self {
+        Self {
+            kind: EffectExecutorErrorKind::Ambiguous,
+            message: "effect handler failed after the remote outcome became uncertain".into(),
             source_error: Some(error),
         }
     }

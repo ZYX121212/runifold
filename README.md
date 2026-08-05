@@ -39,6 +39,18 @@ let answer = agent
 startup and clone it into request handlers. Clones share retry and
 circuit-breaker state; rebuilding it for every request resets route health.
 
+Applications that only need a low-level model client can omit the Agent,
+Effect, Retrieval, Tool, macro, and Workflow crates:
+
+```console
+cargo add runifold --no-default-features --features ark
+```
+
+This lightweight configuration contains only `runifold-core`,
+`runifold-model`, and `runifold-providers`. Use `ModelRequest` plus
+`Model::invoke` directly. The default feature set retains the complete runtime
+for compatibility; disable default features to select this lightweight kernel.
+
 Compatible providers have first-class modules without separate crates:
 
 ```console
@@ -1190,12 +1202,11 @@ SQLx 0.9, but not SQLx 0.8.x, whose SQLite driver selects the incompatible
 `links = "sqlite3"`, applications using SQLx 0.8 must upgrade SQLx or disable
 Runifold's `sqlite` and `sqlite-bundled` features.
 
-The combined atomic `DurableConversationStore` implementation is currently
-available for `SqliteStore`. `PostgresConversationStore` and
-`PostgresWorkflowStore` are independently durable, but they do not form one
-conversation-and-checkpoint transaction and must not be composed as if they
-did. PostgreSQL support for this boundary requires a shared asynchronous
-transaction contract and is not part of the 0.3.x API.
+The combined atomic `DurableConversationStore` implementation is available for
+both `SqliteStore` and `PostgresConversationStore`. Each terminal transcript
+append and checkpoint compare-and-swap shares one real database transaction.
+`PostgresConversationStore` also implements durable checkpoint and Effect CAS,
+including capability-scoped idempotency indexing.
 
 Intermediate revisions remain write-ahead checkpoints. The final transcript
 append and `Completed` checkpoint revision share one SQLite transaction. An
@@ -1511,7 +1522,7 @@ requirements are documented in the [testing guide](docs/TESTING.md).
 | `runifold-retrieval` | Provider-neutral embeddings, capability-safe retrieval, and a deterministic reference vector index |
 | `runifold-retrieval-pgvector` | Explicit PostgreSQL/pgvector persistence and cosine/HNSW retrieval |
 | `runifold-retrieval-qdrant` | Qdrant REST upsert and query adapter with stable document identity |
-| `runifold-store-postgres` | PostgreSQL conversations, semantic memory, workflow claims, fenced checkpoints, leases, heartbeats, and fencing tokens |
+| `runifold-store-postgres` | PostgreSQL conversations, semantic memory, atomic Agent checkpoints, write-ahead effects, workflow claims, fenced checkpoints, leases, heartbeats, and fencing tokens |
 | `runifold-store-sqlite` | Durable local effects, checkpoints, journals, atomic Agent conversations, fenced Workflow tasks, budgets, HITL, history, and fork/replay in SQLite |
 | `runifold-testkit` | Deterministic runtime helpers, quality datasets, async scorers, and regression gates |
 | `runifold-tool` | Tool descriptors, capability gating, registry, and execution |

@@ -1,7 +1,7 @@
 //! Ergonomic public facade for Runifold.
 //!
 //! The shortest Agent path is provider client construction, fluent assembly,
-//! and [`Agent::prompt_text`]. Applications can opt into explicit
+//! and `Agent::prompt_text`. Applications can opt into explicit
 //! [`RunContext`] construction when they need tighter authority, budgets,
 //! deadlines, observability, or durable execution.
 
@@ -16,6 +16,7 @@ pub mod model {
 }
 
 /// Provider-neutral embeddings, retrieval, and reference vector indexing.
+#[cfg(feature = "runtime")]
 pub mod retrieval {
     pub use runifold_retrieval::*;
 }
@@ -33,6 +34,7 @@ pub mod pgvector {
 }
 
 /// Write-ahead external-effect coordination.
+#[cfg(feature = "runtime")]
 pub mod effect {
     pub use runifold_effect::*;
 }
@@ -65,6 +67,7 @@ pub mod postgres {
 #[cfg(feature = "archive-s3")]
 pub mod archive_s3;
 
+#[cfg(feature = "runtime")]
 pub use runifold_agent::{
     Agent, AgentBuildError, AgentBuilder, AgentCheckpoint, AgentCheckpointPhase,
     AgentCheckpointState, AgentConfig, AgentConversationError, AgentConversationOutcome,
@@ -91,20 +94,25 @@ pub use runifold_core::{
     InMemoryCheckpointStore, InMemoryJournal, Journal, JournalError, LifecycleEvent, RunContext,
     RunEvent, RunEventKind, RunRecorder, Usage,
 };
+#[cfg(feature = "runtime")]
 pub use runifold_effect::{
     EffectEventPayloadPolicy, EffectExecutionContext, EffectExecutor, EffectExecutorError,
-    EffectExecutorErrorKind, EffectFuture, EffectHandler, EffectOutcome, EffectRecord,
-    EffectRecoveryPolicy, EffectStatus, EffectStore, InMemoryEffectStore,
+    EffectExecutorErrorKind, EffectFuture, EffectHandler, EffectOutcome, EffectReconciler,
+    EffectReconciliation, EffectRecord, EffectRecoveryPolicy, EffectStatus, EffectStore,
+    InMemoryEffectStore,
 };
+#[cfg(feature = "runtime")]
 pub use runifold_macros::tool;
 pub use runifold_model::{
-    CircuitBreakerConfig, CircuitBreakerConfigError, CircuitState, Message, Model,
-    ModelCallContext, ModelEventStream, ModelFallbackPolicy, ModelRef, ModelRequest, ModelResponse,
-    ModelRetryPolicy, ModelRetryPolicyError, ModelRoute, ModelRouteHealth, ModelRouter,
-    ModelRouterBuildError, ModelRouterBuilder, OutputFormat, ProviderModel, RetryJitter,
+    CircuitBreakerConfig, CircuitBreakerConfigError, CircuitState, FeaturePolicy,
+    GenerationOptions, MediaSource, Message, Model, ModelCallContext, ModelEventStream,
+    ModelFallbackPolicy, ModelRef, ModelRequest, ModelResponse, ModelRetryPolicy,
+    ModelRetryPolicyError, ModelRoute, ModelRouteHealth, ModelRouter, ModelRouterBuildError,
+    ModelRouterBuilder, OutputFormat, ProviderModel, ProviderToolSpec, ResponseMode, RetryJitter,
     RouterClock, RouterSleepFuture, RouterSleeper, StructuredOutputError,
-    StructuredOutputErrorKind, SystemRouterClock, SystemRouterSleeper,
+    StructuredOutputErrorKind, SupportLevel, SystemRouterClock, SystemRouterSleeper,
 };
+#[cfg(feature = "runtime")]
 pub use runifold_retrieval::{
     Document, DocumentId, Embedding, EmbeddingBatch, EmbeddingFuture, EmbeddingModel,
     EmbeddingRequest, EmbeddingTask, InMemoryVectorIndex, IndexBuildOutcome, RetrievalContext,
@@ -112,10 +120,12 @@ pub use runifold_retrieval::{
     Retriever, RetrieverDescriptor, VectorRecord, VectorRetriever, VectorSearchResponse,
     VectorSearchResult, VectorStore, VectorStoreFuture, VectorUpsertOutcome,
 };
+#[cfg(feature = "runtime")]
 pub use runifold_tool::{
     FunctionTool, IntoToolError, State, Tool, ToolContext, ToolDescriptor, ToolError,
     ToolErrorKind, ToolOutput, ToolRegistry,
 };
+#[cfg(feature = "runtime")]
 pub use runifold_workflow::{
     AgentStep, AgentStepOutput, ClaimedWorkflow, InMemoryWorkflowStore, LeaseDuration,
     ParallelBranch, ParallelBranchCheckpoint, PredicateCondition, StepId, SystemWorkflowClock,
@@ -140,6 +150,7 @@ pub use runifold_workflow::{
     WorkflowWait, WorkflowWaitError, WorkflowWaitOutcome, WorkflowWake, WorkflowWorker,
     WorkflowWorkerError, WorkflowWorkerOutcome, WorkflowWorkerSleepFuture, WorkflowWorkerSleeper,
 };
+#[cfg(feature = "runtime")]
 pub use schemars::{JsonSchema, schema_for};
 
 /// Provider-neutral ergonomics inherited by every concrete model adapter.
@@ -149,6 +160,7 @@ pub use schemars::{JsonSchema, schema_for};
 /// [`ProviderModel`]. Budget enforcement, observability, and durable workflow
 /// execution remain downstream runtime policies over the resulting Agent or
 /// Model rather than provider-specific behavior.
+#[cfg(feature = "runtime")]
 pub trait ProviderModelExt: ProviderModel + Sized + 'static {
     /// Starts an Agent builder using this adapter's canonical provider identity.
     fn agent(self, name: impl Into<String>, model: impl Into<String>) -> AgentBuilder {
@@ -180,6 +192,7 @@ pub trait ProviderModelExt: ProviderModel + Sized + 'static {
     }
 }
 
+#[cfg(feature = "runtime")]
 impl<T> ProviderModelExt for T where T: ProviderModel + Sized + 'static {}
 
 /// Fully composed execution boundary for one provider-qualified model.
@@ -193,6 +206,7 @@ impl<T> ProviderModelExt for T where T: ProviderModel + Sized + 'static {}
 /// Store one runtime in the application container and clone it for request
 /// handlers. Clones share circuit state; calling [`ProviderModelExt::runtime`]
 /// again creates an independent runtime with fresh health state.
+#[cfg(feature = "runtime")]
 #[derive(Clone)]
 pub struct ProviderRuntime {
     model: std::sync::Arc<dyn Model>,
@@ -200,6 +214,7 @@ pub struct ProviderRuntime {
     model_ref: ModelRef,
 }
 
+#[cfg(feature = "runtime")]
 impl ProviderRuntime {
     fn new(router: ModelRouter) -> Self {
         let model_ref = router.logical_model().clone();
@@ -237,6 +252,7 @@ impl ProviderRuntime {
     }
 }
 
+#[cfg(feature = "runtime")]
 impl std::fmt::Debug for ProviderRuntime {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -247,6 +263,7 @@ impl std::fmt::Debug for ProviderRuntime {
     }
 }
 
+#[cfg(feature = "runtime")]
 impl Model for ProviderRuntime {
     fn capabilities<'a>(
         &'a self,
@@ -270,6 +287,7 @@ impl Model for ProviderRuntime {
 /// Native Anthropic Messages API adapter.
 #[cfg(feature = "anthropic")]
 pub mod anthropic {
+    #[cfg(feature = "runtime")]
     pub use crate::ProviderModelExt as AnthropicAgentExt;
     pub use runifold_providers::anthropic::{
         AnthropicClient, AnthropicConfig, AnthropicConfigError, AnthropicEventDecoder,
@@ -279,6 +297,7 @@ pub mod anthropic {
 /// Native Amazon Bedrock Converse Stream adapter.
 #[cfg(feature = "bedrock")]
 pub mod bedrock {
+    #[cfg(feature = "runtime")]
     pub use crate::ProviderModelExt as BedrockAgentExt;
     pub use runifold_providers::bedrock::{
         AwsCredentials, AwsRegion, BedrockClient, BedrockConfigError, BedrockEventDecoder,
@@ -289,6 +308,7 @@ pub mod bedrock {
 /// Native Gemini `GenerateContent` API adapter.
 #[cfg(feature = "gemini")]
 pub mod gemini {
+    #[cfg(feature = "runtime")]
     pub use crate::ProviderModelExt as GeminiAgentExt;
     pub use runifold_providers::gemini::{
         GeminiClient, GeminiConfig, GeminiConfigError, GeminiEmbeddingModel, GeminiEventDecoder,
@@ -298,6 +318,7 @@ pub mod gemini {
 /// Native Ollama chat API adapter.
 #[cfg(feature = "ollama")]
 pub mod ollama {
+    #[cfg(feature = "runtime")]
     pub use crate::ProviderModelExt as OllamaAgentExt;
     pub use runifold_providers::ollama::{
         OllamaChunkDecoder, OllamaClient, OllamaConfig, OllamaConfigError, OllamaEmbeddingModel,
@@ -307,17 +328,19 @@ pub mod ollama {
 /// `OpenAI` Responses API adapter.
 #[cfg(feature = "openai")]
 pub mod openai {
+    #[cfg(feature = "runtime")]
     pub use crate::ProviderModelExt as OpenAiAgentExt;
     pub use runifold_providers::openai::{
         AzureOpenAiApiVersion, OPENAI_REALTIME_MAX_AUDIO_CHUNK_BYTES, OpenAiBatch,
         OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus, OpenAiClient,
         OpenAiCompatibleProfile, OpenAiConfig, OpenAiConfigError, OpenAiControlError,
         OpenAiControlFuture, OpenAiControlPlane, OpenAiEmbeddingModel, OpenAiFile,
-        OpenAiFilePurpose, OpenAiFileUpload, OpenAiModelInfo, OpenAiRealtimeAudioChunk,
-        OpenAiRealtimeAudioFormat, OpenAiRealtimeCall, OpenAiRealtimeCallRequest,
-        OpenAiRealtimeClient, OpenAiRealtimeClientSecret, OpenAiRealtimeClientSecretRequest,
-        OpenAiRealtimeCommand, OpenAiRealtimeConnection, OpenAiRealtimeError, OpenAiRealtimeEvent,
-        OpenAiRealtimeModality, OpenAiRealtimeReconnectAttempt, OpenAiRealtimeReconnectController,
+        OpenAiFileDeletion, OpenAiFilePurpose, OpenAiFileStatus, OpenAiFileUpload,
+        OpenAiFileWaitPolicy, OpenAiModelInfo, OpenAiRealtimeAudioChunk, OpenAiRealtimeAudioFormat,
+        OpenAiRealtimeCall, OpenAiRealtimeCallRequest, OpenAiRealtimeClient,
+        OpenAiRealtimeClientSecret, OpenAiRealtimeClientSecretRequest, OpenAiRealtimeCommand,
+        OpenAiRealtimeConnection, OpenAiRealtimeError, OpenAiRealtimeEvent, OpenAiRealtimeModality,
+        OpenAiRealtimeReconnectAttempt, OpenAiRealtimeReconnectController,
         OpenAiRealtimeReconnectError, OpenAiRealtimeReconnectEvent,
         OpenAiRealtimeReconnectFailureKind, OpenAiRealtimeReconnectPolicy,
         OpenAiRealtimeReconnectPolicyError, OpenAiRealtimeReconnectStopReason,
@@ -335,6 +358,7 @@ pub mod openai {
 /// Azure `OpenAI` v1 Responses adapter.
 #[cfg(feature = "azure")]
 pub mod azure {
+    #[cfg(feature = "runtime")]
     pub use crate::ProviderModelExt as AzureOpenAiAgentExt;
     pub use runifold_providers::openai::{
         AzureOpenAiApiVersion, OpenAiClient as AzureOpenAiClient, OpenAiConfig, OpenAiConfigError,
@@ -381,6 +405,7 @@ macro_rules! compatible_provider_module {
         $(#[$meta])*
         #[cfg(feature = $feature)]
         pub mod $module {
+            #[cfg(feature = "runtime")]
             pub use crate::openai::OpenAiAgentExt as $agent_ext;
             pub use runifold_providers::openai::{
                 OpenAiClient as $client, OpenAiConfigError, OpenAiEmbeddingModel,
@@ -401,14 +426,29 @@ macro_rules! compatible_provider_module {
     };
 }
 
-compatible_provider_module!(
-    /// Volcengine Ark Responses API adapter.
-    "ark",
-    ark,
-    ArkClient,
-    ArkAgentExt,
-    Ark
-);
+/// Volcengine Ark Responses API adapter.
+#[cfg(feature = "ark")]
+pub mod ark {
+    #[cfg(feature = "runtime")]
+    pub use crate::openai::OpenAiAgentExt as ArkAgentExt;
+    pub use runifold_providers::openai::{
+        ArkWebSearchTool, OpenAiClient as ArkClient, OpenAiConfigError, OpenAiEmbeddingModel,
+        OpenAiFile, OpenAiFileDeletion, OpenAiFilePurpose, OpenAiFileStatus, OpenAiFileUpload,
+        OpenAiFileWaitPolicy, OpenAiWireProtocol,
+    };
+
+    /// Creates a client using Ark's verified public Responses endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpenAiConfigError`] when the API key is blank.
+    pub fn client(api_key: impl Into<String>) -> Result<ArkClient, OpenAiConfigError> {
+        ArkClient::from_profile(
+            runifold_providers::openai::OpenAiCompatibleProfile::Ark,
+            api_key,
+        )
+    }
+}
 compatible_provider_module!(
     /// `DeepSeek` Chat Completions API adapter.
     "deepseek",
@@ -485,6 +525,7 @@ compatible_provider_module!(
 /// Alibaba Model Studio OpenAI-compatible adapter.
 #[cfg(feature = "qwen")]
 pub mod qwen {
+    #[cfg(feature = "runtime")]
     pub use crate::openai::OpenAiAgentExt as QwenAgentExt;
     pub use runifold_providers::openai::{
         OpenAiClient as QwenClient, OpenAiConfigError, OpenAiEmbeddingModel, OpenAiWireProtocol,
@@ -522,6 +563,7 @@ pub mod qwen {
 /// `MiniMax` OpenAI-compatible adapter.
 #[cfg(feature = "minimax")]
 pub mod minimax {
+    #[cfg(feature = "runtime")]
     pub use crate::openai::OpenAiAgentExt as MiniMaxAgentExt;
     pub use runifold_providers::openai::{
         OpenAiClient as MiniMaxClient, OpenAiConfigError, OpenAiEmbeddingModel, OpenAiWireProtocol,
@@ -556,7 +598,7 @@ pub mod minimax {
     }
 }
 
-#[cfg(all(test, feature = "anthropic"))]
+#[cfg(all(test, feature = "anthropic", feature = "runtime"))]
 mod anthropic_tests {
     use crate::anthropic::{AnthropicAgentExt, AnthropicClient};
 
@@ -573,7 +615,7 @@ mod anthropic_tests {
     }
 }
 
-#[cfg(all(test, feature = "bedrock"))]
+#[cfg(all(test, feature = "bedrock", feature = "runtime"))]
 mod bedrock_tests {
     use crate::bedrock::{BedrockAgentExt, BedrockClient};
 
@@ -595,7 +637,7 @@ mod bedrock_tests {
     }
 }
 
-#[cfg(all(test, feature = "openai"))]
+#[cfg(all(test, feature = "openai", feature = "runtime"))]
 mod tests {
     use crate::openai::{OpenAiAgentExt, OpenAiClient, OpenAiConfig};
 
