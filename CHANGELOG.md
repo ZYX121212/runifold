@@ -6,6 +6,14 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-06
+
+- Allowed the OSI-approved MIT-0 license used by the `borrow-or-share`
+  transitive dependency so the crates.io supply-chain gate accepts the
+  verified release graph.
+- Reissued the 0.4.0 rich Tool-result and Artifact release payload after its
+  GitHub preflight stopped before creating a release or publishing any crate.
+
 ## [0.4.0] - 2026-08-06
 
 - Replaced scalar Tool results with ordered rich content, separately validated
