@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    ContentPart, FinishReason, ModelError, ModelErrorKind, ModelRef, ModelResponse, ModelUsage,
-    ModelWarning, ProviderData, ReasoningPart, ToolCall,
+    ContentPart, DEFAULT_MAX_ARTIFACT_BYTES, FinishReason, MediaSource, ModelError, ModelErrorKind,
+    ModelRef, ModelResponse, ModelUsage, ModelWarning, ProviderData, ReasoningPart, ToolCall,
 };
 
 /// The type and initial metadata of a streamed content block.
@@ -31,6 +32,23 @@ pub enum ContentBlockKind {
     },
     /// A streamed refusal.
     Refusal,
+    /// Streamed image output.
+    Image {
+        /// MIME type of the completed image.
+        media_type: String,
+    },
+    /// Streamed audio output.
+    Audio {
+        /// MIME type of the completed audio.
+        media_type: String,
+    },
+    /// Streamed document output.
+    Document {
+        /// MIME type of the completed document.
+        media_type: String,
+        /// Optional neutral display name.
+        name: Option<String>,
+    },
 }
 
 /// A provider event retained without normalization.
@@ -98,6 +116,13 @@ pub enum ModelStreamEvent {
         /// Appended refusal text.
         text: String,
     },
+    /// One independently base64-encoded binary media chunk.
+    BinaryDelta {
+        /// Target image, audio, or document block index.
+        index: u32,
+        /// Base64-encoded chunk bytes.
+        data: String,
+    },
     /// A delta-capable block completed.
     ContentBlockCompleted {
         /// Completed block index.
@@ -150,6 +175,24 @@ enum PartialBlock {
         arguments: String,
     },
     Refusal(String),
+    Media {
+        kind: PartialMediaKind,
+        bytes: Vec<u8>,
+    },
+}
+
+#[derive(Debug)]
+enum PartialMediaKind {
+    Image {
+        media_type: String,
+    },
+    Audio {
+        media_type: String,
+    },
+    Document {
+        media_type: String,
+        name: Option<String>,
+    },
 }
 
 impl PartialBlock {
@@ -170,6 +213,18 @@ impl PartialBlock {
                 arguments: String::new(),
             },
             ContentBlockKind::Refusal => Self::Refusal(String::new()),
+            ContentBlockKind::Image { media_type } => Self::Media {
+                kind: PartialMediaKind::Image { media_type },
+                bytes: Vec::new(),
+            },
+            ContentBlockKind::Audio { media_type } => Self::Media {
+                kind: PartialMediaKind::Audio { media_type },
+                bytes: Vec::new(),
+            },
+            ContentBlockKind::Document { media_type, name } => Self::Media {
+                kind: PartialMediaKind::Document { media_type, name },
+                bytes: Vec::new(),
+            },
         }
     }
 
@@ -210,6 +265,21 @@ impl PartialBlock {
                 }))
             }
             Self::Refusal(text) => Ok(ContentPart::Refusal { text }),
+            Self::Media { kind, bytes } => {
+                let data = STANDARD.encode(bytes);
+                Ok(match kind {
+                    PartialMediaKind::Image { media_type } => ContentPart::Image {
+                        source: MediaSource::Base64 { media_type, data },
+                    },
+                    PartialMediaKind::Audio { media_type } => ContentPart::Audio {
+                        source: MediaSource::Base64 { media_type, data },
+                    },
+                    PartialMediaKind::Document { media_type, name } => ContentPart::Document {
+                        source: MediaSource::Base64 { media_type, data },
+                        name,
+                    },
+                })
+            }
         }
     }
 }
@@ -283,6 +353,26 @@ impl ModelStreamAccumulator {
                 match self.open_block_mut(index)? {
                     PartialBlock::Refusal(current) => current.push_str(&text),
                     _ => return Err(wrong_delta(index, "refusal")),
+                }
+                Ok(None)
+            }
+            ModelStreamEvent::BinaryDelta { index, data } => {
+                let decoded = STANDARD.decode(data).map_err(|error| {
+                    state_error(format!("binary delta {index} is invalid base64: {error}"))
+                })?;
+                match self.open_block_mut(index)? {
+                    PartialBlock::Media { bytes, .. } => {
+                        let next = bytes.len().checked_add(decoded.len()).ok_or_else(|| {
+                            state_error(format!("binary block {index} size overflow"))
+                        })?;
+                        if next > DEFAULT_MAX_ARTIFACT_BYTES {
+                            return Err(state_error(format!(
+                                "binary block {index} exceeds the {DEFAULT_MAX_ARTIFACT_BYTES}-byte limit"
+                            )));
+                        }
+                        bytes.extend_from_slice(&decoded);
+                    }
+                    _ => return Err(wrong_delta(index, "binary media")),
                 }
                 Ok(None)
             }
@@ -443,7 +533,8 @@ mod tests {
 
     use super::{ContentBlockKind, ModelStreamAccumulator, ModelStreamEvent, ProviderEvent};
     use crate::{
-        ContentPart, FinishReason, ModelErrorKind, ModelRef, ModelUsage, ModelWarning, ToolCall,
+        ContentPart, FinishReason, MediaSource, ModelErrorKind, ModelRef, ModelUsage, ModelWarning,
+        ToolCall,
     };
 
     fn started() -> ModelStreamEvent {
@@ -604,5 +695,36 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.kind, ModelErrorKind::MalformedToolArguments);
+    }
+
+    #[test]
+    fn accumulates_bounded_binary_media_chunks() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        accumulator.push(started()).unwrap();
+        accumulator
+            .push(ModelStreamEvent::ContentBlockStarted {
+                index: 0,
+                kind: ContentBlockKind::Image {
+                    media_type: "image/png".into(),
+                },
+            })
+            .unwrap();
+        accumulator
+            .push(ModelStreamEvent::BinaryDelta {
+                index: 0,
+                data: "cG5n".into(),
+            })
+            .unwrap();
+        accumulator
+            .push(ModelStreamEvent::ContentBlockCompleted { index: 0 })
+            .unwrap();
+        let response = accumulator.push(completed()).unwrap().unwrap();
+
+        assert!(matches!(
+            &response.content[0],
+            ContentPart::Image {
+                source: MediaSource::Base64 { media_type, data }
+            } if media_type == "image/png" && data == "cG5n"
+        ));
     }
 }

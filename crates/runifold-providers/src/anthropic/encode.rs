@@ -216,7 +216,7 @@ fn encode_media(source: &MediaSource) -> Result<Value, ModelError> {
 }
 
 fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
-    let content = result
+    let mut content = result
         .content
         .iter()
         .map(|part| match part {
@@ -224,11 +224,22 @@ fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
             ContentPart::Image { source } => {
                 Ok(json!({"type": "image", "source": encode_media(source)?}))
             }
+            ContentPart::ResourceLink { uri, .. } => Ok(json!({"type": "text", "text": uri})),
             _ => Err(unsupported(
-                "Anthropic tool results currently support text and images",
+                "Anthropic tool results currently support text, images, and resource links",
             )),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if let Some(structured) = &result.structured_content {
+        let encoded = structured.to_string();
+        let already_present = result
+            .content
+            .iter()
+            .any(|part| matches!(part, ContentPart::Text { text } if text == &encoded));
+        if !already_present {
+            content.push(json!({"type":"text","text":encoded}));
+        }
+    }
     Ok(json!({
         "type": "tool_result",
         "tool_use_id": result.call_id,

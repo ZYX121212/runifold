@@ -104,7 +104,7 @@ fn attribute_generates_a_typed_canonical_tool() {
         futures_executor::block_on(tools.invoke("add", json!({"left": 20, "right": 22}), &run))
             .unwrap();
 
-    assert_eq!(output.value, json!({"sum": 42}));
+    assert_eq!(output.structured_content, Some(json!({"sum": 42})));
 }
 
 #[test]
@@ -127,7 +127,7 @@ fn attribute_injects_host_state_and_maps_application_errors_explicitly() {
 
     let output =
         futures_executor::block_on(tools.invoke("scale", json!({"value": 14}), &run)).unwrap();
-    assert_eq!(output.value, json!({"value": 42}));
+    assert_eq!(output.structured_content, Some(json!({"value": 42})));
 
     let error =
         futures_executor::block_on(tools.invoke("scale", json!({"value": -1}), &run)).unwrap_err();

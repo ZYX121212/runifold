@@ -191,7 +191,7 @@ mod tests {
         ))
         .unwrap();
 
-        assert_eq!(output.value, json!({"sum": 5}));
+        assert_eq!(output.structured_content, Some(json!({"sum": 5})));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 

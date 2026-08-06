@@ -114,6 +114,30 @@ impl PostgresConversationStore {
             );
             CREATE INDEX IF NOT EXISTS {table}_effects_capability_key
                 ON {table}_effects (capability_id, idempotency_key);
+
+            CREATE TABLE IF NOT EXISTS {table}_artifacts (
+                scope TEXT NOT NULL,
+                artifact_id TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+                sha256 TEXT NOT NULL,
+                name TEXT,
+                bytes BYTEA NOT NULL,
+                created_at_ms BIGINT NOT NULL CHECK (created_at_ms >= 0),
+                expires_at_ms BIGINT CHECK (expires_at_ms >= 0),
+                PRIMARY KEY (scope, artifact_id)
+            );
+            CREATE INDEX IF NOT EXISTS {table}_artifacts_scope_expiry
+                ON {table}_artifacts (scope, expires_at_ms, artifact_id);
+
+            CREATE TABLE IF NOT EXISTS {table}_artifact_idempotency (
+                scope TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                artifact_id TEXT NOT NULL,
+                PRIMARY KEY (scope, idempotency_key),
+                FOREIGN KEY (scope, artifact_id)
+                    REFERENCES {table}_artifacts(scope, artifact_id) ON DELETE CASCADE
+            );
             "
         )
     }

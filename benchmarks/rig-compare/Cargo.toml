@@ -10,9 +10,9 @@ publish = false
 anyhow = "1"
 futures-util = "0.3"
 rig-core = "=0.40.0"
-runifold-model = { version = "0.3.1", path = "../../crates/runifold-model" }
-runifold-provider-testkit = { version = "0.3.1", path = "../../crates/runifold-provider-testkit" }
-runifold-providers = { version = "0.3.1", path = "../../crates/runifold-providers", features = ["openai"] }
+runifold-model = { version = "0.4.0", path = "../../crates/runifold-model" }
+runifold-provider-testkit = { version = "0.4.0", path = "../../crates/runifold-provider-testkit" }
+runifold-providers = { version = "0.4.0", path = "../../crates/runifold-providers", features = ["openai"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

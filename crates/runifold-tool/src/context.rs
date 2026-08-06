@@ -1,14 +1,17 @@
-use std::time::Duration;
+use std::{fmt, sync::Arc, time::Duration};
 
 use runifold_core::{CancellationToken, Instant, InvocationId, RunContext, RunId};
+use runifold_model::{ArtifactScope, ArtifactStore};
 
 /// Execution scope for one tool invocation.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ToolContext {
     invocation_id: InvocationId,
     run_id: RunId,
     deadline: Option<Instant>,
     cancellation: CancellationToken,
+    artifact_store: Option<Arc<dyn ArtifactStore>>,
+    artifact_scope: Option<ArtifactScope>,
 }
 
 impl ToolContext {
@@ -18,6 +21,8 @@ impl ToolContext {
             run_id: run.run_id(),
             deadline: run.deadline(),
             cancellation: run.cancellation().child_token(),
+            artifact_store: None,
+            artifact_scope: None,
         }
     }
 
@@ -45,5 +50,39 @@ impl ToolContext {
     /// Returns the hierarchical cancellation token.
     pub const fn cancellation(&self) -> &CancellationToken {
         &self.cancellation
+    }
+
+    pub(crate) fn with_artifact_store(
+        mut self,
+        scope: Option<ArtifactScope>,
+        store: Option<Arc<dyn ArtifactStore>>,
+    ) -> Self {
+        self.artifact_scope = scope;
+        self.artifact_store = store;
+        self
+    }
+
+    /// Returns the configured artifact store for producing reference-only rich
+    /// results.
+    pub fn artifact_store(&self) -> Option<&Arc<dyn ArtifactStore>> {
+        self.artifact_store.as_ref()
+    }
+
+    /// Returns the mandatory isolation scope paired with the artifact store.
+    pub const fn artifact_scope(&self) -> Option<&ArtifactScope> {
+        self.artifact_scope.as_ref()
+    }
+}
+
+impl fmt::Debug for ToolContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToolContext")
+            .field("invocation_id", &self.invocation_id)
+            .field("run_id", &self.run_id)
+            .field("deadline", &self.deadline)
+            .field("artifact_store", &self.artifact_store.is_some())
+            .field("artifact_scope", &self.artifact_scope)
+            .finish_non_exhaustive()
     }
 }

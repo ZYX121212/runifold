@@ -14,7 +14,7 @@ publish.workspace = true
 [features]
 default = []
 anthropic = ["dep:eventsource-stream", "dep:httpdate"]
-bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types"]
+bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types", "dep:base64"]
 gemini = ["dep:eventsource-stream", "dep:runifold-retrieval"]
 ollama = ["dep:runifold-retrieval"]
 openai = [

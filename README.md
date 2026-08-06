@@ -39,6 +39,29 @@ let answer = agent
 startup and clone it into request handlers. Clones share retry and
 circuit-breaker state; rebuilding it for every request resets route health.
 
+Tools can return ordered text, images, audio, documents, resource links, and a
+separate structured value without flattening everything into a JSON string.
+For large or durable media, configure one shared artifact store on the Agent:
+
+```rust,ignore
+use std::sync::Arc;
+use runifold::{ArtifactScope, ArtifactStore, ProviderModelExt, sqlite::SqliteStore};
+
+let store = Arc::new(SqliteStore::open("runifold.db")?);
+let artifacts: Arc<dyn ArtifactStore> = store.clone();
+let scope = ArtifactScope::parse("tenant.acme")?;
+let agent = client
+    .runtime("gpt-5")?
+    .agent("assistant")
+    .artifacts(scope, artifacts);
+```
+
+Tools access that store through `ToolContext::artifact_store`, write with a
+stable idempotency key, and return `ArtifactRef::media_source()`. Runifold
+keeps references in durable transcripts/checkpoints and verifies/resolves the
+bytes only at the Provider transport boundary. See
+[RFC 0072](docs/rfcs/0072-rich-tool-results-and-artifacts.md).
+
 Applications that only need a low-level model client can omit the Agent,
 Effect, Retrieval, Tool, macro, and Workflow crates:
 

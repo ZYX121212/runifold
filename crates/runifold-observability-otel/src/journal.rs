@@ -446,11 +446,35 @@ impl JournalState {
         let Some(call_id) = string_field(domain, "call_id") else {
             return;
         };
-        self.finish_operation(
-            correlation,
-            &OperationKey::new(run_id, kind, call_id),
-            failed,
-        );
+        let key = OperationKey::new(run_id, kind, call_id);
+        if let Some(operation) = self.operations.get(&key) {
+            for (name, field) in [
+                ("runifold.tool.content.count", "content_count"),
+                ("runifold.tool.media.count", "media_count"),
+                ("runifold.tool.artifact.count", "artifact_count"),
+            ] {
+                if let Some(value) = u64_field(domain, field)
+                    && let Ok(value) = i64::try_from(value)
+                {
+                    operation
+                        .context
+                        .span()
+                        .set_attribute(KeyValue::new(name, value));
+                }
+            }
+            for (name, field) in [
+                ("runifold.tool.structured_content", "structured_content"),
+                ("runifold.tool.application_error", "application_error"),
+            ] {
+                if let Some(value) = bool_field(domain, field) {
+                    operation
+                        .context
+                        .span()
+                        .set_attribute(KeyValue::new(name, value));
+                }
+            }
+        }
+        self.finish_operation(correlation, &key, failed);
     }
 
     fn start_workflow_step(
@@ -680,6 +704,14 @@ fn string_field<'a>(domain: &'a DomainEvent, key: &str) -> Option<&'a str> {
     domain.payload.get(key)?.as_str()
 }
 
+fn u64_field(domain: &DomainEvent, key: &str) -> Option<u64> {
+    domain.payload.get(key)?.as_u64()
+}
+
+fn bool_field(domain: &DomainEvent, key: &str) -> Option<bool> {
+    domain.payload.get(key)?.as_bool()
+}
+
 #[cfg(test)]
 mod tests {
     use opentelemetry::trace::{SpanId, Status};
@@ -736,13 +768,22 @@ mod tests {
             "delegation",
             "researcher",
         );
-        record_callable(
+        record(
             &journal,
             &factory,
-            "tool.completed",
-            "call-1",
-            "tool",
-            "search",
+            domain(
+                "runifold.agent",
+                "tool.completed",
+                serde_json::json!({
+                    "call_id":"call-1",
+                    "tool":"search",
+                    "content_count":3,
+                    "media_count":2,
+                    "artifact_count":1,
+                    "structured_content":true,
+                    "application_error":false
+                }),
+            ),
         );
         record(
             &journal,
@@ -770,6 +811,13 @@ mod tests {
             attribute(tool, "gen_ai.tool.call.id"),
             Some("call-1".into())
         );
+        for (key, expected) in [
+            ("runifold.tool.media.count", "2"),
+            ("runifold.tool.artifact.count", "1"),
+            ("runifold.tool.structured_content", "true"),
+        ] {
+            assert_eq!(attribute(tool, key).as_deref(), Some(expected));
+        }
         assert_eq!(
             attribute(delegation, "gen_ai.agent.name"),
             Some("researcher".into())

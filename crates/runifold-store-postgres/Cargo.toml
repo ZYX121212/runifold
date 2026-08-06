@@ -14,14 +14,15 @@ publish.workspace = true
 [dependencies]
 pgvector = { version = "0.4.2", features = ["postgres"] }
 postgres = { version = "0.19.12", features = ["with-serde_json-1", "with-uuid-1"] }
-runifold-agent = { version = "0.3.2", path = "../runifold-agent" }
+runifold-agent = { version = "0.4.0", path = "../runifold-agent" }
 runifold-core.workspace = true
-runifold-effect = { version = "0.3.2", path = "../runifold-effect" }
-runifold-model = { version = "0.3.2", path = "../runifold-model" }
-runifold-retrieval = { version = "0.3.2", path = "../runifold-retrieval" }
+runifold-effect = { version = "0.4.0", path = "../runifold-effect" }
+runifold-model = { version = "0.4.0", path = "../runifold-model" }
+runifold-retrieval = { version = "0.4.0", path = "../runifold-retrieval" }
 runifold-workflow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha2 = "0.11.0"
 thiserror.workspace = true
 tokio = { version = "1.53.1", features = ["rt", "sync"] }
 tokio-postgres = { version = "0.7.18", features = ["with-serde_json-1", "with-uuid-1"] }

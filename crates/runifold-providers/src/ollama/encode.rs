@@ -138,16 +138,24 @@ fn encode_message(role: Role, parts: &[ContentPart]) -> Result<Value, ModelError
 }
 
 fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
-    let content = result
+    let mut content = result
         .content
         .iter()
         .map(|part| match part {
             ContentPart::Text { text } => Ok(text.clone()),
-            _ => serde_json::to_string(part)
-                .map_err(|error| invalid(format!("invalid tool result: {error}"))),
+            ContentPart::ResourceLink { uri, .. } => Ok(uri.clone()),
+            _ => Err(unsupported(
+                "Ollama tool results support text and resource links only",
+            )),
         })
-        .collect::<Result<Vec<_>, _>>()?
-        .join("\n");
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(structured) = &result.structured_content {
+        let encoded = structured.to_string();
+        if !content.iter().any(|item| item == &encoded) {
+            content.push(encoded);
+        }
+    }
+    let content = content.join("\n");
     let mut message = json!({"role":"tool","content":content});
     if let Some(name) = &result.name {
         message["tool_name"] = Value::String(name.clone());

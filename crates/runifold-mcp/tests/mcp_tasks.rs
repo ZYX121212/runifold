@@ -300,6 +300,7 @@ fn tool_result(arguments: Value) -> Value {
         content: vec![ContentBlock::text("done")],
         structured_content: Some(arguments),
         is_error: false,
+        metadata: std::collections::BTreeMap::new(),
     })
     .expect("Tool result is serializable")
 }

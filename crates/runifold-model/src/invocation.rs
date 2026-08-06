@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use futures_core::Stream;
 use futures_util::{
@@ -188,6 +188,26 @@ pub trait Model: Send + Sync {
     }
 }
 
+impl<T> Model for Arc<T>
+where
+    T: Model + ?Sized,
+{
+    fn capabilities<'a>(
+        &'a self,
+        model: &'a ModelRef,
+    ) -> ModelFuture<'a, Result<ModelCapabilities, ModelError>> {
+        (**self).capabilities(model)
+    }
+
+    fn stream(
+        &self,
+        request: ModelRequest,
+        context: ModelCallContext,
+    ) -> ModelFuture<'_, Result<ModelEventStream, ModelError>> {
+        (**self).stream(request, context)
+    }
+}
+
 /// Stable provider identity carried by a concrete model adapter.
 ///
 /// Implementing this trait in addition to [`Model`] lets higher runtime layers
@@ -204,6 +224,15 @@ pub trait ProviderModel: Model {
         Self: Sized,
     {
         ModelRef::new(self.provider(), model)
+    }
+}
+
+impl<T> ProviderModel for Arc<T>
+where
+    T: ProviderModel + ?Sized,
+{
+    fn provider(&self) -> &str {
+        (**self).provider()
     }
 }
 

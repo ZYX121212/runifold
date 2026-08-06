@@ -3,13 +3,16 @@
 use std::collections::HashMap;
 
 use aws_sdk_bedrockruntime::types::{
-    AnyToolChoice, AutoToolChoice, ContentBlock, ConversationRole, InferenceConfiguration, Message,
+    AnyToolChoice, AutoToolChoice, ContentBlock, ConversationRole, DocumentBlock, DocumentFormat,
+    DocumentSource, ImageBlock, ImageFormat, ImageSource, InferenceConfiguration, Message,
     SpecificToolChoice, SystemContentBlock, Tool, ToolConfiguration, ToolInputSchema,
     ToolResultBlock, ToolResultContentBlock, ToolResultStatus, ToolSpecification, ToolUseBlock,
 };
-use aws_smithy_types::{Document, Number};
+use aws_smithy_types::{Blob, Document, Number};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use runifold_model::{
-    ContentPart, ModelError, ModelErrorKind, ModelRequest, OutputFormat, Role, ToolChoice,
+    ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, Role,
+    ToolChoice,
 };
 use serde_json::Value;
 
@@ -127,16 +130,29 @@ fn encode_content(part: &ContentPart, role: Role) -> Result<ContentBlock, ModelE
                 .map_err(build_error)?,
         )),
         ContentPart::ToolResult(result) if matches!(role, Role::User | Role::Tool) => {
-            let content = result
+            let mut content = result
                 .content
                 .iter()
                 .map(|part| match part {
                     ContentPart::Text { text } => Ok(ToolResultContentBlock::Text(text.clone())),
+                    ContentPart::ResourceLink { uri, .. } => {
+                        Ok(ToolResultContentBlock::Text(uri.clone()))
+                    }
+                    ContentPart::Image { source } => encode_tool_image(source),
+                    ContentPart::Document { source, name } => {
+                        encode_tool_document(source, name.as_deref())
+                    }
                     _ => Err(unsupported(
-                        "Bedrock tool results currently support text content only",
+                        "Bedrock tool results support text, JSON, inline images, inline documents, and resource links; audio is not a Converse ToolResult variant",
                     )),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            if let Some(structured) = &result.structured_content {
+                content.insert(
+                    0,
+                    ToolResultContentBlock::Json(json_to_document(structured)?),
+                );
+            }
             let status = if result.is_error {
                 ToolResultStatus::Error
             } else {
@@ -173,6 +189,89 @@ fn encode_content(part: &ContentPart, role: Role) -> Result<ContentBlock, ModelE
             "content variant is newer than this Bedrock adapter",
         )),
     }
+}
+
+fn encode_tool_image(source: &MediaSource) -> Result<ToolResultContentBlock, ModelError> {
+    let MediaSource::Base64 { media_type, data } = source else {
+        return Err(unsupported(
+            "Bedrock image Tool results require resolved inline bytes",
+        ));
+    };
+    let format = match media_type.as_str() {
+        "image/png" => ImageFormat::Png,
+        "image/jpeg" => ImageFormat::Jpeg,
+        "image/gif" => ImageFormat::Gif,
+        "image/webp" => ImageFormat::Webp,
+        _ => {
+            return Err(unsupported(
+                "Bedrock image Tool result MIME type is unsupported",
+            ));
+        }
+    };
+    let bytes = STANDARD
+        .decode(data)
+        .map_err(|_| invalid("Bedrock image Tool result contains invalid base64"))?;
+    let image = ImageBlock::builder()
+        .format(format)
+        .source(ImageSource::Bytes(Blob::new(bytes)))
+        .build()
+        .map_err(build_error)?;
+    Ok(ToolResultContentBlock::Image(image))
+}
+
+fn encode_tool_document(
+    source: &MediaSource,
+    name: Option<&str>,
+) -> Result<ToolResultContentBlock, ModelError> {
+    let MediaSource::Base64 { media_type, data } = source else {
+        return Err(unsupported(
+            "Bedrock document Tool results require resolved inline bytes",
+        ));
+    };
+    let format = document_format(media_type)?;
+    let name = neutral_document_name(name.unwrap_or("document"))?;
+    let bytes = STANDARD
+        .decode(data)
+        .map_err(|_| invalid("Bedrock document Tool result contains invalid base64"))?;
+    let document = DocumentBlock::builder()
+        .format(format)
+        .name(name)
+        .source(DocumentSource::Bytes(Blob::new(bytes)))
+        .build()
+        .map_err(build_error)?;
+    Ok(ToolResultContentBlock::Document(document))
+}
+
+fn document_format(media_type: &str) -> Result<DocumentFormat, ModelError> {
+    match media_type {
+        "application/pdf" => Ok(DocumentFormat::Pdf),
+        "text/plain" => Ok(DocumentFormat::Txt),
+        "text/markdown" => Ok(DocumentFormat::Md),
+        "text/csv" => Ok(DocumentFormat::Csv),
+        "text/html" => Ok(DocumentFormat::Html),
+        "application/msword" => Ok(DocumentFormat::Doc),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
+            Ok(DocumentFormat::Docx)
+        }
+        _ => Err(unsupported(
+            "Bedrock document Tool result MIME type is unsupported",
+        )),
+    }
+}
+
+fn neutral_document_name(name: &str) -> Result<&str, ModelError> {
+    if name.is_empty()
+        || name.len() > 128
+        || !name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'-' | b'(' | b')' | b'[' | b']')
+        })
+        || name.contains("  ")
+    {
+        return Err(invalid(
+            "Bedrock document name must be neutral and use only supported characters",
+        ));
+    }
+    Ok(name)
 }
 
 fn encode_tools(request: &ModelRequest) -> Result<Option<ToolConfiguration>, ModelError> {
@@ -309,7 +408,10 @@ fn unsupported(message: impl Into<String>) -> ModelError {
 mod tests {
     use std::collections::BTreeMap;
 
-    use runifold_model::{Message, ModelRef, ModelRequest, ToolChoice, ToolSpec};
+    use runifold_model::{
+        ContentPart, MediaSource, Message, ModelRef, ModelRequest, Role, ToolChoice, ToolResult,
+        ToolSpec,
+    };
 
     use super::encode_request;
 
@@ -348,5 +450,38 @@ mod tests {
             1
         );
         assert!(encoded.additional_fields.is_some());
+    }
+
+    #[test]
+    fn encodes_native_image_and_document_tool_results() {
+        let result = ToolResult {
+            call_id: "call-media".into(),
+            name: Some("render".into()),
+            content: vec![
+                ContentPart::Image {
+                    source: MediaSource::Base64 {
+                        media_type: "image/png".into(),
+                        data: "iVBORw0KGgo=".into(),
+                    },
+                },
+                ContentPart::Document {
+                    source: MediaSource::Base64 {
+                        media_type: "application/pdf".into(),
+                        data: "JVBERi0=".into(),
+                    },
+                    name: Some("report".into()),
+                },
+            ],
+            structured_content: None,
+            is_error: false,
+            metadata: BTreeMap::new(),
+        };
+        let message = Message::new(Role::Tool, vec![ContentPart::ToolResult(result)]).unwrap();
+        let request = ModelRequest::new(ModelRef::new("bedrock", "model"), message);
+
+        let encoded = encode_request(&request).unwrap();
+        let tool_result = encoded.messages[0].content()[0].as_tool_result().unwrap();
+        assert!(tool_result.content()[0].is_image());
+        assert!(tool_result.content()[1].is_document());
     }
 }

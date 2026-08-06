@@ -3,8 +3,8 @@ use std::sync::Arc;
 use runifold_core::CapabilitySet;
 use runifold_effect::{EffectExecutor, EffectRecoveryPolicy};
 use runifold_model::{
-    FeaturePolicy, GenerationOptions, Message, Model, ModelRef, OutputFormat, ProviderToolSpec,
-    ResponseMode,
+    ArtifactResolvingModel, ArtifactScope, ArtifactStore, FeaturePolicy, GenerationOptions,
+    Message, Model, ModelRef, OutputFormat, ProviderToolSpec, ResponseMode,
 };
 use runifold_retrieval::{Document, RetrievalError, Retriever};
 use runifold_tool::{Tool, ToolRegistrationError};
@@ -100,6 +100,19 @@ impl AgentBuilder {
         if self.error.is_none() {
             self.agent.context.push(document);
         }
+        self
+    }
+
+    /// Configures reference-only artifact persistence for Tools and resolves
+    /// those references only at the final model transport boundary.
+    #[must_use]
+    pub fn artifacts(mut self, scope: ArtifactScope, store: Arc<dyn ArtifactStore>) -> Self {
+        self.agent.model = Arc::new(ArtifactResolvingModel::new(
+            self.agent.model.clone(),
+            scope.clone(),
+            store.clone(),
+        ));
+        self.agent.tools = self.agent.tools.clone().with_artifact_store(scope, store);
         self
     }
 

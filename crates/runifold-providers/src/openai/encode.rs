@@ -156,7 +156,7 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                 }
                 ContentPart::ToolResult(result) => {
                     flush_message(&mut input, message.role, &mut message_content)?;
-                    input.push(encode_tool_result(result)?);
+                    input.push(encode_tool_result(result, &request.model.provider)?);
                 }
                 ContentPart::ProviderOpaque(data)
                     if (data.provider == request.model.provider
@@ -286,24 +286,60 @@ fn require_provider_file_owner(owner: &str, provider: &str) -> Result<(), ModelE
     }
 }
 
-fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
-    let text = result
-        .content
-        .iter()
-        .map(|part| match part {
-            ContentPart::Text { text } => Ok(text.clone()),
-            _ => serde_json::to_string(part).map_err(|error| {
-                invalid(format!(
-                    "failed to encode rich tool result content: {error}"
-                ))
-            }),
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .join("\n");
-    let output = if result.is_error {
-        json!({"error": text}).to_string()
+fn encode_tool_result(result: &ToolResult, provider: &str) -> Result<Value, ModelError> {
+    let mut text = Vec::new();
+    let mut rich = Vec::new();
+    for part in &result.content {
+        match part {
+            ContentPart::Text { text: value } => text.push(value.clone()),
+            ContentPart::Image { source } => rich.push(encode_image(source, provider)?),
+            ContentPart::Document { source, name } => {
+                rich.push(encode_document(source, name.as_deref(), provider)?);
+            }
+            ContentPart::ResourceLink {
+                uri,
+                name,
+                media_type,
+                ..
+            } => {
+                let source = MediaSource::Url {
+                    url: uri.clone(),
+                    media_type: media_type.clone(),
+                };
+                if media_type
+                    .as_deref()
+                    .is_some_and(|kind| kind.starts_with("image/"))
+                {
+                    rich.push(encode_image(&source, provider)?);
+                } else {
+                    rich.push(encode_document(&source, Some(name), provider)?);
+                }
+            }
+            _ => {
+                return Err(unsupported(
+                    "OpenAI function results support text, images, documents, and resource links",
+                ));
+            }
+        }
+    }
+    if let Some(structured) = &result.structured_content {
+        let encoded = structured.to_string();
+        if !text.iter().any(|item| item == &encoded) {
+            text.push(encoded);
+        }
+    }
+    if result.is_error {
+        text.insert(0, "Tool execution reported an application error.".into());
+    }
+    let output = if rich.is_empty() {
+        Value::String(text.join("\n"))
     } else {
-        text
+        let mut content = text
+            .into_iter()
+            .map(|text| json!({"type":"input_text","text":text}))
+            .collect::<Vec<_>>();
+        content.extend(rich);
+        Value::Array(content)
     };
     Ok(json!({
         "type": "function_call_output",
@@ -415,7 +451,7 @@ mod tests {
 
     use runifold_model::{
         ContentPart, MediaSource, Message, ModelErrorKind, ModelRef, ModelRequest, OutputFormat,
-        ProviderToolSpec, ResponseMode, Role, ToolCall, ToolSpec,
+        ProviderToolSpec, ResponseMode, Role, ToolCall, ToolResult, ToolSpec,
     };
 
     use super::encode_request;
@@ -472,6 +508,46 @@ mod tests {
 
         assert_eq!(encoded["input"][0]["call_id"], "call-7");
         assert_eq!(encoded["input"][0]["arguments"], "{ \"value\": 7 }");
+    }
+
+    #[test]
+    fn function_outputs_preserve_images_files_and_structured_content() {
+        let message = Message::new(
+            Role::Tool,
+            vec![ContentPart::ToolResult(ToolResult {
+                call_id: "call-rich".into(),
+                name: Some("render".into()),
+                content: vec![
+                    ContentPart::Image {
+                        source: MediaSource::Base64 {
+                            media_type: "image/png".into(),
+                            data: "cG5n".into(),
+                        },
+                    },
+                    ContentPart::Document {
+                        source: MediaSource::Url {
+                            url: "https://example.com/report.pdf".into(),
+                            media_type: Some("application/pdf".into()),
+                        },
+                        name: Some("report.pdf".into()),
+                    },
+                ],
+                structured_content: Some(serde_json::json!({"count":2})),
+                is_error: false,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("openai", "vision"),
+            message,
+        ))
+        .unwrap();
+
+        assert_eq!(body["input"][0]["type"], "function_call_output");
+        assert_eq!(body["input"][0]["output"][0]["type"], "input_text");
+        assert_eq!(body["input"][0]["output"][1]["type"], "input_image");
+        assert_eq!(body["input"][0]["output"][2]["type"], "input_file");
     }
 
     #[test]

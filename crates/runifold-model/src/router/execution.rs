@@ -54,7 +54,7 @@ pub(super) fn routed_stream(
                         attempt_id,
                     } => {
                         let terminal = is_terminal(&first);
-                        yield Ok(first);
+                        yield Ok(*first);
                         if terminal {
                             succeed_permit(permit);
                             return;
@@ -128,7 +128,7 @@ enum RouteAttempt {
     CircuitOpen,
     Failed(ModelError),
     Committed {
-        first: ModelStreamEvent,
+        first: Box<ModelStreamEvent>,
         stream: ModelEventStream,
         permit: Option<BreakerPermit>,
         attempt_id: String,
@@ -251,7 +251,7 @@ async fn start_route_attempt(
     };
     match stream.next().await {
         Some(Ok(first)) => RouteAttempt::Committed {
-            first,
+            first: Box::new(first),
             stream,
             permit,
             attempt_id,

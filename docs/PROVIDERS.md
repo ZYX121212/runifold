@@ -45,6 +45,27 @@ Schema, native `web_search`, mixed native/function tools, and both streamed and
 complete Responses delivery. Its artifact excludes credentials and response
 content.
 
+## Rich Tool-result projection
+
+Runifold keeps Tool presentation content, structured content, host metadata,
+and application-error status separate until the Provider boundary. Adapters
+never silently stringify unsupported media.
+
+| Protocol | Native Tool-result projection | Explicit limitation |
+| --- | --- | --- |
+| OpenAI Responses / Ark | text, image input, file input; structured content is preserved as JSON text when required by the wire format | audio output is rejected |
+| OpenAI Chat-compatible | text and resource references | image, audio, and inline document output are rejected |
+| Anthropic Messages | text, image, and resource references | audio and inline document output are rejected |
+| Gemini GenerateContent | structured response plus native inline/file image, audio, and document parts | unknown opaque parts are rejected |
+| Amazon Bedrock Converse | text, resource references, native JSON, image, and document | audio Tool results are unavailable in the current SDK protocol |
+| Ollama Chat | text and resource references | rich media output is rejected |
+
+MCP is the lossless rich-result bridge: text, image, audio, embedded resources,
+resource links, structured content, annotations, and application errors retain
+their canonical meaning. Large durable media should be returned as
+`MediaSource::Artifact`; `ArtifactResolvingModel` verifies and materializes it
+only for the final Provider request.
+
 ## Ark Responses example
 
 Ark's verified Responses baseline declares function tools, structured output,

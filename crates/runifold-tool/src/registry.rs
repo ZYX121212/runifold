@@ -1,8 +1,9 @@
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use futures_util::future::{Either, select};
+use jsonschema::Validator;
 use runifold_core::RunContext;
-use runifold_model::ToolSpec;
+use runifold_model::{ArtifactScope, ArtifactStore, ToolSpec};
 use serde_json::Value;
 
 use crate::{
@@ -11,15 +12,62 @@ use crate::{
 };
 
 /// Immutable-name registry and capability gate for tools.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolLimits {
+    /// Maximum serialized invocation input size.
+    pub max_input_bytes: usize,
+    /// Maximum serialized canonical output size.
+    pub max_output_bytes: usize,
+}
+
+impl Default for ToolLimits {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: 1024 * 1024,
+            max_output_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RegisteredTool {
+    tool: Arc<dyn Tool>,
+    input_validator: Validator,
+    output_validator: Validator,
+}
+
+/// Immutable-name Tool registry with compiled contracts and bounded I/O.
 #[derive(Clone, Default)]
 pub struct ToolRegistry {
-    tools: BTreeMap<String, Arc<dyn Tool>>,
+    tools: BTreeMap<String, RegisteredTool>,
+    limits: ToolLimits,
+    artifact_store: Option<Arc<dyn ArtifactStore>>,
+    artifact_scope: Option<ArtifactScope>,
 }
 
 impl ToolRegistry {
     /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Replaces the serialized Tool I/O limits.
+    #[must_use]
+    pub const fn with_limits(mut self, limits: ToolLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Makes an artifact store available to every Tool invocation context.
+    #[must_use]
+    pub fn with_artifact_store(
+        mut self,
+        scope: ArtifactScope,
+        store: Arc<dyn ArtifactStore>,
+    ) -> Self {
+        self.artifact_scope = Some(scope);
+        self.artifact_store = Some(store);
+        self
     }
 
     /// Registers a tool without replacing an existing name.
@@ -35,7 +83,16 @@ impl ToolRegistry {
         if self.tools.contains_key(name) {
             return Err(ToolRegistrationError::DuplicateName(name.into()));
         }
-        self.tools.insert(name.into(), tool);
+        let input_validator = compile_schema(name, "input", &tool.descriptor().input_schema)?;
+        let output_validator = compile_schema(name, "output", &tool.descriptor().output_schema)?;
+        self.tools.insert(
+            name.into(),
+            RegisteredTool {
+                tool,
+                input_validator,
+                output_validator,
+            },
+        );
         Ok(())
     }
 
@@ -43,7 +100,7 @@ impl ToolRegistry {
     pub fn model_specs(&self) -> Vec<ToolSpec> {
         self.tools
             .values()
-            .map(|tool| tool.descriptor().model_spec())
+            .map(|registered| registered.tool.descriptor().model_spec())
             .collect()
     }
 
@@ -64,7 +121,9 @@ impl ToolRegistry {
 
     /// Returns the immutable descriptor registered under `name`.
     pub fn descriptor(&self, name: &str) -> Option<&ToolDescriptor> {
-        self.tools.get(name).map(|tool| tool.descriptor())
+        self.tools
+            .get(name)
+            .map(|registered| registered.tool.descriptor())
     }
 
     /// Invokes a registered tool after checking the owning run's explicit
@@ -76,20 +135,39 @@ impl ToolRegistry {
         run: &'a RunContext,
     ) -> ToolFuture<'a, Result<ToolOutput, ToolError>> {
         Box::pin(async move {
-            let tool = self.tools.get(name).ok_or_else(|| {
+            let registered = self.tools.get(name).ok_or_else(|| {
                 ToolError::local(
                     ToolErrorKind::NotFound,
                     format!("tool `{name}` is not registered"),
                 )
             })?;
-            let descriptor = tool.descriptor();
+            let descriptor = registered.tool.descriptor();
             if !run.capabilities().contains(descriptor.id) {
                 return Err(ToolError::local(
                     ToolErrorKind::CapabilityDenied,
                     format!("run is not granted tool capability `{name}`"),
                 ));
             }
-            let context = ToolContext::for_run(run);
+            let context = ToolContext::for_run(run)
+                .with_artifact_store(self.artifact_scope.clone(), self.artifact_store.clone());
+            validate_size(
+                "Tool input",
+                &input,
+                self.limits.max_input_bytes,
+                ToolErrorKind::InvalidInput,
+            )?;
+            registered
+                .input_validator
+                .validate(&input)
+                .map_err(|error| {
+                    ToolError::local(
+                        ToolErrorKind::InvalidInput,
+                        format!(
+                            "Tool input violates its declared schema at `{}`",
+                            error.schema_path()
+                        ),
+                    )
+                })?;
             if context
                 .remaining()
                 .is_some_and(|remaining| remaining.is_zero())
@@ -102,7 +180,7 @@ impl ToolRegistry {
             let cancellation = context.cancellation().clone();
             match select(
                 Box::pin(cancellation.cancelled()),
-                Box::pin(tool.invoke(input, context)),
+                Box::pin(registered.tool.invoke(input, context)),
             )
             .await
             {
@@ -110,10 +188,81 @@ impl ToolRegistry {
                     ToolErrorKind::Cancelled,
                     "tool invocation was cancelled",
                 )),
-                Either::Right((result, _)) => result,
+                Either::Right((result, _)) => {
+                    let output = result?;
+                    validate_output(&output, &registered.output_validator, self.limits)?;
+                    Ok(output)
+                }
             }
         })
     }
+}
+
+fn compile_schema(
+    tool: &str,
+    direction: &'static str,
+    schema: &Value,
+) -> Result<Validator, ToolRegistrationError> {
+    jsonschema::validator_for(schema).map_err(|error| ToolRegistrationError::InvalidSchema {
+        tool: tool.into(),
+        direction,
+        message: error.to_string(),
+    })
+}
+
+fn validate_output(
+    output: &ToolOutput,
+    validator: &Validator,
+    limits: ToolLimits,
+) -> Result<(), ToolError> {
+    if output.content.is_empty() {
+        return Err(ToolError::local(
+            ToolErrorKind::InvalidOutput,
+            "Tool output content cannot be empty",
+        ));
+    }
+    validate_size(
+        "Tool output",
+        output,
+        limits.max_output_bytes,
+        ToolErrorKind::InvalidOutput,
+    )?;
+    if output.is_error {
+        return Ok(());
+    }
+    let instance = output
+        .structured_content
+        .clone()
+        .unwrap_or_else(|| serde_json::to_value(&output.content).unwrap_or(Value::Null));
+    validator.validate(&instance).map_err(|error| {
+        ToolError::local(
+            ToolErrorKind::InvalidOutput,
+            format!(
+                "Tool output violates its declared schema at `{}`",
+                error.schema_path()
+            ),
+        )
+    })
+}
+
+fn validate_size<T: serde::Serialize>(
+    label: &str,
+    value: &T,
+    limit: usize,
+    kind: ToolErrorKind,
+) -> Result<(), ToolError> {
+    let size = serde_json::to_vec(value)
+        .map_err(|error| {
+            ToolError::local(kind.clone(), format!("{label} cannot be encoded: {error}"))
+        })?
+        .len();
+    if size > limit {
+        return Err(ToolError::local(
+            kind,
+            format!("{label} is {size} bytes and exceeds the {limit}-byte limit"),
+        ));
+    }
+    Ok(())
 }
 
 impl fmt::Debug for ToolRegistry {
@@ -121,6 +270,9 @@ impl fmt::Debug for ToolRegistry {
         formatter
             .debug_struct("ToolRegistry")
             .field("tools", &self.tools.keys().collect::<Vec<_>>())
+            .field("limits", &self.limits)
+            .field("artifact_store", &self.artifact_store.is_some())
+            .field("artifact_scope", &self.artifact_scope)
             .finish()
     }
 }
@@ -135,8 +287,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::{
-        Tool, ToolContext, ToolDescriptor, ToolError, ToolErrorKind, ToolFuture, ToolOutput,
-        ToolRegistrationError,
+        Tool, ToolContext, ToolDescriptor, ToolError, ToolErrorKind, ToolFuture, ToolLimits,
+        ToolOutput, ToolRegistrationError,
     };
 
     use super::ToolRegistry;
@@ -203,7 +355,7 @@ mod tests {
         let output =
             futures_executor::block_on(registry.invoke("echo", json!({"x": 1}), &run)).unwrap();
 
-        assert_eq!(output.value, json!({"x": 1}));
+        assert_eq!(output.structured_content, Some(json!({"x": 1})));
     }
 
     #[test]
@@ -216,5 +368,40 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error, ToolRegistrationError::DuplicateName("echo".into()));
+    }
+
+    #[test]
+    fn invalid_schemas_fail_during_registration() {
+        let mut tool = EchoTool::new("invalid");
+        tool.descriptor.input_schema = json!({"type":"not-a-json-schema-type"});
+        let error = ToolRegistry::new().register(Arc::new(tool)).unwrap_err();
+        assert!(matches!(
+            error,
+            ToolRegistrationError::InvalidSchema {
+                direction: "input",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn output_contract_and_size_are_enforced_after_execution() {
+        let tool = Arc::new(EchoTool::new("bounded"));
+        let mut capabilities = CapabilitySet::new();
+        capabilities.grant(tool.descriptor().capability());
+        let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+        let mut registry = ToolRegistry::new().with_limits(ToolLimits {
+            max_input_bytes: 1024,
+            max_output_bytes: 32,
+        });
+        registry.register(tool).unwrap();
+
+        let error = futures_executor::block_on(registry.invoke(
+            "bounded",
+            json!({"payload":"this output is intentionally larger than the limit"}),
+            &run,
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind, ToolErrorKind::InvalidOutput);
     }
 }

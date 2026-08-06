@@ -41,10 +41,8 @@ pub enum MediaSource {
     },
     /// A reference into an application-owned artifact store.
     Artifact {
-        /// Stable artifact identity.
-        artifact_id: String,
-        /// Optional MIME type.
-        media_type: Option<String>,
+        /// Complete scope- and integrity-bound reference.
+        reference: crate::ArtifactRef,
     },
     /// A file already uploaded to a provider control plane.
     ProviderFile {
@@ -127,6 +125,10 @@ pub struct ToolResult {
     pub name: Option<String>,
     /// Rich result content.
     pub content: Vec<ContentPart>,
+    /// Optional structured result value kept separate from presentation
+    /// content so protocol adapters can preserve both representations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
     /// Whether tool execution failed.
     pub is_error: bool,
     /// Namespaced metadata.
@@ -159,6 +161,21 @@ pub enum ContentPart {
         source: MediaSource,
         /// Optional display name.
         name: Option<String>,
+    },
+    /// A link to a resource that may be fetched by an authorized host.
+    ResourceLink {
+        /// Resource URI.
+        uri: String,
+        /// Stable logical name.
+        name: String,
+        /// Optional human-readable title.
+        title: Option<String>,
+        /// Optional model-facing description.
+        description: Option<String>,
+        /// Optional MIME type.
+        media_type: Option<String>,
+        /// Raw resource size before encoding or tokenization.
+        size: Option<u64>,
     },
     /// A model-requested tool call.
     ToolCall(ToolCall),

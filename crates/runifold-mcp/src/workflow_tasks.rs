@@ -117,6 +117,7 @@ impl WorkflowTaskResultMapper for DefaultWorkflowTaskResultMapper {
             content: vec![ContentBlock::text(text)],
             structured_content: Some(outcome.output),
             is_error: false,
+            metadata: BTreeMap::new(),
         })
     }
 }

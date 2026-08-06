@@ -1,5 +1,6 @@
 //! `PostgreSQL` conversation, summary, and semantic-memory adapter.
 
+mod artifact;
 mod durable;
 mod memory;
 mod schema;

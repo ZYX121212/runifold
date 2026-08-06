@@ -133,16 +133,21 @@ fn encode_chat_messages(request: &ModelRequest) -> Result<Vec<Value>, ModelError
                 }
                 ContentPart::ToolResult(result) => {
                     flush_chat_message(&mut messages, message.role, &mut content, &mut tool_calls)?;
-                    let output = result
+                    let mut output = result
                         .content
                         .iter()
                         .map(tool_result_part)
-                        .collect::<Result<Vec<_>, _>>()?
-                        .join("\n");
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if let Some(structured) = &result.structured_content {
+                        let encoded = structured.to_string();
+                        if !output.iter().any(|item| item == &encoded) {
+                            output.push(encoded);
+                        }
+                    }
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": result.call_id,
-                        "content": output
+                        "content": output.join("\n")
                     }));
                 }
                 _ => {
@@ -211,8 +216,10 @@ fn chat_image(source: &MediaSource) -> Result<Value, ModelError> {
 fn tool_result_part(part: &ContentPart) -> Result<String, ModelError> {
     match part {
         ContentPart::Text { text } => Ok(text.clone()),
-        _ => serde_json::to_string(part)
-            .map_err(|error| invalid(format!("failed to encode tool result: {error}"))),
+        ContentPart::ResourceLink { uri, .. } => Ok(uri.clone()),
+        _ => Err(unsupported(
+            "Chat Completions tool results support text and resource links only",
+        )),
     }
 }
 

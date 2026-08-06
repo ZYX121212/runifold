@@ -1,7 +1,7 @@
 //! Tool and child-Agent callable dispatch and effect execution.
 
 use super::checkpointing::AgentProgress;
-use super::observability::{consume_budget, emit_usage, record_callable};
+use super::observability::{consume_budget, emit_usage, record_callable, record_tool_outcome};
 use super::{
     Agent, AgentError, AgentGateway, AgentObserver, AgentStreamEvent, BTreeMap, CallableKind,
     ContentPart, Deserialize, EffectExecutionContext, EffectFuture, EffectHandler, EffectId,
@@ -173,16 +173,17 @@ impl Agent {
                 return Err(error);
             }
         };
-        record_callable(
+        let succeeded = matches!(&result, Ok(output) if !output.is_error);
+        record_tool_outcome(
             context.run,
-            if result.is_ok() {
+            if succeeded {
                 "tool.completed"
             } else {
                 "tool.failed"
             },
             &self.name,
-            "tool",
             call,
+            &result,
             context.caused_by,
         )?;
         emit_agent_event(
@@ -192,7 +193,7 @@ impl Agent {
                 kind: CallableKind::Tool,
                 call_id: call.id.clone(),
                 name: call.name.clone(),
-                success: result.is_ok(),
+                success: succeeded,
             },
         )
         .await;
@@ -489,9 +490,19 @@ fn tool_result_message(
     name: String,
     result: Result<ToolOutput, String>,
 ) -> Result<Message, AgentError> {
-    let (content, is_error) = match result {
-        Ok(output) => (output_content(output.value), false),
-        Err(message) => (vec![ContentPart::text(message)], true),
+    let (content, structured_content, metadata, is_error) = match result {
+        Ok(output) => (
+            output.content,
+            output.structured_content,
+            output.metadata,
+            output.is_error,
+        ),
+        Err(message) => (
+            vec![ContentPart::text(message)],
+            None,
+            BTreeMap::new(),
+            true,
+        ),
     };
     Message::new(
         Role::Tool,
@@ -499,16 +510,41 @@ fn tool_result_message(
             call_id,
             name: Some(name),
             content,
+            structured_content,
             is_error,
-            metadata: BTreeMap::new(),
+            metadata,
         })],
     )
     .map_err(|error| AgentError::Protocol(error.to_string()))
 }
 
-fn output_content(value: serde_json::Value) -> Vec<ContentPart> {
-    match value {
-        serde_json::Value::String(text) => vec![ContentPart::text(text)],
-        value => vec![ContentPart::text(value.to_string())],
+#[cfg(test)]
+mod rich_result_tests {
+    use runifold_model::{MediaSource, ToolResult};
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn agent_preserves_rich_and_structured_tool_output() {
+        let output = ToolOutput::rich(vec![ContentPart::Image {
+            source: MediaSource::Base64 {
+                media_type: "image/png".into(),
+                data: "cG5n".into(),
+            },
+        }])
+        .with_structured_content(json!({"width":1}));
+        let message = tool_result_message("call-1".into(), "render".into(), Ok(output)).unwrap();
+
+        let ContentPart::ToolResult(ToolResult {
+            content,
+            structured_content,
+            ..
+        }) = &message.content[0]
+        else {
+            panic!("Agent must create a canonical ToolResult");
+        };
+        assert!(matches!(content[0], ContentPart::Image { .. }));
+        assert_eq!(structured_content, &Some(json!({"width":1})));
     }
 }

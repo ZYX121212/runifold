@@ -12,6 +12,7 @@ use runifold_effect::{EffectExecutorError, EffectExecutorErrorKind, EffectRecord
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use thiserror::Error;
 
+mod artifact;
 mod conversation;
 
 const SCHEMA: &str = "
@@ -51,7 +52,31 @@ CREATE TABLE IF NOT EXISTS runifold_conversation_state (
     updated_at_ms  INTEGER NOT NULL
 );
 
-PRAGMA user_version = 1;
+CREATE TABLE IF NOT EXISTS runifold_artifacts (
+    scope       TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    media_type  TEXT NOT NULL,
+    size_bytes  INTEGER NOT NULL CHECK (size_bytes >= 0),
+    sha256      TEXT NOT NULL,
+    name        TEXT,
+    bytes       BLOB NOT NULL,
+    created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+    expires_at_ms INTEGER CHECK (expires_at_ms >= 0),
+    PRIMARY KEY (scope, artifact_id)
+);
+CREATE INDEX IF NOT EXISTS runifold_artifacts_scope_expiry
+    ON runifold_artifacts (scope, expires_at_ms, artifact_id);
+
+CREATE TABLE IF NOT EXISTS runifold_artifact_idempotency (
+    scope           TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    artifact_id     TEXT NOT NULL,
+    PRIMARY KEY (scope, idempotency_key),
+    FOREIGN KEY (scope, artifact_id) REFERENCES runifold_artifacts(scope, artifact_id)
+        ON DELETE CASCADE
+);
+
+PRAGMA user_version = 2;
 ";
 
 /// Failure while opening, initializing, or directly querying a `SQLite` store.
@@ -98,6 +123,7 @@ impl SqliteStore {
 
     fn from_connection(connection: Connection) -> Result<Self, SqliteStoreError> {
         connection.busy_timeout(Duration::from_secs(5))?;
+        connection.pragma_update(None, "foreign_keys", true)?;
         connection.execute_batch(SCHEMA)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),

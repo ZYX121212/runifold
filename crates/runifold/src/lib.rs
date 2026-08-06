@@ -104,8 +104,11 @@ pub use runifold_effect::{
 #[cfg(feature = "runtime")]
 pub use runifold_macros::tool;
 pub use runifold_model::{
-    CircuitBreakerConfig, CircuitBreakerConfigError, CircuitState, FeaturePolicy,
-    GenerationOptions, MediaSource, Message, Model, ModelCallContext, ModelEventStream,
+    Artifact, ArtifactError, ArtifactFuture, ArtifactPage, ArtifactRef, ArtifactResolvingModel,
+    ArtifactScope, ArtifactStore, ArtifactWrite, CircuitBreakerConfig, CircuitBreakerConfigError,
+    CircuitState, DEFAULT_MAX_ARTIFACT_BYTES, FeaturePolicy, GenerationOptions,
+    InMemoryArtifactStore, MAX_ARTIFACT_IDEMPOTENCY_KEY_BYTES, MAX_ARTIFACT_NAME_BYTES,
+    MAX_ARTIFACT_PAGE_SIZE, MediaSource, Message, Model, ModelCallContext, ModelEventStream,
     ModelFallbackPolicy, ModelRef, ModelRequest, ModelResponse, ModelRetryPolicy,
     ModelRetryPolicyError, ModelRoute, ModelRouteHealth, ModelRouter, ModelRouterBuildError,
     ModelRouterBuilder, OutputFormat, ProviderModel, ProviderToolSpec, ResponseMode, RetryJitter,
@@ -123,7 +126,7 @@ pub use runifold_retrieval::{
 #[cfg(feature = "runtime")]
 pub use runifold_tool::{
     FunctionTool, IntoToolError, State, Tool, ToolContext, ToolDescriptor, ToolError,
-    ToolErrorKind, ToolOutput, ToolRegistry,
+    ToolErrorKind, ToolLimits, ToolOutput, ToolRegistry,
 };
 #[cfg(feature = "runtime")]
 pub use runifold_workflow::{

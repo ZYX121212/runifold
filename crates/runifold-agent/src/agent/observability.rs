@@ -3,7 +3,8 @@
 use super::{
     AgentError, AgentObserver, AgentOutcome, AgentStreamEvent, BTreeMap, BudgetEvent, DomainEvent,
     EffectExecutorErrorKind, EventId, GatewayErrorKind, LifecycleEvent, RetrySafety, RunContext,
-    RunError, RunErrorKind, RunEventKind, ToolCall, ToolErrorKind, Usage, emit_agent_event,
+    RunError, RunErrorKind, RunEventKind, ToolCall, ToolErrorKind, ToolOutput, Usage,
+    emit_agent_event,
 };
 
 pub(super) async fn emit_usage(observer: &dyn AgentObserver, run: &RunContext) {
@@ -86,6 +87,50 @@ pub(super) fn record_callable(
             callable_kind.into(),
             serde_json::Value::from(call.name.clone()),
         );
+    }
+    record_domain(run, event, payload, caused_by)
+}
+
+pub(super) fn record_tool_outcome<E>(
+    run: &RunContext,
+    event: &str,
+    agent: &str,
+    call: &ToolCall,
+    result: &Result<ToolOutput, E>,
+    caused_by: Option<EventId>,
+) -> Result<(), AgentError> {
+    let mut payload = serde_json::json!({
+        "agent": agent,
+        "call_id": call.id,
+        "tool": call.name,
+    });
+    if let (Some(object), Ok(output)) = (payload.as_object_mut(), result) {
+        let mut media_count = 0_u64;
+        let mut artifact_count = 0_u64;
+        for part in &output.content {
+            match part {
+                super::ContentPart::Image { source }
+                | super::ContentPart::Audio { source }
+                | super::ContentPart::Document { source, .. } => {
+                    media_count = media_count.saturating_add(1);
+                    if matches!(source, runifold_model::MediaSource::Artifact { .. }) {
+                        artifact_count = artifact_count.saturating_add(1);
+                    }
+                }
+                super::ContentPart::ResourceLink { .. } => {
+                    artifact_count = artifact_count.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+        object.insert("content_count".into(), output.content.len().into());
+        object.insert("media_count".into(), media_count.into());
+        object.insert("artifact_count".into(), artifact_count.into());
+        object.insert(
+            "structured_content".into(),
+            output.structured_content.is_some().into(),
+        );
+        object.insert("application_error".into(), output.is_error.into());
     }
     record_domain(run, event, payload, caused_by)
 }

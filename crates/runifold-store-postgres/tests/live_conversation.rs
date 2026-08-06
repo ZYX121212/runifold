@@ -10,7 +10,7 @@ use runifold_agent::{
     ConversationVersion, ConversationWindow, MemoryNamespace, SemanticMemoryId,
     SemanticMemoryQuery, SemanticMemorySource, SemanticMemoryUpsert,
 };
-use runifold_model::Message;
+use runifold_model::{ArtifactError, ArtifactScope, ArtifactStore, ArtifactWrite, Message};
 use runifold_store_postgres::PostgresConversationStore;
 use serde_json::json;
 use tokio_postgres::NoTls;
@@ -117,7 +117,166 @@ async fn transcript_summary_memory_and_concurrent_cas_survive_reconnect() {
         .unwrap();
     assert_eq!(found, vec![memory]);
 
+    assert_artifacts(&reopened, &second).await;
+
     drop_tables(&connection_url, &table).await;
+}
+
+async fn assert_artifacts(
+    store: &PostgresConversationStore,
+    concurrent: &PostgresConversationStore,
+) {
+    let scope = ArtifactScope::parse("tenant.postgres").unwrap();
+    let other_scope = ArtifactScope::parse("tenant.postgres.other").unwrap();
+    let png = b"\x89PNG\r\n\x1a\npostgres-artifact";
+    let write = ArtifactWrite::new(
+        scope.clone(),
+        "conversation:render",
+        "image/png",
+        png.to_vec(),
+    )
+    .unwrap();
+    let artifact = store.put(write.clone()).await.unwrap();
+    assert_eq!(store.put(write).await.unwrap(), artifact);
+    assert_eq!(store.get(&artifact).await.unwrap().bytes, png);
+    let changed_replay = ArtifactWrite::new(
+        scope.clone(),
+        "conversation:render",
+        "image/png",
+        png.to_vec(),
+    )
+    .unwrap()
+    .with_expires_at_unix_ms(i64::MAX as u64)
+    .unwrap();
+    assert!(matches!(
+        store.put(changed_replay).await,
+        Err(ArtifactError::IdempotencyConflict(_))
+    ));
+    let changed_alias = ArtifactWrite::new(
+        scope.clone(),
+        "conversation:alias",
+        "image/png",
+        png.to_vec(),
+    )
+    .unwrap()
+    .with_name("different")
+    .unwrap();
+    assert!(matches!(
+        store.put(changed_alias).await,
+        Err(ArtifactError::MetadataConflict(_))
+    ));
+    let conflict = ArtifactWrite::new(
+        scope.clone(),
+        "conversation:render",
+        "image/png",
+        b"\x89PNG\r\n\x1a\nconflict".to_vec(),
+    )
+    .unwrap();
+    assert!(matches!(
+        store.put(conflict).await,
+        Err(ArtifactError::IdempotencyConflict(_))
+    ));
+    let isolated = store
+        .put(
+            ArtifactWrite::new(
+                other_scope.clone(),
+                "conversation:render",
+                "image/png",
+                png.to_vec(),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let expired = store
+        .put(
+            ArtifactWrite::new(
+                scope.clone(),
+                "conversation:expired",
+                "text/plain",
+                b"expired".to_vec(),
+            )
+            .unwrap()
+            .with_expires_at_unix_ms(1)
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.get(&expired).await,
+        Err(ArtifactError::Expired(_))
+    ));
+    assert_eq!(
+        store
+            .purge_expired(&scope, i64::MAX as u64, 10)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store.list(&scope, None, 10).await.unwrap().items.as_slice(),
+        std::slice::from_ref(&artifact)
+    );
+    assert!(store.delete(&scope, &artifact.artifact_id).await.unwrap());
+    assert!(!store.delete(&scope, &artifact.artifact_id).await.unwrap());
+    assert_eq!(store.get(&isolated).await.unwrap().bytes, png);
+
+    assert_concurrent_artifact_idempotency(store, concurrent).await;
+}
+
+async fn assert_concurrent_artifact_idempotency(
+    first: &PostgresConversationStore,
+    second: &PostgresConversationStore,
+) {
+    let shared_scope = ArtifactScope::parse("tenant.postgres.concurrent.same").unwrap();
+    let shared = ArtifactWrite::new(
+        shared_scope,
+        "same-key",
+        "text/plain",
+        b"same-content".to_vec(),
+    )
+    .unwrap();
+    let (left, right) = tokio::join!(first.put(shared.clone()), second.put(shared));
+    assert_eq!(left.unwrap(), right.unwrap());
+
+    let conflict_scope = ArtifactScope::parse("tenant.postgres.concurrent.conflict").unwrap();
+    let left_write = ArtifactWrite::new(
+        conflict_scope.clone(),
+        "conflicting-key",
+        "text/plain",
+        b"left".to_vec(),
+    )
+    .unwrap();
+    let right_write = ArtifactWrite::new(
+        conflict_scope.clone(),
+        "conflicting-key",
+        "text/plain",
+        b"right".to_vec(),
+    )
+    .unwrap();
+    let (left, right) = tokio::join!(first.put(left_write), second.put(right_write));
+    assert_eq!(
+        [left.is_ok(), right.is_ok()]
+            .into_iter()
+            .filter(|ok| *ok)
+            .count(),
+        1
+    );
+    assert!(
+        [left, right]
+            .into_iter()
+            .filter_map(Result::err)
+            .all(|error| matches!(error, ArtifactError::IdempotencyConflict(_)))
+    );
+    assert_eq!(
+        first
+            .list(&conflict_scope, None, 10)
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
 }
 
 async fn append_and_assert_bounded(
@@ -163,7 +322,8 @@ async fn drop_tables(connection_url: &str, table: &str) {
     });
     client
         .batch_execute(&format!(
-            "DROP TABLE {table}_effects, {table}_checkpoints, \
+            "DROP TABLE {table}_artifact_idempotency, {table}_artifacts, \
+             {table}_effects, {table}_checkpoints, \
              {table}_memory, {table}_transcript, {table}"
         ))
         .await

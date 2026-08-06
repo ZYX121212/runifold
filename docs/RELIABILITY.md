@@ -17,6 +17,7 @@ responses are valuable, but they are not labelled as production verification.
 | SQLite WorkflowStore recovery | Forced worker kill, fenced lease takeover, budget adoption, HITL, history, and fork survive reopen | Mandatory |
 | SQLite concurrent workflow claim | Independent connections produce exactly one fenced winner | Mandatory |
 | SQLite durable Agent conversation | Transcript and terminal checkpoint commit atomically; reopen resumes without another model call | Mandatory |
+| Rich Tool results and durable artifacts | Schema/size enforcement, Agent and MCP lossless round trip, Provider projection tests, scoped SQLite lifecycle tests, and real PostgreSQL scope/concurrent-idempotency/expiry/delete checks | Pending CI gate |
 | PostgreSQL durable Agent conversation and Effect store | Real PostgreSQL transaction proves transcript/checkpoint atomicity, rollback on stale checkpoint, reconnect replay, Effect CAS, and idempotency conflict | Mandatory |
 | S3 conditional immutable creation | Real pinned MinIO with Object Lock and SSE-S3 | Mandatory |
 | S3 post-commit response loss | Transparent TCP fault proxy plus checksum HEAD reconciliation | Mandatory |

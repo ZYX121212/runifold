@@ -166,20 +166,42 @@ fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
         .name
         .as_deref()
         .ok_or_else(|| invalid("Gemini function responses require ToolResult.name"))?;
-    let response = result
-        .content
-        .iter()
-        .map(|part| match part {
-            ContentPart::Text { text } => Ok(Value::String(text.clone())),
-            other => serde_json::to_value(other)
-                .map_err(|error| invalid(format!("invalid tool result content: {error}"))),
+    let mut text = Vec::new();
+    let mut media = Vec::new();
+    for part in &result.content {
+        match part {
+            ContentPart::Text { text: value } => text.push(Value::String(value.clone())),
+            ContentPart::Image { source }
+            | ContentPart::Audio { source }
+            | ContentPart::Document { source, .. } => media.push(encode_media(source)?),
+            ContentPart::ResourceLink {
+                uri, media_type, ..
+            } => media.push(encode_media(&MediaSource::Url {
+                url: uri.clone(),
+                media_type: media_type.clone(),
+            })?),
+            _ => {
+                return Err(unsupported(
+                    "Gemini function results support text, images, audio, documents, and resource links",
+                ));
+            }
+        }
+    }
+    let response = result.structured_content.clone().unwrap_or_else(|| {
+        json!({
+            "output": text,
+            "isError": result.is_error
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(json!({"functionResponse":{
-        "id":result.call_id,
-        "name":name,
-        "response":{"output":response,"isError":result.is_error}
-    }}))
+    });
+    let mut function_response = serde_json::Map::from_iter([
+        ("id".into(), Value::String(result.call_id.clone())),
+        ("name".into(), Value::String(name.into())),
+        ("response".into(), response),
+    ]);
+    if !media.is_empty() {
+        function_response.insert("parts".into(), Value::Array(media));
+    }
+    Ok(json!({"functionResponse":function_response}))
 }
 
 fn role(role: Role) -> Result<&'static str, ModelError> {
@@ -238,7 +260,11 @@ fn unsupported(message: impl Into<String>) -> ModelError {
 
 #[cfg(test)]
 mod tests {
-    use runifold_model::{Message, ModelRef, ModelRequest};
+    use std::collections::BTreeMap;
+
+    use runifold_model::{
+        ContentPart, MediaSource, Message, ModelRef, ModelRequest, Role, ToolResult,
+    };
 
     use super::encode_request;
 
@@ -254,5 +280,35 @@ mod tests {
 
         assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be exact");
         assert_eq!(body["contents"][0]["role"], "user");
+    }
+
+    #[test]
+    fn encodes_multimodal_function_response_parts() {
+        let message = Message::new(
+            Role::Tool,
+            vec![ContentPart::ToolResult(ToolResult {
+                call_id: "call-rich".into(),
+                name: Some("inspect".into()),
+                content: vec![ContentPart::Image {
+                    source: MediaSource::Base64 {
+                        media_type: "image/png".into(),
+                        data: "cG5n".into(),
+                    },
+                }],
+                structured_content: Some(serde_json::json!({"objects":1})),
+                is_error: false,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("gemini", "gemini-3"),
+            message,
+        ))
+        .unwrap();
+
+        let response = &body["contents"][0]["parts"][0]["functionResponse"];
+        assert_eq!(response["response"], serde_json::json!({"objects":1}));
+        assert_eq!(response["parts"][0]["inlineData"]["mimeType"], "image/png");
     }
 }

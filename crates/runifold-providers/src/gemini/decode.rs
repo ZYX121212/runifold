@@ -58,7 +58,10 @@ impl GeminiEventDecoder {
                 usage: decode_usage(usage),
             });
         }
-        events.push(provider_event("generate_content.chunk", payload.clone()));
+        events.push(provider_event(
+            "generate_content.chunk",
+            redact_inline_media(payload.clone()),
+        ));
         let Some(candidates) = payload.get("candidates").and_then(Value::as_array) else {
             return Ok(events);
         };
@@ -67,64 +70,38 @@ impl GeminiEventDecoder {
                 events.push(provider_event("additional_candidate", candidate.clone()));
                 continue;
             }
-            let parts = candidate
-                .get("content")
-                .and_then(|content| content.get("parts"))
-                .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            for (part_position, part) in parts.iter().enumerate() {
-                let index = u32::try_from(part_position)
-                    .map_err(|_| protocol("Gemini part index exceeds u32"))?;
-                if let Some(call) = part.get("functionCall") {
-                    events.push(ModelStreamEvent::ContentPartCompleted {
-                        index,
-                        part: decode_tool_call(call, index)?,
-                    });
-                } else if part
-                    .get("thought")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    events.push(ModelStreamEvent::ContentPartCompleted {
-                        index,
-                        part: ContentPart::Reasoning(ReasoningPart {
-                            text: part.get("text").and_then(Value::as_str).map(String::from),
-                            signature: part
-                                .get("thoughtSignature")
-                                .and_then(Value::as_str)
-                                .map(String::from),
-                            redacted: false,
-                            provider_data: Vec::new(),
-                        }),
-                    });
-                } else if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    if self.open_blocks.insert(index) {
-                        events.push(ModelStreamEvent::ContentBlockStarted {
-                            index,
-                            kind: ContentBlockKind::Text,
-                        });
-                    }
-                    events.push(ModelStreamEvent::TextDelta {
-                        index,
-                        text: text.into(),
-                    });
-                } else {
-                    events.push(provider_event("part", part.clone()));
-                }
-            }
-            if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
-                for index in std::mem::take(&mut self.open_blocks) {
-                    events.push(ModelStreamEvent::ContentBlockCompleted { index });
-                }
-                events.push(ModelStreamEvent::ResponseCompleted {
-                    finish_reason: finish_reason(reason),
-                    provider_metadata: BTreeMap::new(),
-                });
-                self.completed = true;
-            }
+            self.decode_candidate(candidate, &mut events)?;
         }
         Ok(events)
+    }
+
+    fn decode_candidate(
+        &mut self,
+        candidate: &Value,
+        events: &mut Vec<ModelStreamEvent>,
+    ) -> Result<(), ModelError> {
+        let parts = candidate
+            .get("content")
+            .and_then(|content| content.get("parts"))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for (part_position, part) in parts.iter().enumerate() {
+            let index = u32::try_from(part_position)
+                .map_err(|_| protocol("Gemini part index exceeds u32"))?;
+            decode_part(self, part, index, events)?;
+        }
+        if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
+            for index in std::mem::take(&mut self.open_blocks) {
+                events.push(ModelStreamEvent::ContentBlockCompleted { index });
+            }
+            events.push(ModelStreamEvent::ResponseCompleted {
+                finish_reason: finish_reason(reason),
+                provider_metadata: BTreeMap::new(),
+            });
+            self.completed = true;
+        }
+        Ok(())
     }
 
     /// Ensures the body ended after a terminal candidate.
@@ -140,6 +117,95 @@ impl GeminiEventDecoder {
                 "Gemini stream ended before a terminal finishReason",
             ))
         }
+    }
+}
+
+fn decode_part(
+    decoder: &mut GeminiEventDecoder,
+    part: &Value,
+    index: u32,
+    events: &mut Vec<ModelStreamEvent>,
+) -> Result<(), ModelError> {
+    if let Some(call) = part.get("functionCall") {
+        events.push(ModelStreamEvent::ContentPartCompleted {
+            index,
+            part: decode_tool_call(call, index)?,
+        });
+    } else if part
+        .get("thought")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        events.push(ModelStreamEvent::ContentPartCompleted {
+            index,
+            part: ContentPart::Reasoning(ReasoningPart {
+                text: part.get("text").and_then(Value::as_str).map(String::from),
+                signature: part
+                    .get("thoughtSignature")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                redacted: false,
+                provider_data: Vec::new(),
+            }),
+        });
+    } else if let Some(text) = part.get("text").and_then(Value::as_str) {
+        if decoder.open_blocks.insert(index) {
+            events.push(ModelStreamEvent::ContentBlockStarted {
+                index,
+                kind: ContentBlockKind::Text,
+            });
+        }
+        events.push(ModelStreamEvent::TextDelta {
+            index,
+            text: text.into(),
+        });
+    } else if let Some(inline) = part.get("inlineData") {
+        let media_type = required_string(inline, "mimeType")?.to_owned();
+        let kind = media_kind(&media_type)?;
+        if decoder.open_blocks.insert(index) {
+            events.push(ModelStreamEvent::ContentBlockStarted { index, kind });
+        }
+        events.push(ModelStreamEvent::BinaryDelta {
+            index,
+            data: required_string(inline, "data")?.to_owned(),
+        });
+    } else if let Some(file) = part.get("fileData") {
+        events.push(ModelStreamEvent::ContentPartCompleted {
+            index,
+            part: ContentPart::ResourceLink {
+                uri: required_string(file, "fileUri")?.to_owned(),
+                name: format!("gemini-file-{index}"),
+                title: None,
+                description: None,
+                media_type: file
+                    .get("mimeType")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                size: None,
+            },
+        });
+    } else {
+        events.push(provider_event("part", part.clone()));
+    }
+    Ok(())
+}
+
+fn media_kind(media_type: &str) -> Result<ContentBlockKind, ModelError> {
+    if media_type.starts_with("image/") {
+        Ok(ContentBlockKind::Image {
+            media_type: media_type.into(),
+        })
+    } else if media_type.starts_with("audio/") {
+        Ok(ContentBlockKind::Audio {
+            media_type: media_type.into(),
+        })
+    } else if media_type.contains('/') {
+        Ok(ContentBlockKind::Document {
+            media_type: media_type.into(),
+            name: None,
+        })
+    } else {
+        Err(protocol("Gemini inlineData MIME type is invalid"))
     }
 }
 
@@ -226,6 +292,29 @@ fn provider_event(name: &str, payload: Value) -> ModelStreamEvent {
     }
 }
 
+fn redact_inline_media(mut value: Value) -> Value {
+    match &mut value {
+        Value::Array(values) => {
+            for value in values {
+                *value = redact_inline_media(value.take());
+            }
+        }
+        Value::Object(object) => {
+            if let Some(Value::Object(inline)) = object.get_mut("inlineData")
+                && let Some(Value::String(data)) = inline.get_mut("data")
+            {
+                let encoded_len = data.len();
+                *data = format!("[redacted base64: {encoded_len} chars]");
+            }
+            for value in object.values_mut() {
+                *value = redact_inline_media(value.take());
+            }
+        }
+        _ => {}
+    }
+    value
+}
+
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, ModelError> {
     value
         .get(key)
@@ -239,7 +328,9 @@ fn unsigned(value: &Value, key: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use runifold_model::{FinishReason, ModelStreamEvent};
+    use runifold_model::{
+        ContentPart, FinishReason, MediaSource, ModelStreamAccumulator, ModelStreamEvent,
+    };
     use serde_json::json;
 
     use super::GeminiEventDecoder;
@@ -266,6 +357,43 @@ mod tests {
                 ..
             }
         )));
+        decoder.finish().unwrap();
+    }
+
+    #[test]
+    fn decodes_inline_binary_media_into_the_canonical_stream() {
+        let mut decoder = GeminiEventDecoder::new("gemini-image");
+        let events = decoder
+            .decode(&json!({
+                "candidates":[{
+                    "content":{"parts":[{
+                        "inlineData":{"mimeType":"image/png","data":"aW1hZ2U="}
+                    }]},
+                    "finishReason":"STOP"
+                }]
+            }))
+            .unwrap();
+        assert!(
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    ModelStreamEvent::Provider { event } => Some(event.payload.to_string()),
+                    _ => None,
+                })
+                .all(|payload| !payload.contains("aW1hZ2U="))
+        );
+        let mut accumulator = ModelStreamAccumulator::new();
+        let response = events
+            .into_iter()
+            .find_map(|event| accumulator.push(event).unwrap())
+            .unwrap();
+
+        assert!(matches!(
+            &response.content[0],
+            ContentPart::Image {
+                source: MediaSource::Base64 { media_type, data }
+            } if media_type == "image/png" && data == "aW1hZ2U="
+        ));
         decoder.finish().unwrap();
     }
 }

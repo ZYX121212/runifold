@@ -6,6 +6,27 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-06
+
+- Replaced scalar Tool results with ordered rich content, separately validated
+  structured output, application-error status, and host-only metadata across
+  Agent, MCP, Provider, journal, and OpenTelemetry boundaries.
+- Added scope-bound content-addressed artifacts with integrity verification,
+  idempotent writes, bounded pagination, expiry purging, deletion, and durable
+  SQLite/PostgreSQL adapters. Artifact bytes remain references in durable
+  state and are resolved only at the Provider transport boundary.
+- Bound scope deserialization, MIME values, idempotency keys, names, retention
+  timestamps, and immutable metadata. Concurrent PostgreSQL writers now
+  converge on one idempotency record without surfacing a storage race.
+- Added canonical bounded binary stream events and native generated-media
+  decoding for Gemini and OpenAI Responses. Provider observability payloads
+  redact duplicated Base64 media.
+- Added native Bedrock image and document Tool-result projection. Unsupported
+  protocol combinations, including Bedrock audio and Ollama rich media, remain
+  explicit errors rather than lossy stringification.
+
+This release contains pre-1.0 breaking API changes.
+
 ## [0.3.2] - 2026-08-05
 
 - Added a lightweight facade mode selected with `--no-default-features`, while

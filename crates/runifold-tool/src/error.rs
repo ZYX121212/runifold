@@ -76,4 +76,14 @@ pub enum ToolRegistrationError {
     /// A different tool already owns this model-facing name.
     #[error("tool `{0}` is already registered")]
     DuplicateName(String),
+    /// A declared input or output schema could not be compiled.
+    #[error("tool `{tool}` has an invalid {direction} schema: {message}")]
+    InvalidSchema {
+        /// Tool name.
+        tool: String,
+        /// Schema direction (`input` or `output`).
+        direction: &'static str,
+        /// Safe compiler diagnostic.
+        message: String,
+    },
 }

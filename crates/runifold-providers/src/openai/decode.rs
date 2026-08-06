@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use runifold_model::{
-    ContentBlockKind, FinishReason, ModelError, ModelErrorKind, ModelRef, ModelStreamEvent,
-    ModelUsage, ProviderEvent,
+    ContentBlockKind, ContentPart, FinishReason, MediaSource, ModelError, ModelErrorKind, ModelRef,
+    ModelStreamEvent, ModelUsage, ProviderEvent,
 };
 use serde_json::Value;
 
@@ -57,7 +57,7 @@ impl OpenAiEventDecoder {
             .get("type")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let raw_payload = payload.clone();
+        let raw_payload = redact_generated_media(payload.clone());
         self.decode_inner(payload)
             .map(|mut events| {
                 for event in &mut events {
@@ -110,10 +110,17 @@ impl OpenAiEventDecoder {
             "response.output_item.added" => self.output_item_started(&payload),
             "response.function_call_arguments.delta" => self.tool_arguments_delta(&payload),
             "response.function_call_arguments.done" => self.tool_call_completed(&payload),
+            "response.image_generation_call.completed"
+            | "response.output_image_generation_call.completed" => {
+                self.image_generation_completed(&payload)
+            }
             "response.completed" => Ok(self.response_completed(&payload, false)),
             "response.incomplete" => Ok(self.response_completed(&payload, true)),
             "response.failed" | "error" => Err(provider_failure(&payload)),
-            _ => Ok(vec![provider_event(&event_type, payload)]),
+            _ => Ok(vec![provider_event(
+                &event_type,
+                redact_generated_media(payload),
+            )]),
         }
     }
 
@@ -230,6 +237,28 @@ impl OpenAiEventDecoder {
     fn tool_call_completed(&self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
         let index = self.tool_index(payload)?;
         Ok(vec![ModelStreamEvent::ContentBlockCompleted { index }])
+    }
+
+    fn image_generation_completed(
+        &mut self,
+        payload: &Value,
+    ) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        let output_index = integer(payload, "output_index")?;
+        let data = payload
+            .get("result")
+            .or_else(|| payload.get("image_base64"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| protocol("OpenAI image generation completion omitted base64 data"))?;
+        let index = self.allocate(format!("image:{output_index}"))?;
+        Ok(vec![ModelStreamEvent::ContentPartCompleted {
+            index,
+            part: ContentPart::Image {
+                source: MediaSource::Base64 {
+                    media_type: "image/png".into(),
+                    data: data.into(),
+                },
+            },
+        }])
     }
 
     fn response_completed(&self, payload: &Value, incomplete: bool) -> Vec<ModelStreamEvent> {
@@ -395,6 +424,19 @@ pub(crate) fn decode_complete_response(
                 events.push(ModelStreamEvent::ContentBlockCompleted { index });
                 saw_tool_call = true;
             }
+            Some("image_generation_call") => {
+                let index = take_index(&mut next_index)?;
+                let data = string(item, "result")?.to_owned();
+                events.push(ModelStreamEvent::ContentPartCompleted {
+                    index,
+                    part: ContentPart::Image {
+                        source: MediaSource::Base64 {
+                            media_type: "image/png".into(),
+                            data,
+                        },
+                    },
+                });
+            }
             Some(kind) => events.push(provider_event_for(
                 provider,
                 &format!("response.output_item.{kind}"),
@@ -420,7 +462,7 @@ pub(crate) fn decode_complete_response(
     events.push(provider_event_for(
         provider,
         "response.complete",
-        payload.clone(),
+        redact_generated_media(payload.clone()),
     ));
     events.push(ModelStreamEvent::UsageUpdated { usage });
     events.push(ModelStreamEvent::ResponseCompleted {
@@ -496,6 +538,40 @@ fn take_index(next_index: &mut u32) -> Result<u32, ModelError> {
         .checked_add(1)
         .ok_or_else(|| protocol("canonical content index overflow"))?;
     Ok(index)
+}
+
+fn redact_generated_media(mut value: Value) -> Value {
+    match &mut value {
+        Value::Array(values) => {
+            for value in values {
+                *value = redact_generated_media(value.take());
+            }
+        }
+        Value::Object(object) => {
+            let is_image = object
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.contains("image_generation_call"));
+            for key in ["partial_image_b64", "image_base64"] {
+                redact_base64_field(object, key);
+            }
+            if is_image {
+                redact_base64_field(object, "result");
+            }
+            for value in object.values_mut() {
+                *value = redact_generated_media(value.take());
+            }
+        }
+        _ => {}
+    }
+    value
+}
+
+fn redact_base64_field(object: &mut serde_json::Map<String, Value>, key: &str) {
+    if let Some(Value::String(data)) = object.get_mut(key) {
+        let encoded_len = data.len();
+        *data = format!("[redacted base64: {encoded_len} chars]");
+    }
 }
 
 fn decode_usage(usage: Option<&Value>) -> ModelUsage {
@@ -773,6 +849,79 @@ mod tests {
         assert_eq!(response.content, vec![ContentPart::text("{\"ok\":true}")]);
         assert_eq!(response.usage.input_tokens, 4);
         assert_eq!(response.usage.output_tokens, 3);
+    }
+
+    #[test]
+    fn image_generation_completion_becomes_canonical_media_without_raw_duplication() {
+        let response = decode_response([
+            serde_json::json!({
+                "type":"response.created",
+                "response":{"id":"resp_image","model":"image-model"}
+            }),
+            serde_json::json!({
+                "type":"response.image_generation_call.completed",
+                "output_index":0,
+                "result":"aW1hZ2U="
+            }),
+            serde_json::json!({
+                "type":"response.completed",
+                "response":{"status":"completed","usage":{}}
+            }),
+        ]);
+
+        assert!(matches!(
+            &response.content[0],
+            ContentPart::Image {
+                source: runifold_model::MediaSource::Base64 { media_type, data }
+            } if media_type == "image/png" && data == "aW1hZ2U="
+        ));
+        assert!(
+            response
+                .provider_events
+                .iter()
+                .all(|event| !event.value.to_string().contains("aW1hZ2U="))
+        );
+    }
+
+    #[test]
+    fn partial_and_complete_provider_events_redact_generated_media() {
+        let mut decoder = OpenAiEventDecoder::new();
+        let partial = decoder
+            .decode(serde_json::json!({
+                "type":"response.image_generation_call.partial_image",
+                "output_index":0,
+                "partial_image_index":1,
+                "partial_image_b64":"cHJldmlldw=="
+            }))
+            .unwrap();
+        assert!(partial.iter().all(|event| match event {
+            ModelStreamEvent::Provider { event } => {
+                !event.payload.to_string().contains("cHJldmlldw==")
+            }
+            _ => true,
+        }));
+
+        let payload = serde_json::json!({
+            "id":"resp_complete_image",
+            "model":"image-model",
+            "status":"completed",
+            "output":[{"type":"image_generation_call","result":"aW1hZ2U="}],
+            "usage":{}
+        });
+        let events = super::decode_complete_response("openai", &payload, None).unwrap();
+        assert!(events.iter().all(|event| match event {
+            ModelStreamEvent::Provider { event } => {
+                !event.payload.to_string().contains("aW1hZ2U=")
+            }
+            _ => true,
+        }));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ModelStreamEvent::ContentPartCompleted {
+                part: ContentPart::Image { .. },
+                ..
+            }
+        )));
     }
 
     fn decode_response(

@@ -19,6 +19,7 @@ use runifold_mcp::{
     McpErrorKind, McpProtocolMode, McpRemoteTool, McpResultType, McpServer, McpTool,
     RemoteToolPolicy, RequestId, STATELESS_PROTOCOL_VERSION, StdioTransport, serve_io,
 };
+use runifold_model::{ContentPart, MediaSource};
 use runifold_tool::{
     Tool, ToolContext, ToolDescriptor, ToolError, ToolErrorKind, ToolFuture, ToolOutput,
     ToolRegistry,
@@ -288,7 +289,76 @@ async fn remote_tools_preserve_explicit_host_risk_and_execute_canonically() {
         .await
         .unwrap();
 
-    assert_eq!(output.value, json!({"question": "hello"}));
+    assert_eq!(
+        output.structured_content,
+        Some(json!({"question": "hello"}))
+    );
+}
+
+#[tokio::test]
+async fn rich_tool_results_round_trip_through_mcp_without_text_flattening() {
+    let rich = Arc::new(RichTool::new());
+    let mut server_registry = ToolRegistry::new();
+    server_registry.register(rich.clone()).unwrap();
+    let client = McpClient::new(
+        Arc::new(
+            McpServer::new(
+                Arc::new(server_registry),
+                authority_for([rich.as_ref().descriptor()]),
+                Implementation::new("rich-server", "1"),
+            )
+            .session(),
+        ),
+        McpClientConfig::new(Implementation::new("rich-client", "1")),
+    );
+    client.initialize().await.unwrap();
+
+    let wire = client
+        .call_tool(CallToolParams {
+            name: "rich".into(),
+            arguments: Some(serde_json::Map::new()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        wire.content
+            .iter()
+            .map(|block| block.kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["text", "image", "audio", "resource_link"]
+    );
+    assert_eq!(wire.structured_content, Some(json!({"count": 4})));
+    assert_eq!(wire.metadata.get("runifold.test"), Some(&json!("retained")));
+
+    let remote = Arc::new(
+        McpRemoteTool::new(
+            client.clone(),
+            client.list_tools().await.unwrap().remove(0),
+            RemoteToolPolicy::new(EffectClass::ReadOnly, RiskLevel::Low),
+        )
+        .unwrap(),
+    );
+    let mut local_registry = ToolRegistry::new();
+    local_registry.register(remote.clone()).unwrap();
+    let output = local_registry
+        .invoke(
+            "rich",
+            json!({}),
+            &authority_for([remote.as_ref().descriptor()]),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(output.content[1], ContentPart::Image { .. }));
+    assert!(matches!(output.content[2], ContentPart::Audio { .. }));
+    assert!(matches!(
+        output.content[3],
+        ContentPart::ResourceLink { .. }
+    ));
+    assert_eq!(output.structured_content, Some(json!({"count": 4})));
+    assert_eq!(
+        output.metadata.get("runifold.test"),
+        Some(&json!("retained"))
+    );
 }
 
 #[tokio::test]
@@ -514,6 +584,66 @@ struct HiddenOutputTool {
     descriptor: ToolDescriptor,
 }
 
+#[derive(Debug)]
+struct RichTool {
+    descriptor: ToolDescriptor,
+}
+
+impl RichTool {
+    fn new() -> Self {
+        Self {
+            descriptor: ToolDescriptor {
+                output_schema: json!({
+                    "type":"object",
+                    "properties":{"count":{"type":"integer"}},
+                    "required":["count"]
+                }),
+                ..descriptor("rich", "Return rich media")
+            },
+        }
+    }
+}
+
+impl Tool for RichTool {
+    fn descriptor(&self) -> &ToolDescriptor {
+        &self.descriptor
+    }
+
+    fn invoke(
+        &self,
+        _input: Value,
+        _context: ToolContext,
+    ) -> ToolFuture<'_, Result<ToolOutput, ToolError>> {
+        Box::pin(async move {
+            Ok(ToolOutput::rich(vec![
+                ContentPart::text("generated assets"),
+                ContentPart::Image {
+                    source: MediaSource::Base64 {
+                        media_type: "image/png".into(),
+                        data: "aW1hZ2U=".into(),
+                    },
+                },
+                ContentPart::Audio {
+                    source: MediaSource::Base64 {
+                        media_type: "audio/wav".into(),
+                        data: "YXVkaW8=".into(),
+                    },
+                },
+                ContentPart::ResourceLink {
+                    uri: "https://example.com/report.pdf".into(),
+                    name: "report.pdf".into(),
+                    title: Some("Report".into()),
+                    description: None,
+                    media_type: Some("application/pdf".into()),
+                    size: Some(42),
+                },
+            ])
+            .with_structured_content(json!({"count":4}))
+            .with_metadata("runifold.test", json!("retained")))
+        })
+    }
+}
+
 impl HiddenOutputTool {
     fn new() -> Self {
         Self {
@@ -533,10 +663,9 @@ impl Tool for HiddenOutputTool {
         _context: ToolContext,
     ) -> ToolFuture<'_, Result<ToolOutput, ToolError>> {
         Box::pin(async move {
-            Ok(ToolOutput {
-                value: json!({"secret": "private-value"}),
-                model_visible: false,
-            })
+            Ok(ToolOutput::host_only(vec![
+                runifold_model::ContentPart::text(json!({"secret": "private-value"}).to_string()),
+            ]))
         })
     }
 }

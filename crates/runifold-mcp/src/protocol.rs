@@ -464,4 +464,7 @@ pub struct CallToolResult {
     /// Whether the Tool reported an application-level error.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_error: bool,
+    /// Host-facing result metadata that is not part of model-visible content.
+    #[serde(rename = "_meta", default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, Value>,
 }

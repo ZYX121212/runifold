@@ -1,5 +1,6 @@
 //! Provider-neutral model protocol and streaming primitives.
 
+mod artifact;
 mod capability;
 mod circuit;
 mod content;
@@ -40,3 +41,8 @@ pub use structured::{StructuredOutputError, StructuredOutputErrorKind};
 
 /// Namespaced extension fields.
 pub type ExtensionMap = std::collections::BTreeMap<String, serde_json::Value>;
+pub use artifact::{
+    Artifact, ArtifactError, ArtifactFuture, ArtifactPage, ArtifactRef, ArtifactResolvingModel,
+    ArtifactScope, ArtifactStore, ArtifactWrite, DEFAULT_MAX_ARTIFACT_BYTES, InMemoryArtifactStore,
+    MAX_ARTIFACT_IDEMPOTENCY_KEY_BYTES, MAX_ARTIFACT_NAME_BYTES, MAX_ARTIFACT_PAGE_SIZE,
+};
