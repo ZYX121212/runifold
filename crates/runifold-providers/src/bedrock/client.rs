@@ -317,7 +317,9 @@ fn provider_error(code: Option<&str>, message: Option<&str>) -> ModelError {
 fn adapter_capabilities() -> ModelCapabilities {
     ModelCapabilities {
         streaming: FeatureSupport::new(SupportLevel::Native),
-        audio_input: FeatureSupport::new(SupportLevel::Unsupported),
+        image_input: FeatureSupport::new(SupportLevel::Emulated),
+        audio_input: FeatureSupport::new(SupportLevel::Emulated),
+        document_input: FeatureSupport::new(SupportLevel::Emulated),
         ..ModelCapabilities::default()
     }
 }

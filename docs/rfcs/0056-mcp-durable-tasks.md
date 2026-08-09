@@ -1,7 +1,7 @@
 # RFC 0056: MCP durable Tasks
 
 - Status: implemented
-- Scope: `runifold-mcp`, `runifold-workflow`, `runifold-store-postgres`
+- Scope: `runifold-mcp`, `runifold-workflow`, `runifold-store-sqlite`, `runifold-store-postgres`
 - Protocol baseline: MCP `2026-07-28` Tasks extension draft
 - Extension: `io.modelcontextprotocol/tasks`
 
@@ -119,6 +119,23 @@ Durable interrupts become keyed `elicitation/create` input requests.
 `WorkflowInterruptCommand` values. The interrupt identity is reused as the
 decision identity, so duplicate delivery cannot create a second decision.
 
+### Task-augmented Sampling
+
+The same adapter also implements the separate MCP `2025-11-25`
+task-augmented `sampling/createMessage` contract. A single
+`WorkflowSamplingTaskRoute` binds Sampling to an exact tenant, workflow name,
+and version. It cannot reuse a Tool route identity, which keeps opaque task IDs
+unambiguous after restart.
+
+The approved `CreateMessageParams` value is persisted as workflow input and a
+successful workflow must emit an encoded `CreateMessageResult`. The adapter
+recovers the former from the initial Checkpoint and the latter from the
+terminal Checkpoint. `SamplingService` still owns admission, both approval
+stages, and final validation; durable execution therefore does not create a
+policy bypass. This compatibility path provides `tasks/get`, `tasks/result`,
+and `tasks/cancel` on the reverse client-request channel without changing the
+newer stateless Tool Tasks API described above.
+
 ## Persistence and timestamps
 
 `WorkflowTaskSnapshot` now includes workflow identity, version,
@@ -143,16 +160,45 @@ exist” to avoid cross-tenant existence disclosure.
 Task input requests retain the same trust level as ordinary Elicitation,
 Sampling, or Roots requests. A Task is never a higher-trust channel.
 
+Task-augmented Sampling accepts an explicit UUIDv4/v7 idempotency key in
+`_meta["io.runifold/sampling-task-idempotency-key"]`; the typed builder method
+is `CreateMessageParams::with_task_idempotency_key`. A deployment-stable private
+`SamplingTaskIdempotencyNamespace` derives a separate server-owned Task ID.
+Create-only enqueue then verifies the persisted original request before an
+existing Task is returned; reuse with different content fails closed. The
+newer stateless Tool Tasks extension remains server-generated and keeps its
+independent `ttlMs`/`pollIntervalMs` wire shape.
+
+Approved Sampling disclosures are persisted as tenant-scoped idempotent
+workflow control records and survive SQLite/PostgreSQL adapter recreation.
+Before response review, the adapter acquires a store-clock lease. Competing
+instances observe `Busy`; after expiry another instance may take over, and the
+old fencing token cannot commit. Claim and approved-result records are marked
+compaction-protected, so ordinary signal retention cannot reopen a completed
+approval. Exact safe terminal protocol failures use
+`WorkflowSamplingTaskResult::Error`; ordinary workflow runtime failures remain
+normalized to `-32603`.
+
+The lease guarantees one active reviewer and fenced durable completion. It
+cannot make an external approval system exactly-once if that system performs a
+side effect and the process dies before Runifold records completion. Such an
+approver must accept the Task ID as its own idempotency key, or expose a durable
+lookup by that key before takeover is enabled.
+
 ## Verification
 
 Conformance tests cover per-request capability rejection, creation read-back,
 polling, update, cancellation, exact HTTP routing names, workflow completion,
-process-local client reconnection from task ID alone, durable interrupt
+process-local client reconnection from task ID alone, SQLite file reopen for
+task-augmented Sampling, recovered request/result validation, durable interrupt
 mapping, wake-up through `tasks/update`, notification capability enforcement,
 filter normalization, changed-state suppression, terminal detachment, and
 notification reconnect snapshots. Timestamp ordering, retention overflow,
 expired non-terminal handles, retained terminal results, and hostile
-one-millisecond polling hints are also covered.
+one-millisecond polling hints are also covered. Approval tests use two adapter
+instances over one store and a controllable store clock to prove a single
+lease winner, expiry takeover, stale-owner fencing, durable completion reuse,
+and compaction protection.
 
 A disposable PostgreSQL fault-injection test durably creates a Task, stops the
 database, requires the stale client to surface a bounded storage failure,

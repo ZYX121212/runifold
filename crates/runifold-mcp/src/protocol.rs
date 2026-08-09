@@ -195,12 +195,45 @@ pub struct SamplingCapability {
     pub tools: Option<BTreeMap<String, Value>>,
 }
 
+/// Task-augmented client request methods.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClientTaskSamplingRequestsCapability {
+    /// Task augmentation for `sampling/createMessage`.
+    #[serde(rename = "createMessage", skip_serializing_if = "Option::is_none")]
+    pub create_message: Option<BTreeMap<String, Value>>,
+}
+
+/// Client request families supporting MCP Tasks.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClientTaskRequestsCapability {
+    /// Task-capable Sampling requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<ClientTaskSamplingRequestsCapability>,
+}
+
+/// Official MCP Tasks capability advertised by a client receiver.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClientTasksCapability {
+    /// Whether this client supports `tasks/list`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<BTreeMap<String, Value>>,
+    /// Whether this client supports `tasks/cancel`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel: Option<BTreeMap<String, Value>>,
+    /// Request methods the client can durably execute as Tasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requests: Option<ClientTaskRequestsCapability>,
+}
+
 /// Client capabilities supported by this MCP edge.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ClientCapabilities {
     /// Client-side model Sampling support.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<SamplingCapability>,
+    /// Task-augmented client request support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<ClientTasksCapability>,
     /// Client-side Roots support, including MRTR `roots/list`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roots: Option<BTreeMap<String, Value>>,

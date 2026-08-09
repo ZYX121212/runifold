@@ -121,6 +121,11 @@ impl McpClient {
     /// Returns [`McpError`] for transport, protocol, version, timeout, or
     /// lifecycle failures.
     pub async fn initialize(&self) -> Result<InitializeResult, McpError> {
+        if self.inner.config.sampling_tasks.is_some() && self.inner.config.sampling.is_none() {
+            return Err(McpError::lifecycle(
+                "durable Sampling Tasks require a SamplingService",
+            ));
+        }
         {
             let mut state = self.inner.state.lock().await;
             if !matches!(*state, ClientState::Created) {
@@ -156,7 +161,10 @@ impl McpClient {
             });
         }
         if let Some(sampling) = &self.inner.config.sampling {
-            let handler = Arc::new(ClientPeerHandler::new(Arc::clone(sampling)));
+            let handler = Arc::new(ClientPeerHandler::new(
+                Arc::clone(sampling),
+                self.inner.config.sampling_tasks.clone(),
+            ));
             if let Err(error) = self.inner.transport.install_peer_handler(handler) {
                 *self.inner.state.lock().await = ClientState::Created;
                 return Err(error);

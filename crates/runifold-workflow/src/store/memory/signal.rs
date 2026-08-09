@@ -51,6 +51,7 @@ impl InMemoryWorkflowStore {
         &self,
         tenant_id: WorkflowTenantId,
         signal: WorkflowSignal,
+        compaction_protected: bool,
     ) -> WorkflowStoreFuture<'_, Result<WorkflowSignalOutcome, WorkflowStoreError>> {
         Box::pin(async move {
             let now = self.clock.now_ms();
@@ -67,7 +68,9 @@ impl InMemoryWorkflowStore {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(existing) = signals.get(&signal.signal_id) {
-                return if existing.signal == signal {
+                return if existing.signal == signal
+                    && existing.compaction_protected == compaction_protected
+                {
                     Ok(WorkflowSignalOutcome::Duplicate)
                 } else {
                     Err(WorkflowStoreError::new(
@@ -104,6 +107,7 @@ impl InMemoryWorkflowStore {
                     signal,
                     consumed: wakes,
                     dead_lettered,
+                    compaction_protected,
                     accepted_at_ms: now,
                 },
             );
@@ -158,7 +162,8 @@ impl InMemoryWorkflowStore {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let before = signals.len();
             signals.retain(|_, stored| {
-                stored.tenant_id != tenant_id
+                stored.compaction_protected
+                    || stored.tenant_id != tenant_id
                     || stored.accepted_at_ms > cutoff
                     || (!stored.consumed && !stored.dead_lettered)
             });

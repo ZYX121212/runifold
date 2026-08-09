@@ -2,6 +2,8 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::content_projection::encode_content_envelope;
+
 use runifold_model::{
     ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, Role,
     ToolChoice, ToolResult,
@@ -177,12 +179,12 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
         {
             Ok(data.value.clone())
         }
-        ContentPart::Audio { .. } => Err(unsupported(
-            "audio input is not supported by the Anthropic adapter",
-        )),
-        ContentPart::Document { .. } => Err(unsupported(
-            "document input requires an explicit Anthropic beta configuration",
-        )),
+        ContentPart::Audio { .. }
+        | ContentPart::Document { .. }
+        | ContentPart::ResourceLink { .. } => {
+            require_role(role, Role::User, "projected rich content")?;
+            Ok(json!({"type":"text","text":encode_content_envelope(part)?}))
+        }
         ContentPart::Refusal { .. } => Err(unsupported(
             "refusals cannot be sent as generic Anthropic message input",
         )),
@@ -221,13 +223,18 @@ fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
         .iter()
         .map(|part| match part {
             ContentPart::Text { text } => Ok(json!({"type": "text", "text": text})),
-            ContentPart::Image { source } => {
-                Ok(json!({"type": "image", "source": encode_media(source)?}))
-            }
-            ContentPart::ResourceLink { uri, .. } => Ok(json!({"type": "text", "text": uri})),
-            _ => Err(unsupported(
-                "Anthropic tool results currently support text, images, and resource links",
-            )),
+            ContentPart::Image { source } => match encode_media(source) {
+                Ok(source) => Ok(json!({"type": "image", "source": source})),
+                Err(error) if error.kind == ModelErrorKind::UnsupportedFeature => Ok(json!({
+                    "type": "text",
+                    "text": encode_content_envelope(part)?
+                })),
+                Err(error) => Err(error),
+            },
+            _ => Ok(json!({
+                "type": "text",
+                "text": encode_content_envelope(part)?
+            })),
         })
         .collect::<Result<Vec<_>, _>>()?;
     if let Some(structured) = &result.structured_content {
@@ -328,11 +335,14 @@ mod tests {
     use std::collections::{BTreeMap, btree_map::Entry};
 
     use runifold_model::{
-        ContentPart, Message, ModelRef, ModelRequest, Role, ToolCall, ToolChoice, ToolSpec,
+        ContentPart, MediaSource, Message, ModelRef, ModelRequest, Role, ToolCall, ToolChoice,
+        ToolResult, ToolSpec,
     };
     use serde_json::json;
 
     use super::encode_request;
+
+    use crate::content_projection::decode_content_envelope;
 
     #[test]
     fn encodes_system_messages_and_required_tools_natively() {
@@ -380,6 +390,83 @@ mod tests {
 
         assert_eq!(body["messages"][1]["content"][0]["type"], "tool_use");
         assert_eq!(body["messages"][1]["content"][0]["input"]["id"], 7);
+    }
+
+    #[test]
+    fn tool_results_bridge_audio_and_documents() {
+        let result = ToolResult {
+            call_id: "call-rich".into(),
+            name: Some("inspect".into()),
+            content: vec![
+                ContentPart::Audio {
+                    source: MediaSource::Base64 {
+                        media_type: "audio/wav".into(),
+                        data: "YXVkaW8=".into(),
+                    },
+                },
+                ContentPart::Document {
+                    source: MediaSource::Url {
+                        url: "https://example.com/report.pdf".into(),
+                        media_type: Some("application/pdf".into()),
+                    },
+                    name: Some("report.pdf".into()),
+                },
+            ],
+            structured_content: None,
+            is_error: false,
+            metadata: BTreeMap::new(),
+        };
+        let message = Message::new(Role::Tool, vec![ContentPart::ToolResult(result)]).unwrap();
+
+        let body = encode_request(
+            &ModelRequest::new(ModelRef::new("anthropic", "claude-test"), message),
+            100,
+        )
+        .unwrap();
+
+        assert_eq!(body["messages"][0]["content"].as_array().unwrap().len(), 1);
+        let blocks = body["messages"][0]["content"][0]["content"]
+            .as_array()
+            .unwrap();
+        assert!(blocks.iter().all(|block| block["type"] == "text"));
+        assert!(blocks[0]["text"].as_str().unwrap().contains("audio/wav"));
+        assert!(blocks[1]["text"].as_str().unwrap().contains("report.pdf"));
+    }
+
+    #[test]
+    fn ordinary_audio_and_document_inputs_use_safe_projection_blocks() {
+        let message = Message::new(
+            Role::User,
+            vec![
+                ContentPart::Audio {
+                    source: MediaSource::Base64 {
+                        media_type: "audio/wav".into(),
+                        data: "YXVkaW8=".into(),
+                    },
+                },
+                ContentPart::Document {
+                    source: MediaSource::Url {
+                        url: "https://example.com/report.pdf".into(),
+                        media_type: Some("application/pdf".into()),
+                    },
+                    name: Some("report.pdf".into()),
+                },
+            ],
+        )
+        .unwrap();
+
+        let body = encode_request(
+            &ModelRequest::new(ModelRef::new("anthropic", "claude-test"), message),
+            100,
+        )
+        .unwrap();
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+
+        assert!(blocks.iter().all(|block| {
+            decode_content_envelope(block["text"].as_str().unwrap())
+                .unwrap()
+                .is_some()
+        }));
     }
 
     #[test]

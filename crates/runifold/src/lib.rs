@@ -15,6 +15,18 @@ pub mod model {
     pub use runifold_model::*;
 }
 
+/// Safe rich-content projection for Provider protocols with text-only gaps.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "bedrock",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai"
+))]
+pub mod content_projection {
+    pub use runifold_providers::content_projection::*;
+}
+
 /// Provider-neutral embeddings, retrieval, and reference vector indexing.
 #[cfg(feature = "runtime")]
 pub mod retrieval {

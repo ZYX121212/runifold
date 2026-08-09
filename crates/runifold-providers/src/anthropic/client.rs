@@ -265,6 +265,7 @@ fn retry_after(response: &Response) -> Option<std::time::Duration> {
 fn adapter_capabilities() -> ModelCapabilities {
     let native = || FeatureSupport::new(SupportLevel::Native);
     let unsupported = || FeatureSupport::new(SupportLevel::Unsupported);
+    let emulated = || FeatureSupport::new(SupportLevel::Emulated);
     let unknown = || FeatureSupport::new(SupportLevel::Unknown);
     ModelCapabilities {
         streaming: native(),
@@ -273,8 +274,8 @@ fn adapter_capabilities() -> ModelCapabilities {
         structured_output: unsupported(),
         reasoning: native(),
         image_input: native(),
-        audio_input: unsupported(),
-        document_input: unknown(),
+        audio_input: emulated(),
+        document_input: emulated(),
         max_context_tokens: None,
         extensions: BTreeMap::new(),
     }
@@ -379,6 +380,7 @@ mod tests {
             capabilities.structured_output.level,
             SupportLevel::Unsupported
         );
-        assert_eq!(capabilities.document_input.level, SupportLevel::Unknown);
+        assert_eq!(capabilities.audio_input.level, SupportLevel::Emulated);
+        assert_eq!(capabilities.document_input.level, SupportLevel::Emulated);
     }
 }

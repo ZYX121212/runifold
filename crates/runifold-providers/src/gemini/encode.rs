@@ -2,6 +2,8 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::content_projection::{encode_content_envelope, native_or_projected};
+
 use runifold_model::{
     ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, Role,
     ToolChoice, ToolResult,
@@ -116,7 +118,19 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
         ContentPart::Text { text } => Ok(json!({"text":text})),
         ContentPart::Image { source }
         | ContentPart::Audio { source }
-        | ContentPart::Document { source, .. } => encode_media(source),
+        | ContentPart::Document { source, .. } => {
+            native_or_projected(encode_media(source), part, |text| json!({"text":text}))
+        }
+        ContentPart::ResourceLink {
+            uri, media_type, ..
+        } => native_or_projected(
+            encode_media(&MediaSource::Url {
+                url: uri.clone(),
+                media_type: media_type.clone(),
+            }),
+            part,
+            |text| json!({"text":text}),
+        ),
         ContentPart::ToolCall(call) if role == Role::Assistant => Ok(json!({
             "functionCall":{"id":call.id,"name":call.name,"args":call.arguments}
         })),
@@ -136,6 +150,9 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
         }
         ContentPart::ProviderOpaque(data) if data.provider == "gemini" && data.kind == "part" => {
             Ok(data.value.clone())
+        }
+        ContentPart::Refusal { .. } | ContentPart::Citation(_) => {
+            Ok(json!({"text":encode_content_envelope(part)?}))
         }
         _ => Err(unsupported(
             "content cannot be represented by the Gemini adapter",
@@ -173,26 +190,41 @@ fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
             ContentPart::Text { text: value } => text.push(Value::String(value.clone())),
             ContentPart::Image { source }
             | ContentPart::Audio { source }
-            | ContentPart::Document { source, .. } => media.push(encode_media(source)?),
+            | ContentPart::Document { source, .. } => match encode_media(source) {
+                Ok(part) => media.push(part),
+                Err(error) if error.kind == ModelErrorKind::UnsupportedFeature => {
+                    text.push(Value::String(encode_content_envelope(part)?));
+                }
+                Err(error) => return Err(error),
+            },
             ContentPart::ResourceLink {
                 uri, media_type, ..
-            } => media.push(encode_media(&MediaSource::Url {
+            } => match encode_media(&MediaSource::Url {
                 url: uri.clone(),
                 media_type: media_type.clone(),
-            })?),
-            _ => {
-                return Err(unsupported(
-                    "Gemini function results support text, images, audio, documents, and resource links",
-                ));
-            }
+            }) {
+                Ok(part) => media.push(part),
+                Err(error) if error.kind == ModelErrorKind::UnsupportedFeature => {
+                    text.push(Value::String(encode_content_envelope(part)?));
+                }
+                Err(error) => return Err(error),
+            },
+            _ => text.push(Value::String(encode_content_envelope(part)?)),
         }
     }
-    let response = result.structured_content.clone().unwrap_or_else(|| {
-        json!({
+    let response = match (&result.structured_content, text.is_empty()) {
+        (Some(structured), true) => structured.clone(),
+        (Some(structured), false) => json!({
+            "type": "runifold.tool_result.v1",
+            "structuredContent": structured,
+            "content": text,
+            "isError": result.is_error
+        }),
+        (None, _) => json!({
             "output": text,
             "isError": result.is_error
-        })
-    });
+        }),
+    };
     let mut function_response = serde_json::Map::from_iter([
         ("id".into(), Value::String(result.call_id.clone())),
         ("name".into(), Value::String(name.into())),
@@ -310,5 +342,39 @@ mod tests {
         let response = &body["contents"][0]["parts"][0]["functionResponse"];
         assert_eq!(response["response"], serde_json::json!({"objects":1}));
         assert_eq!(response["parts"][0]["inlineData"]["mimeType"], "image/png");
+    }
+
+    #[test]
+    fn bridges_extension_content_without_losing_structured_output() {
+        let message = Message::new(
+            Role::Tool,
+            vec![ContentPart::ToolResult(ToolResult {
+                call_id: "call-extension".into(),
+                name: Some("inspect".into()),
+                content: vec![ContentPart::Refusal {
+                    text: "redacted".into(),
+                }],
+                structured_content: Some(serde_json::json!({"objects":1})),
+                is_error: false,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("gemini", "gemini-3"),
+            message,
+        ))
+        .unwrap();
+        let response = &body["contents"][0]["parts"][0]["functionResponse"]["response"];
+
+        assert_eq!(response["type"], "runifold.tool_result.v1");
+        assert_eq!(response["structuredContent"]["objects"], 1);
+        assert!(
+            response["content"][0]
+                .as_str()
+                .unwrap()
+                .contains("runifold.content.v1")
+        );
     }
 }

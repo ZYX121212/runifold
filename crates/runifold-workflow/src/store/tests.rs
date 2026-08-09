@@ -954,6 +954,43 @@ fn signal_compaction_never_removes_pending_delivery() {
 }
 
 #[test]
+fn signal_compaction_preserves_protected_control_records() {
+    let clock = Arc::new(ManualClock::default());
+    let store = InMemoryWorkflowStore::with_clock(clock.clone());
+    let task = task("protected-control-record", 0);
+    let checkpoint_id = task.checkpoint_id;
+    block_on(store.enqueue(task)).unwrap();
+    let claimed = block_on(store.claim(WorkerId::parse("worker-a").unwrap(), lease_duration(10)))
+        .unwrap()
+        .unwrap();
+    block_on(store.finish(claimed.lease, WorkflowDisposition::Completed)).unwrap();
+    let protected = WorkflowSignal::new(
+        checkpoint_id,
+        WorkflowSignalName::parse("control-record").unwrap(),
+        json!({"value": 1}),
+    )
+    .unwrap();
+    let signal_id = protected.signal_id;
+    assert_eq!(
+        block_on(store.publish_control_signal(WorkflowTenantId::default(), protected)).unwrap(),
+        WorkflowSignalOutcome::DeadLettered
+    );
+
+    clock.advance(10);
+    let retention = WorkflowSignalRetention::new(Duration::from_millis(10)).unwrap();
+    assert_eq!(
+        block_on(store.compact_signals(WorkflowTenantId::default(), retention)).unwrap(),
+        0
+    );
+    assert_eq!(
+        block_on(store.inspect_signal(WorkflowTenantId::default(), signal_id))
+            .unwrap()
+            .state,
+        WorkflowSignalState::DeadLettered
+    );
+}
+
+#[test]
 fn external_cancel_is_idempotent_and_fences_a_leased_worker() {
     let store = InMemoryWorkflowStore::new();
     let task = task("cancel", 0);

@@ -16,6 +16,8 @@ use runifold_model::{
 };
 use serde_json::Value;
 
+use crate::content_projection::{encode_content_envelope, native_or_projected};
+
 pub(crate) struct EncodedRequest {
     pub(crate) messages: Vec<Message>,
     pub(crate) system: Vec<SystemContentBlock>,
@@ -135,16 +137,17 @@ fn encode_content(part: &ContentPart, role: Role) -> Result<ContentBlock, ModelE
                 .iter()
                 .map(|part| match part {
                     ContentPart::Text { text } => Ok(ToolResultContentBlock::Text(text.clone())),
-                    ContentPart::ResourceLink { uri, .. } => {
-                        Ok(ToolResultContentBlock::Text(uri.clone()))
-                    }
-                    ContentPart::Image { source } => encode_tool_image(source),
-                    ContentPart::Document { source, name } => {
-                        encode_tool_document(source, name.as_deref())
-                    }
-                    _ => Err(unsupported(
-                        "Bedrock tool results support text, JSON, inline images, inline documents, and resource links; audio is not a Converse ToolResult variant",
-                    )),
+                    ContentPart::Image { source } => native_or_projected(
+                        encode_tool_image(source),
+                        part,
+                        ToolResultContentBlock::Text,
+                    ),
+                    ContentPart::Document { source, name } => native_or_projected(
+                        encode_tool_document(source, name.as_deref()),
+                        part,
+                        ToolResultContentBlock::Text,
+                    ),
+                    _ => Ok(ToolResultContentBlock::Text(encode_content_envelope(part)?)),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             if let Some(structured) = &result.structured_content {
@@ -170,15 +173,12 @@ fn encode_content(part: &ContentPart, role: Role) -> Result<ContentBlock, ModelE
         ContentPart::Reasoning(_) => Err(unsupported(
             "Bedrock reasoning input requires an unmodified model-specific round trip",
         )),
-        ContentPart::Image { .. } => Err(unsupported(
-            "Bedrock image input is model-specific and is not enabled in this layer",
-        )),
-        ContentPart::Audio { .. } => {
-            Err(unsupported("Bedrock Converse does not accept audio here"))
+        ContentPart::Image { .. }
+        | ContentPart::Audio { .. }
+        | ContentPart::Document { .. }
+        | ContentPart::ResourceLink { .. } => {
+            Ok(ContentBlock::Text(encode_content_envelope(part)?))
         }
-        ContentPart::Document { .. } => Err(unsupported(
-            "Bedrock document input requires resolved bytes and a validated document name",
-        )),
         ContentPart::Refusal { .. } | ContentPart::Citation(_) => {
             Err(unsupported("output-only content cannot be sent to Bedrock"))
         }
@@ -415,6 +415,8 @@ mod tests {
 
     use super::encode_request;
 
+    use crate::content_projection::decode_content_envelope;
+
     #[test]
     fn encodes_messages_tools_and_additional_fields_natively() {
         let mut request =
@@ -483,5 +485,84 @@ mod tests {
         let tool_result = encoded.messages[0].content()[0].as_tool_result().unwrap();
         assert!(tool_result.content()[0].is_image());
         assert!(tool_result.content()[1].is_document());
+    }
+
+    #[test]
+    fn bridges_audio_tool_results_as_reversible_text() {
+        let result = ToolResult {
+            call_id: "call-audio".into(),
+            name: Some("listen".into()),
+            content: vec![ContentPart::Audio {
+                source: MediaSource::Base64 {
+                    media_type: "audio/wav".into(),
+                    data: "YXVkaW8=".into(),
+                },
+            }],
+            structured_content: None,
+            is_error: false,
+            metadata: BTreeMap::new(),
+        };
+        let message = Message::new(Role::Tool, vec![ContentPart::ToolResult(result)]).unwrap();
+
+        let encoded = encode_request(&ModelRequest::new(
+            ModelRef::new("bedrock", "model"),
+            message,
+        ))
+        .unwrap();
+        let result = encoded.messages[0].content()[0].as_tool_result().unwrap();
+        let text = result.content()[0].as_text().unwrap();
+
+        assert!(text.contains("runifold.content.v1"));
+        assert!(text.contains("audio/wav"));
+    }
+
+    #[test]
+    fn ordinary_audio_input_uses_safe_text_projection() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Audio {
+                source: MediaSource::Base64 {
+                    media_type: "audio/wav".into(),
+                    data: "YXVkaW8=".into(),
+                },
+            }],
+        )
+        .unwrap();
+
+        let encoded = encode_request(&ModelRequest::new(
+            ModelRef::new("bedrock", "model"),
+            message,
+        ))
+        .unwrap();
+        let text = encoded.messages[0].content()[0].as_text().unwrap();
+
+        assert!(decode_content_envelope(text).unwrap().is_some());
+    }
+
+    #[test]
+    fn malformed_native_image_does_not_fall_back_to_text() {
+        let result = ToolResult {
+            call_id: "call-image".into(),
+            name: Some("inspect".into()),
+            content: vec![ContentPart::Image {
+                source: MediaSource::Base64 {
+                    media_type: "image/png".into(),
+                    data: "not-base64".into(),
+                },
+            }],
+            structured_content: None,
+            is_error: false,
+            metadata: BTreeMap::new(),
+        };
+        let message = Message::new(Role::Tool, vec![ContentPart::ToolResult(result)]).unwrap();
+
+        let error = encode_request(&ModelRequest::new(
+            ModelRef::new("bedrock", "model"),
+            message,
+        ))
+        .err()
+        .unwrap();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
     }
 }

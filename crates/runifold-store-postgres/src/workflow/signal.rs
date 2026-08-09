@@ -19,6 +19,7 @@ pub(super) async fn publish(
     store: &PostgresWorkflowStore,
     tenant_id: WorkflowTenantId,
     signal: WorkflowSignal,
+    compaction_protected: bool,
 ) -> Result<WorkflowSignalOutcome, WorkflowStoreError> {
     let signal_id = signal.signal_id.as_checkpoint_id().as_uuid();
     let checkpoint_id = signal.checkpoint_id.as_uuid();
@@ -44,6 +45,7 @@ pub(super) async fn publish(
                 &signal.name.as_str(),
                 &signal.payload,
                 &wake,
+                &compaction_protected,
             ],
         )
         .await
@@ -60,7 +62,7 @@ pub(super) async fn publish(
             WorkflowSignalOutcome::Buffered
         });
     }
-    resolve_replay(store, &tenant_id, signal_id, &signal).await
+    resolve_replay(store, &tenant_id, signal_id, &signal, compaction_protected).await
 }
 
 async fn resolve_replay(
@@ -68,12 +70,14 @@ async fn resolve_replay(
     tenant_id: &WorkflowTenantId,
     signal_id: Uuid,
     signal: &WorkflowSignal,
+    compaction_protected: bool,
 ) -> Result<WorkflowSignalOutcome, WorkflowStoreError> {
     let existing = store
         .client
         .query_opt(
             &format!(
-                "SELECT tenant_id, checkpoint_id, name, payload FROM {table}_signals \
+                "SELECT tenant_id, checkpoint_id, name, payload, compaction_protected \
+                 FROM {table}_signals \
                  WHERE signal_id = $1",
                 table = store.table
             ),
@@ -111,9 +115,11 @@ async fn resolve_replay(
     let existing_checkpoint: Uuid = existing.try_get(1).map_err(storage)?;
     let existing_name: String = existing.try_get(2).map_err(storage)?;
     let existing_payload: Value = existing.try_get(3).map_err(storage)?;
+    let existing_protected: bool = existing.try_get(4).map_err(storage)?;
     if existing_checkpoint == signal.checkpoint_id.as_uuid()
         && existing_name == signal.name.as_str()
         && existing_payload == signal.payload
+        && existing_protected == compaction_protected
     {
         Ok(WorkflowSignalOutcome::Duplicate)
     } else {
@@ -235,6 +241,32 @@ pub(super) async fn inspect(
     Ok(snapshot)
 }
 
+pub(super) async fn load_payload(
+    store: &PostgresWorkflowStore,
+    tenant_id: WorkflowTenantId,
+    signal_id: WorkflowSignalId,
+) -> Result<Value, WorkflowStoreError> {
+    store
+        .client
+        .query_opt(
+            &format!(
+                "SELECT payload FROM {table}_signals WHERE signal_id = $1 AND tenant_id = $2",
+                table = store.table
+            ),
+            &[&signal_id.as_checkpoint_id().as_uuid(), &tenant_id.as_str()],
+        )
+        .await
+        .map_err(storage)?
+        .ok_or_else(|| {
+            WorkflowStoreError::new(
+                WorkflowStoreErrorKind::NotFound,
+                "workflow signal does not exist",
+            )
+        })?
+        .try_get(0)
+        .map_err(storage)
+}
+
 pub(super) async fn compact(
     store: &PostgresWorkflowStore,
     tenant_id: WorkflowTenantId,
@@ -246,7 +278,8 @@ pub(super) async fn compact(
         .execute(
             &format!(
                 "DELETE FROM {table}_signals \
-                 WHERE tenant_id = $1 AND (consumed OR dead_lettered) \
+                 WHERE tenant_id = $1 AND NOT compaction_protected \
+                   AND (consumed OR dead_lettered) \
                    AND created_at <= clock_timestamp() \
                        - ($2::BIGINT * INTERVAL '1 millisecond')",
                 table = store.table

@@ -1,6 +1,6 @@
 use super::{
     Budget, Checkpoint, CheckpointError, CheckpointId, ClaimedWorkflow, LeaseDuration, SystemTime,
-    UNIX_EPOCH, Usage, WorkerId, WorkflowBudgetAuditCursor, WorkflowBudgetAuditEvent,
+    UNIX_EPOCH, Usage, Value, WorkerId, WorkflowBudgetAuditCursor, WorkflowBudgetAuditEvent,
     WorkflowBudgetAuditLimit, WorkflowBudgetAuditProjectionId, WorkflowBudgetAuditProjectionLease,
     WorkflowBudgetReservationOutcome, WorkflowCancelOutcome, WorkflowCheckpointHistoryLimit,
     WorkflowCheckpointRevision, WorkflowDisposition, WorkflowForkCommand, WorkflowForkOutcome,
@@ -18,6 +18,9 @@ use super::{
 /// Every ownership-sensitive mutation must compare both worker identity and
 /// fencing token.
 pub trait WorkflowStore: Send + Sync {
+    /// Returns the store-authoritative Unix time in milliseconds.
+    fn current_time_ms(&self) -> WorkflowStoreFuture<'_, Result<u64, WorkflowStoreError>>;
+
     /// Creates or replaces one tenant's admission policy.
     fn set_tenant_policy(
         &self,
@@ -160,6 +163,19 @@ pub trait WorkflowStore: Send + Sync {
         signal: WorkflowSignal,
     ) -> WorkflowStoreFuture<'_, Result<WorkflowSignalOutcome, WorkflowStoreError>>;
 
+    /// Publishes durable coordination metadata excluded from signal retention.
+    ///
+    /// Custom stores may use the default delivery behavior, but stores that
+    /// implement signal compaction should override this method and preserve the
+    /// accepted record until its parent Task is governed away.
+    fn publish_control_signal(
+        &self,
+        tenant_id: WorkflowTenantId,
+        signal: WorkflowSignal,
+    ) -> WorkflowStoreFuture<'_, Result<WorkflowSignalOutcome, WorkflowStoreError>> {
+        self.publish_signal(tenant_id, signal)
+    }
+
     /// Idempotently applies a typed human decision to a durable interrupt.
     fn decide_interrupt(
         &self,
@@ -188,6 +204,16 @@ pub trait WorkflowStore: Send + Sync {
         signal_id: WorkflowSignalId,
     ) -> WorkflowStoreFuture<'_, Result<WorkflowSignalSnapshot, WorkflowStoreError>>;
 
+    /// Loads one accepted signal payload under tenant authorization.
+    ///
+    /// Payload access is separate from [`Self::inspect_signal`] so ordinary
+    /// control-plane inspection remains content-free.
+    fn load_signal_payload(
+        &self,
+        tenant_id: WorkflowTenantId,
+        signal_id: WorkflowSignalId,
+    ) -> WorkflowStoreFuture<'_, Result<Value, WorkflowStoreError>>;
+
     /// Deletes only consumed or dead-letter signals older than retention.
     fn compact_signals(
         &self,
@@ -201,6 +227,16 @@ pub trait WorkflowStore: Send + Sync {
         tenant_id: WorkflowTenantId,
         checkpoint_id: CheckpointId,
     ) -> WorkflowStoreFuture<'_, Result<WorkflowTaskSnapshot, WorkflowStoreError>>;
+
+    /// Loads the immutable original task input under tenant authorization.
+    ///
+    /// This is intentionally separate from the safe operator snapshot because
+    /// workflow inputs can contain sensitive application data.
+    fn load_task_input(
+        &self,
+        tenant_id: WorkflowTenantId,
+        checkpoint_id: CheckpointId,
+    ) -> WorkflowStoreFuture<'_, Result<Value, WorkflowStoreError>>;
 
     /// Lists immutable checkpoint revisions after an optional revision cursor.
     fn list_checkpoint_history(

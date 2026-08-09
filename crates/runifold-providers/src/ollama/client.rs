@@ -235,6 +235,7 @@ async fn http_error(
 
 fn capabilities() -> ModelCapabilities {
     let native = || FeatureSupport::new(SupportLevel::Native);
+    let emulated = || FeatureSupport::new(SupportLevel::Emulated);
     let unknown = || FeatureSupport::new(SupportLevel::Unknown);
     ModelCapabilities {
         streaming: native(),
@@ -243,8 +244,8 @@ fn capabilities() -> ModelCapabilities {
         structured_output: native(),
         reasoning: native(),
         image_input: native(),
-        audio_input: FeatureSupport::new(SupportLevel::Unsupported),
-        document_input: FeatureSupport::new(SupportLevel::Unsupported),
+        audio_input: emulated(),
+        document_input: emulated(),
         max_context_tokens: None,
         extensions: BTreeMap::new(),
     }

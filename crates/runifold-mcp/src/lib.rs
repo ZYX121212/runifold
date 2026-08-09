@@ -23,6 +23,7 @@ mod resource;
 mod sampling;
 mod sampling_client;
 mod sampling_model;
+mod sampling_validation;
 mod server;
 mod server_response;
 mod stdio;
@@ -66,7 +67,8 @@ pub use prompt::{
     PromptRegistrationError, PromptRegistry,
 };
 pub use protocol::{
-    CallToolParams, CallToolResult, ClientCapabilities, ContentBlock, DiscoverMetadata,
+    CallToolParams, CallToolResult, ClientCapabilities, ClientTaskRequestsCapability,
+    ClientTaskSamplingRequestsCapability, ClientTasksCapability, ContentBlock, DiscoverMetadata,
     DiscoverParams, DiscoverResult, DiscoveryCacheScope, Implementation, InitializeParams,
     InitializeResult, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
     LATEST_PROTOCOL_VERSION, ListToolsParams, ListToolsResult, McpResultType, McpTool,
@@ -82,20 +84,28 @@ pub use resource::{
 };
 pub use sampling::{
     CreateMessageParams, CreateMessageResult, IncludeContext, ModelHint, ModelPreferences,
-    SamplingApprover, SamplingCallContext, SamplingContent, SamplingDecision, SamplingError,
-    SamplingErrorKind, SamplingFuture, SamplingMessage, SamplingPolicy, SamplingProvider,
-    SamplingRole, SamplingService, SamplingStage, SamplingToolChoice, SamplingToolChoiceMode,
+    SamplingApprover, SamplingCallContext, SamplingContent, SamplingContextProvider,
+    SamplingDecision, SamplingError, SamplingErrorKind, SamplingFuture, SamplingMessage,
+    SamplingPolicy, SamplingProvider, SamplingRole, SamplingService, SamplingStage,
+    SamplingToolChoice, SamplingToolChoiceMode,
 };
 pub use sampling_client::McpSamplingClient;
-pub use sampling_model::{FixedSamplingModel, ModelSamplingProvider, SamplingModelSelector};
+pub use sampling_model::{
+    FixedSamplingModel, ModelSamplingProvider, SamplingModelFeature, SamplingModelRequirements,
+    SamplingModelSelector,
+};
 pub use server::{McpServer, McpSession};
 pub use stdio::{StdioTransport, serve_io, serve_stdio};
 pub use subscription::{McpSubscription, SubscriptionFilter};
 pub use task_client::McpTaskSubscription;
+pub(crate) use tasks::CoreTaskWire;
 pub use tasks::{
-    CallToolOutcome, CreateTaskResult, GetTaskResult, McpTask, McpTaskBackend, McpTaskBackendError,
-    McpTaskBackendErrorKind, McpTaskFuture, McpTaskTimeError, TASKS_EXTENSION_ID, TaskIdParams,
-    TaskStatus, ToolTaskRequest, UpdateTaskParams,
+    CallToolOutcome, CreateMessageOutcome, CreateTaskResult, GetTaskResult, McpSamplingTaskBackend,
+    McpTask, McpTaskBackend, McpTaskBackendError, McpTaskBackendErrorKind, McpTaskFuture,
+    McpTaskTimeError, SAMPLING_TASK_IDEMPOTENCY_KEY, SamplingTaskApprovalClaim,
+    SamplingTaskCreation, SamplingTaskOutput, SamplingTaskRequest, SamplingTaskResult,
+    SamplingTaskTerminalResult, TASKS_EXTENSION_ID, TaskIdParams, TaskMetadata, TaskStatus,
+    ToolTaskRequest, UpdateTaskParams,
 };
 pub use transport::{
     McpTransport, PeerRequestHandler, ServerNotificationStream, StatelessCancellation,
@@ -103,6 +113,6 @@ pub use transport::{
 };
 #[cfg(feature = "workflow-tasks")]
 pub use workflow_tasks::{
-    DefaultWorkflowTaskResultMapper, WorkflowTaskAdapter, WorkflowTaskResultMapper,
-    WorkflowTaskRoute,
+    DefaultWorkflowTaskResultMapper, SamplingTaskIdempotencyNamespace, WorkflowSamplingTaskResult,
+    WorkflowSamplingTaskRoute, WorkflowTaskAdapter, WorkflowTaskResultMapper, WorkflowTaskRoute,
 };

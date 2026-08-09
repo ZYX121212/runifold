@@ -685,7 +685,7 @@ All list methods follow opaque pagination cursors automatically; matching
 Resource updates require an explicit per-session subscription and are delivered
 through `client.notifications()`.
 
-Basic Sampling lets a server request a host-controlled model call without
+Client-side Sampling lets a server request a host-controlled model call without
 receiving model credentials or choosing the final model:
 
 ```rust,ignore
@@ -716,10 +716,36 @@ let result = initialized_session
     .await?;
 ```
 
-`SamplingApprover` reviews both the request and the generated response. The
-client advertises only basic Sampling: Tool-enabled Sampling and ambient
-context inclusion remain fail-closed until their separate authority and loop
-contracts are implemented.
+`SamplingApprover` reviews both the request and the generated response.
+`ModelSamplingProvider` advertises and maps Tool-enabled Sampling, including
+Tool declarations, Tool choice, and balanced `tool_use`/`tool_result` history.
+Ambient context remains fail-closed unless the host installs a
+`SamplingContextProvider`; resolved messages are inserted before review and
+model execution. Unknown non-empty MCP input blocks use a versioned visible
+envelope, while non-inline model media uses a lossless MCP extension block;
+neither is silently discarded.
+
+Long-running Sampling can use the official MCP Tasks augmentation. Installing
+an `McpSamplingTaskBackend` with `with_sampling_tasks(...)` advertises
+`tasks.requests.sampling.createMessage` and `tasks.cancel`; callers set
+`CreateMessageParams::task`, receive `CreateMessageOutcome::Task`, and use
+`wait_task`, `get_task`, `task_result`, or `cancel_task`. The backend must make
+the Task durable before returning its handle, and recovered results are
+revalidated and response-approved against the persisted approved request before
+disclosure. With `workflow-tasks`, `WorkflowTaskAdapter` and
+`WorkflowSamplingTaskRoute` provide the built-in durable implementation over
+SQLite, PostgreSQL, or another `WorkflowStore`. For create-response loss,
+configure a private deployment-stable `SamplingTaskIdempotencyNamespace` and
+attach a retained UUIDv4/v7 with
+`CreateMessageParams::with_task_idempotency_key`. Retries recover the same
+server-owned Task, while key reuse with different approved content is rejected.
+Approved results and `WorkflowSamplingTaskResult::Error` values survive store
+and adapter recreation. Result approval is cross-instance leased using the
+store clock: only one reviewer is active, expired owners are fenced, takeover
+is crash-safe, and claim/completion records are protected from ordinary signal
+compaction. An external human-approval service should still treat the Task ID
+as an idempotency key because no local lease can atomically commit an
+uncooperative remote side effect.
 
 Enable the first provider edge with the `openai` feature:
 

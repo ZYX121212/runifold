@@ -1,15 +1,15 @@
 use super::{
     Arc, BTreeMap, Budget, Checkpoint, CheckpointError, CheckpointErrorKind, CheckpointId,
     ClaimedWorkflow, Deserialize, Duration, LeaseDuration, Mutex, MutexGuard, Reverse, Serialize,
-    SystemWorkflowClock, Usage, WorkerId, WorkflowBudgetAuditCursor, WorkflowBudgetAuditEvent,
-    WorkflowBudgetAuditKind, WorkflowBudgetAuditLimit, WorkflowBudgetAuditProjectionId,
-    WorkflowBudgetAuditProjectionLease, WorkflowBudgetForfeitReason,
-    WorkflowBudgetReservationOutcome, WorkflowCancelOutcome, WorkflowCheckpointHistoryLimit,
-    WorkflowCheckpointPhase, WorkflowCheckpointRevision, WorkflowClock, WorkflowDisposition,
-    WorkflowForkCommand, WorkflowForkOutcome, WorkflowInterruptRequest, WorkflowLease,
-    WorkflowLineage, WorkflowSignal, WorkflowSignalId, WorkflowSignalOutcome,
-    WorkflowSignalRetention, WorkflowSignalSnapshot, WorkflowSignalState, WorkflowStore,
-    WorkflowStoreError, WorkflowStoreErrorKind, WorkflowStoreFuture, WorkflowTask,
+    SystemWorkflowClock, Usage, Value, WorkerId, WorkflowBudgetAuditCursor,
+    WorkflowBudgetAuditEvent, WorkflowBudgetAuditKind, WorkflowBudgetAuditLimit,
+    WorkflowBudgetAuditProjectionId, WorkflowBudgetAuditProjectionLease,
+    WorkflowBudgetForfeitReason, WorkflowBudgetReservationOutcome, WorkflowCancelOutcome,
+    WorkflowCheckpointHistoryLimit, WorkflowCheckpointPhase, WorkflowCheckpointRevision,
+    WorkflowClock, WorkflowDisposition, WorkflowForkCommand, WorkflowForkOutcome,
+    WorkflowInterruptRequest, WorkflowLease, WorkflowLineage, WorkflowSignal, WorkflowSignalId,
+    WorkflowSignalOutcome, WorkflowSignalRetention, WorkflowSignalSnapshot, WorkflowSignalState,
+    WorkflowStore, WorkflowStoreError, WorkflowStoreErrorKind, WorkflowStoreFuture, WorkflowTask,
     WorkflowTaskSnapshot, WorkflowTaskStatus, WorkflowTenantBudgetPolicy,
     WorkflowTenantBudgetSnapshot, WorkflowTenantId, WorkflowTenantListLimit, WorkflowTenantPolicy,
     WorkflowWait, WorkflowWake, decode_revision, fork_checkpoint,
@@ -174,6 +174,8 @@ struct StoredSignal {
     signal: WorkflowSignal,
     consumed: bool,
     dead_lettered: bool,
+    #[serde(default)]
+    compaction_protected: bool,
     accepted_at_ms: u64,
 }
 
@@ -379,6 +381,10 @@ impl InMemoryWorkflowStore {
 }
 
 impl WorkflowStore for InMemoryWorkflowStore {
+    fn current_time_ms(&self) -> WorkflowStoreFuture<'_, Result<u64, WorkflowStoreError>> {
+        Box::pin(async move { Ok(self.clock.now_ms()) })
+    }
+
     fn set_tenant_policy(
         &self,
         tenant_id: WorkflowTenantId,
@@ -536,7 +542,15 @@ impl WorkflowStore for InMemoryWorkflowStore {
         tenant_id: WorkflowTenantId,
         signal: WorkflowSignal,
     ) -> WorkflowStoreFuture<'_, Result<WorkflowSignalOutcome, WorkflowStoreError>> {
-        self.publish_signal_impl(tenant_id, signal)
+        self.publish_signal_impl(tenant_id, signal, false)
+    }
+
+    fn publish_control_signal(
+        &self,
+        tenant_id: WorkflowTenantId,
+        signal: WorkflowSignal,
+    ) -> WorkflowStoreFuture<'_, Result<WorkflowSignalOutcome, WorkflowStoreError>> {
+        self.publish_signal_impl(tenant_id, signal, true)
     }
 
     fn cancel(
@@ -555,6 +569,32 @@ impl WorkflowStore for InMemoryWorkflowStore {
         self.inspect_signal_impl(tenant_id, signal_id)
     }
 
+    fn load_signal_payload(
+        &self,
+        tenant_id: WorkflowTenantId,
+        signal_id: WorkflowSignalId,
+    ) -> WorkflowStoreFuture<'_, Result<Value, WorkflowStoreError>> {
+        Box::pin(async move {
+            let signals = self
+                .signals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let stored = signals.get(&signal_id).ok_or_else(|| {
+                WorkflowStoreError::new(
+                    WorkflowStoreErrorKind::NotFound,
+                    "workflow signal does not exist",
+                )
+            })?;
+            if stored.tenant_id != tenant_id {
+                return Err(WorkflowStoreError::new(
+                    WorkflowStoreErrorKind::TenantMismatch,
+                    "workflow tenant does not own signal",
+                ));
+            }
+            Ok(stored.signal.payload.clone())
+        })
+    }
+
     fn compact_signals(
         &self,
         tenant_id: WorkflowTenantId,
@@ -569,6 +609,26 @@ impl WorkflowStore for InMemoryWorkflowStore {
         checkpoint_id: CheckpointId,
     ) -> WorkflowStoreFuture<'_, Result<WorkflowTaskSnapshot, WorkflowStoreError>> {
         self.inspect_impl(tenant_id, checkpoint_id)
+    }
+
+    fn load_task_input(
+        &self,
+        tenant_id: WorkflowTenantId,
+        checkpoint_id: CheckpointId,
+    ) -> WorkflowStoreFuture<'_, Result<Value, WorkflowStoreError>> {
+        Box::pin(async move {
+            let tasks = self.tasks();
+            let stored = tasks.get(&checkpoint_id).ok_or_else(|| {
+                WorkflowStoreError::new(WorkflowStoreErrorKind::NotFound, "workflow not found")
+            })?;
+            if stored.task.tenant_id != tenant_id {
+                return Err(WorkflowStoreError::new(
+                    WorkflowStoreErrorKind::TenantMismatch,
+                    "workflow tenant does not own task",
+                ));
+            }
+            Ok(stored.task.input.clone())
+        })
     }
 
     fn list_checkpoint_history(

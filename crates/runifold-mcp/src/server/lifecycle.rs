@@ -225,6 +225,36 @@ impl McpSession {
                 "client did not negotiate Sampling context inclusion",
             ));
         }
+        if params.task.is_some()
+            && !capabilities.as_ref().is_some_and(|capabilities| {
+                capabilities
+                    .tasks
+                    .as_ref()
+                    .and_then(|tasks| tasks.requests.as_ref())
+                    .and_then(|requests| requests.sampling.as_ref())
+                    .and_then(|sampling| sampling.create_message.as_ref())
+                    .is_some()
+            })
+        {
+            return Err(McpError::protocol(
+                "client did not negotiate task-augmented Sampling",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ensure_sampling_task_cancel_supported(&self) -> Result<(), McpError> {
+        let capabilities = self.lock_client_capabilities();
+        if capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.tasks.as_ref())
+            .and_then(|tasks| tasks.cancel.as_ref())
+            .is_none()
+        {
+            return Err(McpError::protocol(
+                "client did not negotiate Sampling Task cancellation",
+            ));
+        }
         Ok(())
     }
 

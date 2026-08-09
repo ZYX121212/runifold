@@ -6,6 +6,8 @@
 //! for integrations that require an incompatible runtime, toolchain, license,
 //! or release lifecycle.
 
+pub mod content_projection;
+
 #[cfg(any(
     feature = "anthropic",
     feature = "gemini",

@@ -166,7 +166,7 @@ impl PostgresWorkflowStore {
             inserted AS (
                 INSERT INTO {table}_signals (
                     signal_id, tenant_id, checkpoint_id, name, payload,
-                    consumed, dead_lettered
+                    consumed, dead_lettered, compaction_protected
                 )
                 SELECT
                     $1,
@@ -189,7 +189,8 @@ impl PostgresWorkflowStore {
                                AND wake_at IS NOT NULL
                                AND clock_timestamp() >= wake_at
                            )
-                    )
+                    ),
+                    $7
                 WHERE EXISTS (SELECT 1 FROM target)
                 ON CONFLICT (signal_id) DO NOTHING
                 RETURNING signal_id, consumed, dead_lettered

@@ -233,6 +233,10 @@ fn workflow_to_checkpoint(error: WorkflowStoreError) -> CheckpointError {
 }
 
 impl WorkflowStore for SqliteWorkflowStore {
+    fn current_time_ms(&self) -> WorkflowStoreFuture<'_, Result<u64, WorkflowStoreError>> {
+        self.execute(|store| block_on(store.current_time_ms()))
+    }
+
     fn set_tenant_policy(
         &self,
         tenant_id: WorkflowTenantId,
@@ -413,6 +417,14 @@ impl WorkflowStore for SqliteWorkflowStore {
         self.execute(move |store| block_on(store.publish_signal(tenant_id, signal)))
     }
 
+    fn publish_control_signal(
+        &self,
+        tenant_id: WorkflowTenantId,
+        signal: WorkflowSignal,
+    ) -> WorkflowStoreFuture<'_, Result<WorkflowSignalOutcome, WorkflowStoreError>> {
+        self.execute(move |store| block_on(store.publish_control_signal(tenant_id, signal)))
+    }
+
     fn cancel(
         &self,
         tenant_id: WorkflowTenantId,
@@ -429,6 +441,14 @@ impl WorkflowStore for SqliteWorkflowStore {
         self.execute(move |store| block_on(store.inspect_signal(tenant_id, signal_id)))
     }
 
+    fn load_signal_payload(
+        &self,
+        tenant_id: WorkflowTenantId,
+        signal_id: WorkflowSignalId,
+    ) -> WorkflowStoreFuture<'_, Result<serde_json::Value, WorkflowStoreError>> {
+        self.execute(move |store| block_on(store.load_signal_payload(tenant_id, signal_id)))
+    }
+
     fn compact_signals(
         &self,
         tenant_id: WorkflowTenantId,
@@ -443,6 +463,14 @@ impl WorkflowStore for SqliteWorkflowStore {
         checkpoint_id: CheckpointId,
     ) -> WorkflowStoreFuture<'_, Result<WorkflowTaskSnapshot, WorkflowStoreError>> {
         self.execute(move |store| block_on(store.inspect(tenant_id, checkpoint_id)))
+    }
+
+    fn load_task_input(
+        &self,
+        tenant_id: WorkflowTenantId,
+        checkpoint_id: CheckpointId,
+    ) -> WorkflowStoreFuture<'_, Result<serde_json::Value, WorkflowStoreError>> {
+        self.execute(move |store| block_on(store.load_task_input(tenant_id, checkpoint_id)))
     }
 
     fn list_checkpoint_history(

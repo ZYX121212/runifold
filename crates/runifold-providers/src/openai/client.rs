@@ -497,7 +497,7 @@ impl WireDecoder {
 
 fn adapter_capabilities() -> ModelCapabilities {
     let native = || FeatureSupport::new(SupportLevel::Native);
-    let unsupported = || FeatureSupport::new(SupportLevel::Unsupported);
+    let emulated = || FeatureSupport::new(SupportLevel::Emulated);
     let unknown = || FeatureSupport::new(SupportLevel::Unknown);
     ModelCapabilities {
         streaming: native(),
@@ -505,9 +505,9 @@ fn adapter_capabilities() -> ModelCapabilities {
         parallel_tools: unknown(),
         structured_output: unknown(),
         reasoning: unknown(),
-        image_input: unknown(),
-        audio_input: unsupported(),
-        document_input: unknown(),
+        image_input: native(),
+        audio_input: emulated(),
+        document_input: emulated(),
         max_context_tokens: None,
         extensions: BTreeMap::new(),
     }
@@ -637,7 +637,7 @@ mod tests {
 
         assert_eq!(capabilities.streaming.level, SupportLevel::Native);
         assert_eq!(capabilities.tools.level, SupportLevel::Unknown);
-        assert_eq!(capabilities.audio_input.level, SupportLevel::Unsupported);
+        assert_eq!(capabilities.audio_input.level, SupportLevel::Emulated);
         assert_eq!(capabilities.reasoning.level, SupportLevel::Unknown);
         assert_eq!(capabilities.max_context_tokens, None);
     }

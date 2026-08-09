@@ -288,6 +288,26 @@ impl WorkflowTaskTombstoneGovernanceStore for PostgresWorkflowStore {
 }
 
 impl WorkflowStore for PostgresWorkflowStore {
+    fn current_time_ms(&self) -> WorkflowStoreFuture<'_, Result<u64, WorkflowStoreError>> {
+        Box::pin(async move {
+            let row = self
+                .client
+                .query_one(
+                    "SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT",
+                    &[],
+                )
+                .await
+                .map_err(storage)?;
+            let value: i64 = row.try_get(0).map_err(storage)?;
+            u64::try_from(value).map_err(|_| {
+                WorkflowStoreError::new(
+                    WorkflowStoreErrorKind::Storage,
+                    "PostgreSQL returned a negative workflow clock",
+                )
+            })
+        })
+    }
+
     fn set_tenant_policy(
         &self,
         tenant_id: WorkflowTenantId,
@@ -539,7 +559,15 @@ impl WorkflowStore for PostgresWorkflowStore {
         tenant_id: WorkflowTenantId,
         signal: WorkflowSignal,
     ) -> WorkflowStoreFuture<'_, Result<WorkflowSignalOutcome, WorkflowStoreError>> {
-        Box::pin(signal::publish(self, tenant_id, signal))
+        Box::pin(signal::publish(self, tenant_id, signal, false))
+    }
+
+    fn publish_control_signal(
+        &self,
+        tenant_id: WorkflowTenantId,
+        signal: WorkflowSignal,
+    ) -> WorkflowStoreFuture<'_, Result<WorkflowSignalOutcome, WorkflowStoreError>> {
+        Box::pin(signal::publish(self, tenant_id, signal, true))
     }
 
     fn cancel(
@@ -558,6 +586,14 @@ impl WorkflowStore for PostgresWorkflowStore {
         Box::pin(signal::inspect(self, tenant_id, signal_id))
     }
 
+    fn load_signal_payload(
+        &self,
+        tenant_id: WorkflowTenantId,
+        signal_id: WorkflowSignalId,
+    ) -> WorkflowStoreFuture<'_, Result<Value, WorkflowStoreError>> {
+        Box::pin(signal::load_payload(self, tenant_id, signal_id))
+    }
+
     fn compact_signals(
         &self,
         tenant_id: WorkflowTenantId,
@@ -571,6 +607,33 @@ impl WorkflowStore for PostgresWorkflowStore {
         checkpoint_id: CheckpointId,
     ) -> WorkflowStoreFuture<'_, Result<WorkflowTaskSnapshot, WorkflowStoreError>> {
         self.inspect_ext(tenant_id, checkpoint_id)
+    }
+
+    fn load_task_input(
+        &self,
+        tenant_id: WorkflowTenantId,
+        checkpoint_id: CheckpointId,
+    ) -> WorkflowStoreFuture<'_, Result<Value, WorkflowStoreError>> {
+        Box::pin(async move {
+            let row = self
+                .client
+                .query_opt(
+                    &format!(
+                        "SELECT input FROM {table} WHERE checkpoint_id = $1 AND tenant_id = $2",
+                        table = self.table
+                    ),
+                    &[&checkpoint_id.as_uuid(), &tenant_id.as_str()],
+                )
+                .await
+                .map_err(storage)?
+                .ok_or_else(|| {
+                    WorkflowStoreError::new(
+                        WorkflowStoreErrorKind::NotFound,
+                        "workflow task does not exist",
+                    )
+                })?;
+            row.try_get(0).map_err(storage)
+        })
     }
 
     fn list_checkpoint_history(

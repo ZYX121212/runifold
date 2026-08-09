@@ -57,13 +57,27 @@ storage-adapter responsibilities.
 
 MCP preserves text, image, audio, embedded resources, resource links,
 structured content, metadata, and application-error status. Provider adapters
-project only representations their wire protocol accepts. Unsupported rich
-parts fail explicitly; they are never silently serialized to debug JSON.
+prefer representations their wire protocol accepts. Unsupported Tool-result
+parts use a versioned `runifold.content.v1` model-visible JSON envelope. The
+envelope is a stable canonical projection—not Rust debug output—and prevents
+content from being silently dropped or making an otherwise valid Tool result
+unrepresentable.
 
-OpenAI Responses and Gemini use native multimodal Tool-result forms. Anthropic
-uses native text/image/resource forms. Bedrock preserves native JSON, image,
-and document Tool results; its current SDK protocol has no audio Tool-result
-variant. Text-only Chat Completions and Ollama reject unsupported media.
+The projection boundary is a safe allowlist. It accepts normalized text,
+image, audio, document, resource-link, refusal, and citation content, but
+rejects Provider-private opaque data, reasoning signatures, recursive Tool
+content, unresolved Artifacts, and Provider-owned file identifiers. A native
+encoder may fall back only after `UnsupportedFeature`; invalid data and
+ownership errors cannot be downgraded to text. Envelopes are capped at 256 KiB
+and complete text-only Tool results use `runifold.tool_result.v1`, avoiding
+newline-delimited framing ambiguity. Public strict decoders are opt-in and
+never run automatically on model output.
+
+OpenAI Responses and Gemini use native multimodal Tool-result forms where the
+wire contract permits them. Anthropic uses native text/image forms. Bedrock
+preserves native JSON, image, and document Tool results. Chat Completions and
+Ollama keep supported native fields and bridge the remaining rich content with
+the same canonical envelope.
 
 ## Streaming and observability
 

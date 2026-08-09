@@ -1,7 +1,8 @@
 use super::{
-    ClientCapabilities, ClientState, Duration, JsonRpcNotification, JsonRpcRequest, McpClient,
-    McpError, McpProtocolMode, Ordering, RequestId, STATELESS_PROTOCOL_VERSION, SamplingCapability,
-    Serialize, StatelessCancellation, StatelessRequestMetadata, json,
+    BTreeMap, ClientCapabilities, ClientState, ClientTaskRequestsCapability,
+    ClientTaskSamplingRequestsCapability, ClientTasksCapability, Duration, JsonRpcNotification,
+    JsonRpcRequest, McpClient, McpError, McpProtocolMode, Ordering, RequestId,
+    STATELESS_PROTOCOL_VERSION, Serialize, StatelessCancellation, StatelessRequestMetadata, json,
 };
 
 impl McpClient {
@@ -148,8 +149,19 @@ impl McpClient {
             .map_or_else(ClientCapabilities::default, |handler| {
                 handler.capabilities()
             });
-        if self.inner.config.sampling.is_some() {
-            capabilities.sampling = Some(SamplingCapability::default());
+        if let Some(sampling) = &self.inner.config.sampling {
+            capabilities.sampling = Some(sampling.capability());
+            if self.inner.config.sampling_tasks.is_some() {
+                capabilities.tasks = Some(ClientTasksCapability {
+                    list: None,
+                    cancel: Some(BTreeMap::new()),
+                    requests: Some(ClientTaskRequestsCapability {
+                        sampling: Some(ClientTaskSamplingRequestsCapability {
+                            create_message: Some(BTreeMap::new()),
+                        }),
+                    }),
+                });
+            }
         }
         if self.inner.config.tasks_enabled {
             capabilities

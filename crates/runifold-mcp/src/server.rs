@@ -467,7 +467,9 @@ fn missing_tasks_capability(id: RequestId) -> JsonRpcResponse {
 
 fn task_backend_error_response(id: RequestId, error: McpTaskBackendError) -> JsonRpcResponse {
     let code = match error.kind {
-        McpTaskBackendErrorKind::InvalidInput | McpTaskBackendErrorKind::NotFound => INVALID_PARAMS,
+        McpTaskBackendErrorKind::InvalidInput
+        | McpTaskBackendErrorKind::NotFound
+        | McpTaskBackendErrorKind::AdmissionDenied => INVALID_PARAMS,
         McpTaskBackendErrorKind::InvalidState | McpTaskBackendErrorKind::Storage => INTERNAL_ERROR,
     };
     JsonRpcResponse::error(id, code, error.message, None)

@@ -134,7 +134,7 @@ Scoped Sampling writes redacted `sampling.started`, `sampling.completed`, and
 `sampling.failed` durable events. The projection creates one
 `mcp.sampling.create_message` span beneath the active Agent Turn.
 
-Sampling failures carry a stable stage such as `request_review`,
+Sampling failures carry a stable stage such as `context_resolution`, `request_review`,
 `model_execution`, `response_validation`, or `response_review`. Prompt and
 response content are never included in these lifecycle events. A durable event
 failure is surfaced as a typed MCP observability error rather than allowing an

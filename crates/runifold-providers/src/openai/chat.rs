@@ -10,6 +10,8 @@ use runifold_model::{
 use serde_json::{Map, Value, json};
 use smallvec::SmallVec;
 
+use crate::content_projection::{encode_content_envelope, encode_tool_result_envelope};
+
 /// Inline canonical events produced by one Chat Completions chunk.
 pub(crate) type ChatEvents = SmallVec<[ModelStreamEvent; 4]>;
 
@@ -120,6 +122,13 @@ fn encode_chat_messages(request: &ModelRequest) -> Result<Vec<Value>, ModelError
                 ContentPart::Image { source } if message.role == Role::User => {
                     content.push(chat_image(source)?);
                 }
+                ContentPart::Audio { .. }
+                | ContentPart::Document { .. }
+                | ContentPart::ResourceLink { .. }
+                    if message.role == Role::User =>
+                {
+                    content.push(chat_text(&encode_content_envelope(part)?));
+                }
                 ContentPart::ToolCall(call) if message.role == Role::Assistant => {
                     tool_calls.push(json!({
                         "id": call.id,
@@ -133,21 +142,10 @@ fn encode_chat_messages(request: &ModelRequest) -> Result<Vec<Value>, ModelError
                 }
                 ContentPart::ToolResult(result) => {
                     flush_chat_message(&mut messages, message.role, &mut content, &mut tool_calls)?;
-                    let mut output = result
-                        .content
-                        .iter()
-                        .map(tool_result_part)
-                        .collect::<Result<Vec<_>, _>>()?;
-                    if let Some(structured) = &result.structured_content {
-                        let encoded = structured.to_string();
-                        if !output.iter().any(|item| item == &encoded) {
-                            output.push(encoded);
-                        }
-                    }
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": result.call_id,
-                        "content": output.join("\n")
+                        "content": encode_tool_result_envelope(result)?
                     }));
                 }
                 _ => {
@@ -211,16 +209,6 @@ fn chat_image(source: &MediaSource) -> Result<Value, ModelError> {
         _ => return Err(unsupported("image source is newer than this adapter")),
     };
     Ok(json!({"type": "image_url", "image_url": {"url": url}}))
-}
-
-fn tool_result_part(part: &ContentPart) -> Result<String, ModelError> {
-    match part {
-        ContentPart::Text { text } => Ok(text.clone()),
-        ContentPart::ResourceLink { uri, .. } => Ok(uri.clone()),
-        _ => Err(unsupported(
-            "Chat Completions tool results support text and resource links only",
-        )),
-    }
 }
 
 fn encode_chat_tool_choice(choice: &ToolChoice) -> Result<Value, ModelError> {
@@ -580,9 +568,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use runifold_model::{
-        ContentPart, Message, ModelRef, ModelRequest, ModelStreamAccumulator, ToolCall,
+        ContentPart, MediaSource, Message, ModelRef, ModelRequest, ModelStreamAccumulator, Role,
+        ToolCall, ToolResult,
     };
     use serde_json::{Value, json};
+
+    use crate::content_projection::decode_content_envelope;
+    use crate::content_projection::decode_tool_result_envelope;
 
     use super::{ChatCompletionsDecoder, encode_chat_request};
 
@@ -597,6 +589,73 @@ mod tests {
         assert_eq!(body["messages"][0]["content"], "hello");
         assert_eq!(body["stream"], true);
         assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn tool_results_bridge_every_rich_content_kind() {
+        let result = ToolResult {
+            call_id: "call-rich".into(),
+            name: Some("inspect".into()),
+            content: vec![
+                ContentPart::Image {
+                    source: MediaSource::Base64 {
+                        media_type: "image/png".into(),
+                        data: "aW1hZ2U=".into(),
+                    },
+                },
+                ContentPart::Audio {
+                    source: MediaSource::Base64 {
+                        media_type: "audio/wav".into(),
+                        data: "YXVkaW8=".into(),
+                    },
+                },
+                ContentPart::Document {
+                    source: MediaSource::Base64 {
+                        media_type: "application/pdf".into(),
+                        data: "ZG9j".into(),
+                    },
+                    name: Some("report.pdf".into()),
+                },
+            ],
+            structured_content: None,
+            is_error: false,
+            metadata: BTreeMap::new(),
+        };
+        let message = Message::new(Role::Tool, vec![ContentPart::ToolResult(result)]).unwrap();
+
+        let body = encode_chat_request(
+            &ModelRequest::new(ModelRef::new("qwen", "qwen-plus"), message),
+            "qwen",
+        )
+        .unwrap();
+        let content = body["messages"][0]["content"].as_str().unwrap();
+
+        let decoded = decode_tool_result_envelope(content).unwrap().unwrap();
+        assert_eq!(decoded.content.len(), 3);
+        assert_eq!(decoded.name.as_deref(), Some("inspect"));
+    }
+
+    #[test]
+    fn compatible_chat_projects_ordinary_audio_without_flattening_it() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Audio {
+                source: MediaSource::Base64 {
+                    media_type: "audio/wav".into(),
+                    data: "YXVkaW8=".into(),
+                },
+            }],
+        )
+        .unwrap();
+
+        let body = encode_chat_request(
+            &ModelRequest::new(ModelRef::new("qwen", "qwen-plus"), message),
+            "qwen",
+        )
+        .unwrap();
+        let envelope = body["messages"][0]["content"].as_str().unwrap();
+
+        assert!(decode_content_envelope(envelope).unwrap().is_some());
     }
 
     #[test]

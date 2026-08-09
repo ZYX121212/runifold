@@ -211,6 +211,7 @@ fn normalized_sampling_error_type(error_type: &str) -> &'static str {
 fn normalized_sampling_stage(stage: &str) -> &'static str {
     match stage {
         "request_validation" => "request_validation",
+        "context_resolution" => "context_resolution",
         "request_review" => "request_review",
         "budget_reservation" => "budget_reservation",
         "model_execution" => "model_execution",

@@ -130,12 +130,15 @@ impl PostgresWorkflowStore {
                 checkpoint_id UUID NOT NULL, name TEXT NOT NULL, payload JSONB NOT NULL,
                 consumed BOOLEAN NOT NULL DEFAULT FALSE,
                 dead_lettered BOOLEAN NOT NULL DEFAULT FALSE,
+                compaction_protected BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
             );
             ALTER TABLE {table}_signals
                 ADD COLUMN IF NOT EXISTS dead_lettered BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE {table}_signals
                 ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+            ALTER TABLE {table}_signals
+                ADD COLUMN IF NOT EXISTS compaction_protected BOOLEAN NOT NULL DEFAULT FALSE;
             DROP INDEX IF EXISTS {table}_signals_pending_idx;
             CREATE INDEX {table}_signals_pending_idx
                 ON {table}_signals (checkpoint_id, name, created_at, signal_id)

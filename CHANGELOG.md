@@ -6,6 +6,28 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-09
+
+- Completed provider-neutral rich Tool-result projection across OpenAI,
+  Anthropic, Gemini, Bedrock, and Ollama, with explicit lossless extension
+  envelopes or typed rejection where a provider cannot represent a modality.
+- Completed MCP Sampling context inclusion and Tool-enabled Sampling with
+  bounded media validation, balanced Tool history, negotiated capabilities,
+  cancellation, budget rollback, and exact terminal JSON-RPC errors.
+- Added official durable task-augmented `sampling/createMessage` integration
+  over `WorkflowStore`, including stable private-namespaced idempotency,
+  persisted request binding, SQLite restart recovery, and approved-result
+  replay.
+- Added cross-instance response-approval leases using store-authoritative time,
+  expiry takeover, stale-owner fencing, and compaction-protected durable
+  control records for in-memory, SQLite, and PostgreSQL workflow stores.
+- Expanded regression coverage for concurrent creation, reconnect, crash
+  recovery, strict validation, rich media, approval non-bypass, signal
+  retention, and no-default-features builds; updated provider and MCP RFCs to
+  document remaining external-side-effect idempotency boundaries.
+
+This release contains pre-1.0 breaking API changes in MCP Sampling and Tasks.
+
 ## [0.4.1] - 2026-08-06
 
 - Allowed the OSI-approved MIT-0 license used by the `borrow-or-share`

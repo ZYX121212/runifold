@@ -6,10 +6,24 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{CallToolResult, InputRequest, JsonRpcError, McpResultType};
+use crate::{
+    CallToolResult, CreateMessageParams, CreateMessageResult, InputRequest, JsonRpcError,
+    McpResultType,
+};
 
 /// Official identifier of the MCP Tasks extension.
 pub const TASKS_EXTENSION_ID: &str = "io.modelcontextprotocol/tasks";
+
+/// `_meta` key carrying a caller-generated UUIDv4/v7 for durable create recovery.
+pub const SAMPLING_TASK_IDEMPOTENCY_KEY: &str = "io.runifold/sampling-task-idempotency-key";
+
+/// Optional task augmentation attached to a task-capable MCP request.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TaskMetadata {
+    /// Requested task retention in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<u64>,
+}
 
 /// Current durable task state.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -97,26 +111,7 @@ impl McpTask {
     }
 
     pub(crate) fn validate(&self) -> Result<(), McpTaskBackendError> {
-        if self.task_id.is_empty()
-            || self.created_at.is_empty()
-            || self.last_updated_at.is_empty()
-            || self.poll_interval_ms == Some(0)
-        {
-            return Err(McpTaskBackendError::invalid_state(
-                "task metadata violates the MCP Tasks contract",
-            ));
-        }
-        let created_at_ms = timestamp_ms(&self.created_at, "createdAt")
-            .map_err(|error| McpTaskBackendError::invalid_state(error.to_string()))?;
-        let last_updated_at_ms = timestamp_ms(&self.last_updated_at, "lastUpdatedAt")
-            .map_err(|error| McpTaskBackendError::invalid_state(error.to_string()))?;
-        if last_updated_at_ms < created_at_ms {
-            return Err(McpTaskBackendError::invalid_state(
-                "task lastUpdatedAt predates createdAt",
-            ));
-        }
-        self.retention_expires_at_ms()
-            .map_err(|error| McpTaskBackendError::invalid_state(error.to_string()))?;
+        self.validate_metadata()?;
         let payload_is_valid = match self.status {
             TaskStatus::Working | TaskStatus::Cancelled => {
                 self.input_requests.is_empty() && self.result.is_none() && self.error.is_none()
@@ -146,6 +141,30 @@ impl McpTask {
                 .validate()
                 .map_err(|_| McpTaskBackendError::invalid_state("task input request is invalid"))?;
         }
+        Ok(())
+    }
+
+    pub(crate) fn validate_metadata(&self) -> Result<(), McpTaskBackendError> {
+        if self.task_id.is_empty()
+            || self.created_at.is_empty()
+            || self.last_updated_at.is_empty()
+            || self.poll_interval_ms == Some(0)
+        {
+            return Err(McpTaskBackendError::invalid_state(
+                "task metadata violates the MCP Tasks contract",
+            ));
+        }
+        let created_at_ms = timestamp_ms(&self.created_at, "createdAt")
+            .map_err(|error| McpTaskBackendError::invalid_state(error.to_string()))?;
+        let last_updated_at_ms = timestamp_ms(&self.last_updated_at, "lastUpdatedAt")
+            .map_err(|error| McpTaskBackendError::invalid_state(error.to_string()))?;
+        if last_updated_at_ms < created_at_ms {
+            return Err(McpTaskBackendError::invalid_state(
+                "task lastUpdatedAt predates createdAt",
+            ));
+        }
+        self.retention_expires_at_ms()
+            .map_err(|error| McpTaskBackendError::invalid_state(error.to_string()))?;
         Ok(())
     }
 }
@@ -191,6 +210,98 @@ pub enum CallToolOutcome {
     Task(McpTask),
 }
 
+/// Task handle returned by task-augmented `sampling/createMessage`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SamplingTaskResult {
+    /// Initial or current durable task state.
+    pub task: McpTask,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CoreTaskWire {
+    pub task_id: String,
+    pub status: TaskStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_message: Option<String>,
+    pub created_at: String,
+    pub last_updated_at: String,
+    pub ttl: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_interval: Option<u64>,
+}
+
+impl From<&McpTask> for CoreTaskWire {
+    fn from(task: &McpTask) -> Self {
+        Self {
+            task_id: task.task_id.clone(),
+            status: task.status,
+            status_message: task.status_message.clone(),
+            created_at: task.created_at.clone(),
+            last_updated_at: task.last_updated_at.clone(),
+            ttl: task.ttl_ms,
+            poll_interval: task.poll_interval_ms,
+        }
+    }
+}
+
+impl From<CoreTaskWire> for McpTask {
+    fn from(task: CoreTaskWire) -> Self {
+        Self {
+            task_id: task.task_id,
+            status: task.status,
+            status_message: task.status_message,
+            created_at: task.created_at,
+            last_updated_at: task.last_updated_at,
+            ttl_ms: task.ttl,
+            poll_interval_ms: task.poll_interval,
+            input_requests: BTreeMap::new(),
+            result: None,
+            error: None,
+        }
+    }
+}
+
+impl Serialize for SamplingTaskResult {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct Wire {
+            task: CoreTaskWire,
+        }
+        Wire {
+            task: CoreTaskWire::from(&self.task),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SamplingTaskResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            task: CoreTaskWire,
+        }
+        Ok(Self {
+            task: Wire::deserialize(deserializer)?.task.into(),
+        })
+    }
+}
+
+/// Polymorphic result of task-capable Sampling.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CreateMessageOutcome {
+    /// Sampling completed synchronously.
+    Complete(CreateMessageResult),
+    /// Sampling was durably accepted for asynchronous execution.
+    Task(McpTask),
+}
+
 /// Result of `tasks/get`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -231,6 +342,57 @@ pub struct ToolTaskRequest {
     pub context: RunContext,
 }
 
+/// One Sampling request selected for durable task execution.
+#[derive(Clone, Debug)]
+pub struct SamplingTaskRequest {
+    /// Validated Sampling parameters, including requested task retention.
+    pub params: CreateMessageParams,
+}
+
+/// Durable creation outcome, including whether this request created new work.
+#[derive(Clone, Debug)]
+pub struct SamplingTaskCreation {
+    /// Inspectable Task handle.
+    pub task: McpTask,
+    /// `false` when an idempotent retry recovered an existing Task.
+    pub created: bool,
+}
+
+/// Persisted request/result pair reconstructed for safe Task result disclosure.
+#[derive(Clone, Debug)]
+pub struct SamplingTaskOutput {
+    /// Original request used to validate the recovered result.
+    pub request: CreateMessageParams,
+    /// Exact successful Sampling result.
+    pub result: CreateMessageResult,
+}
+
+/// Exact terminal result of a task-augmented Sampling request.
+#[derive(Clone, Debug)]
+pub enum SamplingTaskTerminalResult {
+    /// The underlying Sampling request completed successfully.
+    Success(Box<SamplingTaskOutput>),
+    /// The underlying Sampling request completed with its exact JSON-RPC error.
+    Error(JsonRpcError),
+}
+
+/// Durable cross-instance ownership decision for one result approval.
+#[derive(Clone, Debug)]
+pub enum SamplingTaskApprovalClaim {
+    /// This caller exclusively owns approval until the lease expires.
+    Acquired {
+        /// Opaque fencing token returned to completion.
+        token: String,
+    },
+    /// Another caller owns the current approval lease.
+    Busy {
+        /// Store-authoritative delay before takeover may be attempted.
+        retry_after_ms: u64,
+    },
+    /// Approval already completed durably.
+    Completed(CreateMessageResult),
+}
+
 /// Stable backend failure category.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum McpTaskBackendErrorKind {
@@ -238,6 +400,8 @@ pub enum McpTaskBackendErrorKind {
     InvalidInput,
     /// The task does not exist in this authorization context.
     NotFound,
+    /// Admission rejected the request before durable creation.
+    AdmissionDenied,
     /// The backend's stored state violates the adapter contract.
     InvalidState,
     /// Durable storage or execution control failed.
@@ -266,6 +430,15 @@ impl McpTaskBackendError {
     pub(crate) fn invalid_state(message: impl Into<String>) -> Self {
         Self::new(McpTaskBackendErrorKind::InvalidState, message)
     }
+
+    pub(crate) const fn task_was_not_created(&self) -> bool {
+        matches!(
+            self.kind,
+            McpTaskBackendErrorKind::InvalidInput
+                | McpTaskBackendErrorKind::NotFound
+                | McpTaskBackendErrorKind::AdmissionDenied
+        )
+    }
 }
 
 /// Future returned by durable Task backend operations.
@@ -293,6 +466,64 @@ pub trait McpTaskBackend: Send + Sync + fmt::Debug {
         task_id: String,
         input_responses: BTreeMap<String, Value>,
     ) -> McpTaskFuture<'_, ()>;
+
+    /// Cooperatively requests durable cancellation.
+    fn cancel(&self, task_id: String) -> McpTaskFuture<'_, ()>;
+}
+
+/// Durable receiver-side backend for task-augmented Sampling.
+///
+/// Implementations receive an already request-approved value, must persist it,
+/// and must make the returned task inspectable before `create_message_task`
+/// resolves. Model execution remains backend-owned. The receiver's
+/// [`crate::SamplingService`] performs response approval after exact durable
+/// reconstruction and before disclosure.
+pub trait McpSamplingTaskBackend: Send + Sync + fmt::Debug {
+    /// Durably accepts one Sampling request for asynchronous execution.
+    fn create_message_task(
+        &self,
+        request: SamplingTaskRequest,
+    ) -> McpTaskFuture<'_, SamplingTaskCreation>;
+
+    /// Loads the current task state.
+    fn get(&self, task_id: String) -> McpTaskFuture<'_, McpTask>;
+
+    /// Reconstructs the exact successful `sampling/createMessage` result.
+    fn result(&self, task_id: String) -> McpTaskFuture<'_, SamplingTaskTerminalResult>;
+
+    /// Loads a previously approved result disclosure, when durably recorded.
+    fn approved_result(&self, _task_id: String) -> McpTaskFuture<'_, Option<CreateMessageResult>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Atomically claims cross-instance ownership of response approval.
+    fn claim_result_approval(
+        &self,
+        task_id: String,
+        _lease_ms: u64,
+    ) -> McpTaskFuture<'_, SamplingTaskApprovalClaim> {
+        Box::pin(async move { Ok(SamplingTaskApprovalClaim::Acquired { token: task_id }) })
+    }
+
+    /// Atomically records the first approved disclosure and returns the
+    /// authoritative stored value.
+    fn store_approved_result(
+        &self,
+        _task_id: String,
+        result: CreateMessageResult,
+    ) -> McpTaskFuture<'_, CreateMessageResult> {
+        Box::pin(async move { Ok(result) })
+    }
+
+    /// Fenced completion of one claimed result approval.
+    fn complete_result_approval(
+        &self,
+        task_id: String,
+        _token: String,
+        result: CreateMessageResult,
+    ) -> McpTaskFuture<'_, CreateMessageResult> {
+        self.store_approved_result(task_id, result)
+    }
 
     /// Cooperatively requests durable cancellation.
     fn cancel(&self, task_id: String) -> McpTaskFuture<'_, ()>;
@@ -330,6 +561,22 @@ mod tests {
             Err(McpTaskTimeError::RetentionOverflow)
         );
         assert!(task.validate().is_err());
+    }
+
+    #[test]
+    fn extension_and_core_task_wire_names_remain_distinct() {
+        let task = working_task();
+        let value = serde_json::to_value(&task).unwrap();
+        assert_eq!(value["ttlMs"], 1);
+        assert_eq!(value["pollIntervalMs"], 100);
+        assert!(value.get("ttl").is_none());
+        assert!(value.get("pollInterval").is_none());
+
+        let core = serde_json::to_value(SamplingTaskResult { task }).unwrap();
+        assert_eq!(core["task"]["ttl"], 1);
+        assert_eq!(core["task"]["pollInterval"], 100);
+        assert!(core["task"].get("ttlMs").is_none());
+        assert!(core["task"].get("pollIntervalMs").is_none());
     }
 
     fn working_task() -> McpTask {

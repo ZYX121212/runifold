@@ -2,6 +2,8 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::content_projection::encode_content_envelope;
+
 use runifold_model::{
     ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, ResponseMode,
     Role, ToolChoice, ToolResult,
@@ -166,10 +168,12 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                     flush_message(&mut input, message.role, &mut message_content)?;
                     input.push(data.value.clone());
                 }
-                ContentPart::Audio { .. } => {
-                    return Err(unsupported(
-                        "audio input is not yet implemented by the OpenAI adapter",
-                    ));
+                ContentPart::Audio { .. } | ContentPart::ResourceLink { .. } => {
+                    require_input_role(message.role, "projected rich content")?;
+                    message_content.push(json!({
+                        "type": "input_text",
+                        "text": encode_content_envelope(part)?
+                    }));
                 }
                 ContentPart::Reasoning(_) => {
                     return Err(unsupported(
@@ -292,9 +296,21 @@ fn encode_tool_result(result: &ToolResult, provider: &str) -> Result<Value, Mode
     for part in &result.content {
         match part {
             ContentPart::Text { text: value } => text.push(value.clone()),
-            ContentPart::Image { source } => rich.push(encode_image(source, provider)?),
+            ContentPart::Image { source } => match encode_image(source, provider) {
+                Ok(image) => rich.push(image),
+                Err(error) if error.kind == ModelErrorKind::UnsupportedFeature => {
+                    text.push(encode_content_envelope(part)?);
+                }
+                Err(error) => return Err(error),
+            },
             ContentPart::Document { source, name } => {
-                rich.push(encode_document(source, name.as_deref(), provider)?);
+                match encode_document(source, name.as_deref(), provider) {
+                    Ok(document) => rich.push(document),
+                    Err(error) if error.kind == ModelErrorKind::UnsupportedFeature => {
+                        text.push(encode_content_envelope(part)?);
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             ContentPart::ResourceLink {
                 uri,
@@ -302,6 +318,7 @@ fn encode_tool_result(result: &ToolResult, provider: &str) -> Result<Value, Mode
                 media_type,
                 ..
             } => {
+                text.push(encode_content_envelope(part)?);
                 let source = MediaSource::Url {
                     url: uri.clone(),
                     media_type: media_type.clone(),
@@ -310,16 +327,14 @@ fn encode_tool_result(result: &ToolResult, provider: &str) -> Result<Value, Mode
                     .as_deref()
                     .is_some_and(|kind| kind.starts_with("image/"))
                 {
-                    rich.push(encode_image(&source, provider)?);
-                } else {
-                    rich.push(encode_document(&source, Some(name), provider)?);
+                    if let Ok(image) = encode_image(&source, provider) {
+                        rich.push(image);
+                    }
+                } else if let Ok(document) = encode_document(&source, Some(name), provider) {
+                    rich.push(document);
                 }
             }
-            _ => {
-                return Err(unsupported(
-                    "OpenAI function results support text, images, documents, and resource links",
-                ));
-            }
+            _ => text.push(encode_content_envelope(part)?),
         }
     }
     if let Some(structured) = &result.structured_content {
@@ -456,6 +471,8 @@ mod tests {
 
     use super::encode_request;
 
+    use crate::content_projection::decode_content_envelope;
+
     #[test]
     fn encodes_text_tools_and_structured_output() {
         let request = ModelRequest::new(
@@ -548,6 +565,87 @@ mod tests {
         assert_eq!(body["input"][0]["output"][0]["type"], "input_text");
         assert_eq!(body["input"][0]["output"][1]["type"], "input_image");
         assert_eq!(body["input"][0]["output"][2]["type"], "input_file");
+    }
+
+    #[test]
+    fn function_outputs_bridge_audio_without_rejecting_the_request() {
+        let message = Message::new(
+            Role::Tool,
+            vec![ContentPart::ToolResult(ToolResult {
+                call_id: "call-audio".into(),
+                name: Some("listen".into()),
+                content: vec![ContentPart::Audio {
+                    source: MediaSource::Base64 {
+                        media_type: "audio/wav".into(),
+                        data: "UklGRg==".into(),
+                    },
+                }],
+                structured_content: None,
+                is_error: false,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("openai", "model"),
+            message,
+        ))
+        .unwrap();
+        let envelope = body["input"][0]["output"].as_str().unwrap();
+
+        assert!(envelope.contains("runifold.content.v1"));
+        assert!(envelope.contains("audio/wav"));
+        assert!(envelope.contains("UklGRg=="));
+    }
+
+    #[test]
+    fn ordinary_audio_input_uses_the_bounded_projection() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Audio {
+                source: MediaSource::Base64 {
+                    media_type: "audio/wav".into(),
+                    data: "YXVkaW8=".into(),
+                },
+            }],
+        )
+        .unwrap();
+
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("openai", "model"),
+            message,
+        ))
+        .unwrap();
+        let envelope = body["input"][0]["content"][0]["text"].as_str().unwrap();
+
+        assert!(decode_content_envelope(envelope).unwrap().is_some());
+    }
+
+    #[test]
+    fn invalid_provider_file_ownership_is_not_downgraded_to_text() {
+        let message = Message::new(
+            Role::Tool,
+            vec![ContentPart::ToolResult(ToolResult {
+                call_id: "call-file".into(),
+                name: Some("inspect".into()),
+                content: vec![ContentPart::Image {
+                    source: MediaSource::provider_file("anthropic", "file-secret"),
+                }],
+                structured_content: None,
+                is_error: false,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+
+        let error = encode_request(&ModelRequest::new(
+            ModelRef::new("openai", "model"),
+            message,
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
     }
 
     #[test]

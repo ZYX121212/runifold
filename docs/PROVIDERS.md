@@ -49,22 +49,42 @@ content.
 
 Runifold keeps Tool presentation content, structured content, host metadata,
 and application-error status separate until the Provider boundary. Adapters
-never silently stringify unsupported media.
+prefer native multimodal fields. When a wire protocol has no corresponding
+Tool-result variant, they use a versioned `runifold.content.v1` JSON envelope
+that preserves the complete canonical content instead of rejecting or dropping
+it. This fallback is model-visible text, not a claim of native modality support.
+Projection is limited to 256 KiB, has a strict opt-in decoder, and rejects
+Provider-private data, reasoning signatures, recursive Tool content, unresolved
+Artifacts, and cross-Provider file identities. Only `UnsupportedFeature` may
+trigger projection; malformed input and ownership failures remain fail-closed.
 
-| Protocol | Native Tool-result projection | Explicit limitation |
+| Protocol | Native Tool-result projection | Reversible fallback |
 | --- | --- | --- |
-| OpenAI Responses / Ark | text, image input, file input; structured content is preserved as JSON text when required by the wire format | audio output is rejected |
-| OpenAI Chat-compatible | text and resource references | image, audio, and inline document output are rejected |
-| Anthropic Messages | text, image, and resource references | audio and inline document output are rejected |
-| Gemini GenerateContent | structured response plus native inline/file image, audio, and document parts | unknown opaque parts are rejected |
-| Amazon Bedrock Converse | text, resource references, native JSON, image, and document | audio Tool results are unavailable in the current SDK protocol |
-| Ollama Chat | text and resource references | rich media output is rejected |
+| OpenAI Responses / Ark | text, image input, file input; structured content is preserved as JSON text when required by the wire format | audio and media that the endpoint cannot encode use the canonical envelope |
+| OpenAI Chat-compatible | text | image, audio, document, resource, and extension content use the canonical envelope |
+| Anthropic Messages | text and image | audio, document, resource, and extension content use the canonical envelope |
+| Gemini GenerateContent | structured response plus native inline/file image, audio, and document parts | media unsupported by the endpoint and extension content use the canonical envelope |
+| Amazon Bedrock Converse | text, native JSON, image, and document | audio and media unsupported by Converse use the canonical envelope |
+| Ollama Chat | text plus inline images where supported | every rich part also has a canonical envelope; audio, document, resource, and extension content remain available through it |
 
 MCP is the lossless rich-result bridge: text, image, audio, embedded resources,
 resource links, structured content, annotations, and application errors retain
 their canonical meaning. Large durable media should be returned as
 `MediaSource::Artifact`; `ArtifactResolvingModel` verifies and materializes it
 only for the final Provider request.
+
+Ordinary message media uses the same native-first rule. Adapters declare these
+text projections as `Emulated`, so applications must select
+`FeaturePolicy::AllowEmulation` or `BestEffort`; `Strict` never silently turns a
+requested native modality into JSON text. OpenAI-compatible Chat, Anthropic,
+Bedrock, and Ollama can therefore retain otherwise unsupported audio/document
+content without falsely claiming that the target model heard audio or parsed a
+document natively.
+
+Applications may explicitly inspect projected Provider output with
+`content_projection::decode_content_envelope` or
+`decode_tool_result_envelope`. Decoding is never automatic because generated
+JSON remains untrusted model output.
 
 ## Ark Responses example
 

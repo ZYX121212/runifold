@@ -1,22 +1,22 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use base64::Engine;
 use runifold_core::CancellationToken;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
-use crate::{ContentBlock, McpTool};
+use crate::sampling_validation::{validate_request, validate_response};
+use crate::{ContentBlock, McpTool, SamplingCapability, TaskMetadata};
 
 const DEFAULT_MAX_SERIALIZED_BYTES: usize = 1024 * 1024;
 const DEFAULT_MAX_MEDIA_BYTES: usize = 4 * 1024 * 1024;
@@ -171,6 +171,12 @@ pub struct CreateMessageParams {
     /// Tool-selection behavior.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<SamplingToolChoice>,
+    /// Optional request for durable asynchronous execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskMetadata>,
+    /// Protocol metadata, including related-task correlation.
+    #[serde(rename = "_meta", default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub meta: BTreeMap<String, Value>,
 }
 
 impl CreateMessageParams {
@@ -187,7 +193,20 @@ impl CreateMessageParams {
             metadata: None,
             tools: Vec::new(),
             tool_choice: None,
+            task: None,
+            meta: BTreeMap::new(),
         }
+    }
+
+    /// Adds a caller-generated UUIDv4/v7 used to recover the same durable Task
+    /// when a create response is lost and the request is retried.
+    #[must_use]
+    pub fn with_task_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.meta.insert(
+            crate::SAMPLING_TASK_IDEMPOTENCY_KEY.into(),
+            Value::String(key.into()),
+        );
+        self
     }
 }
 
@@ -261,6 +280,8 @@ pub enum SamplingStage {
     ResponseReview,
     /// Outer cancellation or deadline boundary.
     Lifecycle,
+    /// Host-controlled ambient context resolution.
+    ContextResolution,
 }
 
 /// Safe Sampling failure.
@@ -344,12 +365,31 @@ pub trait SamplingApprover: Send + Sync {
 
 /// Host-owned provider boundary for one approved Sampling request.
 pub trait SamplingProvider: Send + Sync {
+    /// Reports whether this provider can execute Tool-enabled Sampling.
+    fn supports_tools(&self) -> bool {
+        false
+    }
+
     /// Selects and invokes a model. Server preferences remain advisory.
     fn sample(
         &self,
         request: CreateMessageParams,
         context: SamplingCallContext,
     ) -> SamplingFuture<'_, CreateMessageResult>;
+}
+
+/// Host-owned resolver for soft-deprecated MCP ambient context inclusion.
+///
+/// The resolver returns explicit messages which are inserted before the
+/// server-supplied conversation and shown to the request approver before any
+/// model call occurs.
+pub trait SamplingContextProvider: Send + Sync {
+    /// Resolves context from the requested server scope.
+    fn resolve(
+        &self,
+        include: IncludeContext,
+        context: SamplingCallContext,
+    ) -> SamplingFuture<'_, Vec<SamplingMessage>>;
 }
 
 /// Resource and abuse limits for client-side Sampling.
@@ -373,6 +413,8 @@ pub struct SamplingPolicy {
     pub max_concurrent_requests: usize,
     /// Maximum duration including both approval stages.
     pub request_timeout: Duration,
+    /// Maximum task retention accepted from a Sampling requester.
+    pub max_task_ttl: Duration,
 }
 
 impl Default for SamplingPolicy {
@@ -387,6 +429,7 @@ impl Default for SamplingPolicy {
             max_total_requested_tokens: 1_000_000,
             max_concurrent_requests: 4,
             request_timeout: Duration::from_secs(60),
+            max_task_ttl: Duration::from_secs(7 * 24 * 60 * 60),
         }
     }
 }
@@ -395,10 +438,18 @@ impl Default for SamplingPolicy {
 pub struct SamplingService {
     approver: Arc<dyn SamplingApprover>,
     provider: Arc<dyn SamplingProvider>,
+    context_provider: Option<Arc<dyn SamplingContextProvider>>,
     policy: SamplingPolicy,
     concurrency: Arc<Semaphore>,
     accepted_requests: AtomicU64,
     accepted_tokens: AtomicU64,
+    accepted_task_keys: StdMutex<HashMap<String, Vec<u8>>>,
+}
+
+pub(crate) struct ApprovedTaskRequest {
+    pub(crate) params: CreateMessageParams,
+    pub(crate) budget_reserved: bool,
+    pub(crate) idempotency_key: Option<String>,
 }
 
 impl SamplingService {
@@ -412,10 +463,121 @@ impl SamplingService {
             concurrency: Arc::new(Semaphore::new(policy.max_concurrent_requests.max(1))),
             approver,
             provider,
+            context_provider: None,
             policy,
             accepted_requests: AtomicU64::new(0),
             accepted_tokens: AtomicU64::new(0),
+            accepted_task_keys: StdMutex::new(HashMap::new()),
         }
+    }
+
+    /// Enables host-controlled resolution of `includeContext` requests.
+    #[must_use]
+    pub fn with_context_provider(mut self, provider: Arc<dyn SamplingContextProvider>) -> Self {
+        self.context_provider = Some(provider);
+        self
+    }
+
+    /// Returns the exact MCP Sampling capabilities implemented by this service.
+    pub fn capability(&self) -> SamplingCapability {
+        SamplingCapability {
+            context: self.context_provider.as_ref().map(|_| BTreeMap::new()),
+            tools: self.provider.supports_tools().then(BTreeMap::new),
+        }
+    }
+
+    pub(crate) fn approval_lease_ms(&self) -> u64 {
+        u64::try_from(self.policy.request_timeout.as_millis())
+            .unwrap_or(u64::MAX / 4)
+            .saturating_add(5_000)
+    }
+
+    pub(crate) fn approve_task_request(
+        &self,
+        request: CreateMessageParams,
+        cancellation: CancellationToken,
+    ) -> SamplingFuture<'_, ApprovedTaskRequest> {
+        Box::pin(async move {
+            validate_request(
+                &request,
+                &self.policy,
+                self.context_provider.is_some(),
+                self.provider.supports_tools(),
+            )
+            .map_err(|error| error.with_stage(SamplingStage::RequestValidation))?;
+            let _permit = self.sampling_permit()?;
+            let deadline = self.sampling_deadline()?;
+            let context = SamplingCallContext {
+                deadline,
+                cancellation: cancellation.clone(),
+            };
+            tokio::select! {
+                result = self.review_task_request(request, context) => result,
+                () = cancellation.cancelled() => Err(lifecycle_cancelled()),
+                () = tokio::time::sleep_until(deadline.into()) => Err(lifecycle_timeout()),
+            }
+        })
+    }
+
+    async fn review_task_request(
+        &self,
+        request: CreateMessageParams,
+        context: SamplingCallContext,
+    ) -> Result<ApprovedTaskRequest, SamplingError> {
+        let request = self.prepare_request(request, context.clone()).await?;
+        let approved = self
+            .approver
+            .review_request(request, context)
+            .await
+            .map_err(|error| error.with_stage(SamplingStage::RequestReview))?;
+        let SamplingDecision::Approve(request) = approved else {
+            return Err(SamplingError::new(
+                SamplingErrorKind::Rejected,
+                "Sampling request rejected",
+            )
+            .with_stage(SamplingStage::RequestReview));
+        };
+        validate_request(
+            &request,
+            &self.policy,
+            false,
+            self.provider.supports_tools(),
+        )
+        .map_err(|error| error.with_stage(SamplingStage::RequestValidation))?;
+        let idempotency_key = request
+            .meta
+            .get(crate::SAMPLING_TASK_IDEMPOTENCY_KEY)
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let budget_reserved = self
+            .reserve_task_budget(&request, idempotency_key.as_deref())
+            .map_err(|error| error.with_stage(SamplingStage::BudgetReservation))?;
+        Ok(ApprovedTaskRequest {
+            params: request,
+            budget_reserved,
+            idempotency_key,
+        })
+    }
+
+    pub(crate) fn approve_task_result(
+        &self,
+        request: CreateMessageParams,
+        response: CreateMessageResult,
+        cancellation: CancellationToken,
+    ) -> SamplingFuture<'_, CreateMessageResult> {
+        Box::pin(async move {
+            let _permit = self.sampling_permit()?;
+            let deadline = self.sampling_deadline()?;
+            let context = SamplingCallContext {
+                deadline,
+                cancellation: cancellation.clone(),
+            };
+            tokio::select! {
+                result = self.review_response(&request, response, context) => result,
+                () = cancellation.cancelled() => Err(lifecycle_cancelled()),
+                () = tokio::time::sleep_until(deadline.into()) => Err(lifecycle_timeout()),
+            }
+        })
     }
 
     /// Validates, reviews, invokes, reviews again, and returns one Sampling result.
@@ -425,69 +587,30 @@ impl SamplingService {
         cancellation: CancellationToken,
     ) -> SamplingFuture<'_, CreateMessageResult> {
         Box::pin(async move {
-            validate_request(&request, &self.policy)
-                .map_err(|error| error.with_stage(SamplingStage::RequestValidation))?;
-            let _permit = self.concurrency.try_acquire().map_err(|_| {
-                SamplingError::new(
-                    SamplingErrorKind::LimitExceeded,
-                    "Sampling concurrency limit exceeded",
-                )
-                .with_stage(SamplingStage::BudgetReservation)
-            })?;
-            let deadline = Instant::now()
-                .checked_add(self.policy.request_timeout)
-                .ok_or_else(|| {
-                    SamplingError::new(
-                        SamplingErrorKind::LimitExceeded,
-                        "Sampling timeout is outside platform limits",
-                    )
-                    .with_stage(SamplingStage::Lifecycle)
-                })?;
+            validate_request(
+                &request,
+                &self.policy,
+                self.context_provider.is_some(),
+                self.provider.supports_tools(),
+            )
+            .map_err(|error| error.with_stage(SamplingStage::RequestValidation))?;
+            let _permit = self.sampling_permit()?;
+            let deadline = self.sampling_deadline()?;
             let context = SamplingCallContext {
                 deadline,
                 cancellation: cancellation.clone(),
             };
             let operation = async {
-                let approved = self
-                    .approver
-                    .review_request(request, context.clone())
-                    .await
-                    .map_err(|error| error.with_stage(SamplingStage::RequestReview))?;
-                let SamplingDecision::Approve(request) = approved else {
-                    return Err(SamplingError::new(
-                        SamplingErrorKind::Rejected,
-                        "Sampling request rejected",
-                    )
-                    .with_stage(SamplingStage::RequestReview));
-                };
-                validate_request(&request, &self.policy)
-                    .map_err(|error| error.with_stage(SamplingStage::RequestValidation))?;
-                self.reserve_budget(request.max_tokens)
-                    .map_err(|error| error.with_stage(SamplingStage::BudgetReservation))?;
+                let request = self.review_request(request, context.clone()).await?;
+                let tools = request.tools.clone();
+                let tool_choice = request.tool_choice.clone();
                 let response = self
                     .provider
                     .sample(request, context.clone())
                     .await
                     .map_err(|error| error.with_stage(SamplingStage::ModelExecution))?;
-                validate_response(&response, &self.policy)
-                    .map_err(|error| error.with_stage(SamplingStage::ResponseValidation))?;
-                match self
-                    .approver
-                    .review_response(response, context.clone())
+                self.review_response_with_contract(&tools, tool_choice.as_ref(), response, context)
                     .await
-                    .map_err(|error| error.with_stage(SamplingStage::ResponseReview))?
-                {
-                    SamplingDecision::Approve(response) => {
-                        validate_response(&response, &self.policy)
-                            .map_err(|error| error.with_stage(SamplingStage::ResponseValidation))?;
-                        Ok(response)
-                    }
-                    SamplingDecision::Reject => Err(SamplingError::new(
-                        SamplingErrorKind::Rejected,
-                        "Sampling response rejected",
-                    )
-                    .with_stage(SamplingStage::ResponseReview)),
-                }
             };
             tokio::select! {
                 result = operation => result,
@@ -503,6 +626,130 @@ impl SamplingService {
         })
     }
 
+    async fn review_request(
+        &self,
+        request: CreateMessageParams,
+        context: SamplingCallContext,
+    ) -> Result<CreateMessageParams, SamplingError> {
+        let request = self.prepare_request(request, context.clone()).await?;
+        let approved = self
+            .approver
+            .review_request(request, context)
+            .await
+            .map_err(|error| error.with_stage(SamplingStage::RequestReview))?;
+        let SamplingDecision::Approve(request) = approved else {
+            return Err(SamplingError::new(
+                SamplingErrorKind::Rejected,
+                "Sampling request rejected",
+            )
+            .with_stage(SamplingStage::RequestReview));
+        };
+        validate_request(
+            &request,
+            &self.policy,
+            false,
+            self.provider.supports_tools(),
+        )
+        .map_err(|error| error.with_stage(SamplingStage::RequestValidation))?;
+        self.reserve_budget(request.max_tokens)
+            .map_err(|error| error.with_stage(SamplingStage::BudgetReservation))?;
+        Ok(request)
+    }
+
+    async fn review_response(
+        &self,
+        request: &CreateMessageParams,
+        response: CreateMessageResult,
+        context: SamplingCallContext,
+    ) -> Result<CreateMessageResult, SamplingError> {
+        self.review_response_with_contract(
+            &request.tools,
+            request.tool_choice.as_ref(),
+            response,
+            context,
+        )
+        .await
+    }
+
+    async fn review_response_with_contract(
+        &self,
+        tools: &[McpTool],
+        tool_choice: Option<&SamplingToolChoice>,
+        response: CreateMessageResult,
+        context: SamplingCallContext,
+    ) -> Result<CreateMessageResult, SamplingError> {
+        validate_response(&response, &self.policy, tools, tool_choice)
+            .map_err(|error| error.with_stage(SamplingStage::ResponseValidation))?;
+        match self
+            .approver
+            .review_response(response, context)
+            .await
+            .map_err(|error| error.with_stage(SamplingStage::ResponseReview))?
+        {
+            SamplingDecision::Approve(response) => {
+                validate_response(&response, &self.policy, tools, tool_choice)
+                    .map_err(|error| error.with_stage(SamplingStage::ResponseValidation))?;
+                Ok(response)
+            }
+            SamplingDecision::Reject => Err(SamplingError::new(
+                SamplingErrorKind::Rejected,
+                "Sampling response rejected",
+            )
+            .with_stage(SamplingStage::ResponseReview)),
+        }
+    }
+
+    fn sampling_permit(&self) -> Result<tokio::sync::SemaphorePermit<'_>, SamplingError> {
+        self.concurrency.try_acquire().map_err(|_| {
+            SamplingError::new(
+                SamplingErrorKind::LimitExceeded,
+                "Sampling concurrency limit exceeded",
+            )
+            .with_stage(SamplingStage::BudgetReservation)
+        })
+    }
+
+    fn sampling_deadline(&self) -> Result<Instant, SamplingError> {
+        Instant::now()
+            .checked_add(self.policy.request_timeout)
+            .ok_or_else(|| {
+                SamplingError::new(
+                    SamplingErrorKind::LimitExceeded,
+                    "Sampling timeout is outside platform limits",
+                )
+                .with_stage(SamplingStage::Lifecycle)
+            })
+    }
+
+    async fn prepare_request(
+        &self,
+        mut request: CreateMessageParams,
+        context: SamplingCallContext,
+    ) -> Result<CreateMessageParams, SamplingError> {
+        if matches!(request.include_context, IncludeContext::None) {
+            return Ok(request);
+        }
+        let include = request.include_context;
+        let context_provider = self.context_provider.as_ref().ok_or_else(|| {
+            invalid("Sampling context inclusion was not negotiated")
+                .with_stage(SamplingStage::RequestValidation)
+        })?;
+        let context_messages = context_provider
+            .resolve(include, context)
+            .await
+            .map_err(|error| error.with_stage(SamplingStage::ContextResolution))?;
+        request.messages.splice(0..0, context_messages);
+        request.include_context = IncludeContext::None;
+        validate_request(
+            &request,
+            &self.policy,
+            false,
+            self.provider.supports_tools(),
+        )
+        .map_err(|error| error.with_stage(SamplingStage::RequestValidation))?;
+        Ok(request)
+    }
+
     fn reserve_budget(&self, tokens: u64) -> Result<(), SamplingError> {
         reserve(
             &self.accepted_requests,
@@ -510,12 +757,71 @@ impl SamplingService {
             self.policy.max_total_requests,
             "Sampling request budget exhausted",
         )?;
-        reserve(
+        if let Err(error) = reserve(
             &self.accepted_tokens,
             tokens,
             self.policy.max_total_requested_tokens,
             "Sampling token budget exhausted",
-        )
+        ) {
+            self.accepted_requests.fetch_sub(1, Ordering::AcqRel);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn reserve_task_budget(
+        &self,
+        request: &CreateMessageParams,
+        idempotency_key: Option<&str>,
+    ) -> Result<bool, SamplingError> {
+        let Some(key) = idempotency_key else {
+            self.reserve_budget(request.max_tokens)?;
+            return Ok(true);
+        };
+        let mut fingerprint_request = request.clone();
+        fingerprint_request
+            .meta
+            .remove(crate::SAMPLING_TASK_IDEMPOTENCY_KEY);
+        let fingerprint = serde_json::to_vec(&fingerprint_request)
+            .map_err(|_| invalid("Sampling Task request could not be fingerprinted"))?;
+        let mut keys = self
+            .accepted_task_keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = keys.get(key) {
+            return if existing == &fingerprint {
+                Ok(false)
+            } else {
+                Err(invalid(
+                    "Sampling Task idempotency key was reused with a different request",
+                ))
+            };
+        }
+        self.reserve_budget(request.max_tokens)?;
+        keys.insert(key.to_owned(), fingerprint);
+        Ok(true)
+    }
+
+    pub(crate) fn rollback_task_budget(&self, tokens: u64) {
+        let requests =
+            self.accepted_requests
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    current.checked_sub(1)
+                });
+        let requested_tokens =
+            self.accepted_tokens
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    current.checked_sub(tokens)
+                });
+        debug_assert!(requests.is_ok(), "Sampling request budget underflow");
+        debug_assert!(requested_tokens.is_ok(), "Sampling token budget underflow");
+    }
+
+    pub(crate) fn forget_task_budget_key(&self, key: &str) {
+        self.accepted_task_keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(key);
     }
 }
 
@@ -534,143 +840,6 @@ impl std::fmt::Debug for SamplingService {
             )
             .finish_non_exhaustive()
     }
-}
-
-fn validate_request(
-    request: &CreateMessageParams,
-    policy: &SamplingPolicy,
-) -> Result<(), SamplingError> {
-    if request.messages.is_empty() || request.messages.len() > policy.max_messages {
-        return Err(invalid("Sampling message count is outside policy"));
-    }
-    if request.max_tokens == 0 || request.max_tokens > policy.max_tokens_per_request {
-        return Err(limit("Sampling maxTokens is outside policy"));
-    }
-    if !matches!(request.include_context, IncludeContext::None) {
-        return Err(invalid("Sampling context inclusion is not supported"));
-    }
-    if !request.tools.is_empty() || request.tool_choice.is_some() {
-        return Err(invalid("Tool-enabled Sampling is not supported"));
-    }
-    if request
-        .metadata
-        .as_ref()
-        .is_some_and(|metadata| !metadata.is_object())
-    {
-        return Err(invalid("Sampling metadata must be an object"));
-    }
-    if request
-        .temperature
-        .is_some_and(|temperature| !temperature.is_finite())
-    {
-        return Err(invalid("Sampling temperature must be finite"));
-    }
-    if request
-        .model_preferences
-        .as_ref()
-        .is_some_and(|preferences| {
-            [
-                preferences.cost_priority,
-                preferences.speed_priority,
-                preferences.intelligence_priority,
-            ]
-            .into_iter()
-            .flatten()
-            .any(|priority| !priority.is_finite() || !(0.0..=1.0).contains(&priority))
-        })
-    {
-        return Err(invalid("Sampling model priorities must be between 0 and 1"));
-    }
-    validate_messages(&request.messages, policy)?;
-    validate_encoded_size(request, policy.max_serialized_bytes, "Sampling request")
-}
-
-fn validate_response(
-    response: &CreateMessageResult,
-    policy: &SamplingPolicy,
-) -> Result<(), SamplingError> {
-    if response.model.trim().is_empty() || response.role != SamplingRole::Assistant {
-        return Err(output("Sampling response model or role is invalid"));
-    }
-    if response.stop_reason.as_deref() == Some("toolUse") {
-        return Err(output(
-            "basic Sampling response must not request Tool execution",
-        ));
-    }
-    validate_blocks(response.content.as_slice(), policy, &mut 0)
-        .map_err(|error| SamplingError::new(SamplingErrorKind::InvalidOutput, error.message))?;
-    validate_encoded_size(response, policy.max_serialized_bytes, "Sampling response")
-        .map_err(|error| SamplingError::new(SamplingErrorKind::InvalidOutput, error.message))
-}
-
-fn validate_messages(
-    messages: &[SamplingMessage],
-    policy: &SamplingPolicy,
-) -> Result<(), SamplingError> {
-    let mut blocks = 0;
-    for message in messages {
-        validate_blocks(message.content.as_slice(), policy, &mut blocks)?;
-    }
-    Ok(())
-}
-
-fn validate_blocks(
-    content: &[ContentBlock],
-    policy: &SamplingPolicy,
-    total: &mut usize,
-) -> Result<(), SamplingError> {
-    if content.is_empty() {
-        return Err(invalid("Sampling message content must not be empty"));
-    }
-    *total = total.saturating_add(content.len());
-    if *total > policy.max_content_blocks {
-        return Err(limit("Sampling content-block limit exceeded"));
-    }
-    for block in content {
-        match block.kind.as_str() {
-            "text" if block.fields.get("text").and_then(Value::as_str).is_some() => {}
-            "image" | "audio" => validate_media(block, policy.max_media_bytes)?,
-            _ => return Err(invalid("unsupported Sampling content block")),
-        }
-    }
-    Ok(())
-}
-
-fn validate_media(block: &ContentBlock, max_media_bytes: usize) -> Result<(), SamplingError> {
-    let data = block
-        .fields
-        .get("data")
-        .and_then(Value::as_str)
-        .ok_or_else(|| invalid("Sampling media data is missing"))?;
-    let mime = block
-        .fields
-        .get("mimeType")
-        .and_then(Value::as_str)
-        .ok_or_else(|| invalid("Sampling media MIME type is missing"))?;
-    if mime.trim().is_empty() {
-        return Err(invalid("Sampling media MIME type is blank"));
-    }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data)
-        .map_err(|_| invalid("Sampling media is not valid base64"))?;
-    if bytes.len() > max_media_bytes {
-        return Err(limit("Sampling decoded-media limit exceeded"));
-    }
-    Ok(())
-}
-
-fn validate_encoded_size<T: Serialize>(
-    value: &T,
-    max_bytes: usize,
-    label: &str,
-) -> Result<(), SamplingError> {
-    let bytes = serde_json::to_vec(value)
-        .map_err(|_| invalid(format!("{label} cannot be encoded")))?
-        .len();
-    if bytes > max_bytes {
-        return Err(limit(format!("{label} exceeds the serialized-size limit")));
-    }
-    Ok(())
 }
 
 fn reserve(
@@ -695,8 +864,17 @@ fn limit(message: impl Into<String>) -> SamplingError {
     SamplingError::new(SamplingErrorKind::LimitExceeded, message)
 }
 
-fn output(message: impl Into<String>) -> SamplingError {
-    SamplingError::new(SamplingErrorKind::InvalidOutput, message)
+fn lifecycle_cancelled() -> SamplingError {
+    SamplingError::new(SamplingErrorKind::Cancelled, "Sampling request cancelled")
+        .with_stage(SamplingStage::Lifecycle)
+}
+
+fn lifecycle_timeout() -> SamplingError {
+    SamplingError::new(
+        SamplingErrorKind::DeadlineExceeded,
+        "Sampling request deadline elapsed",
+    )
+    .with_stage(SamplingStage::Lifecycle)
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde skip predicates receive references.
