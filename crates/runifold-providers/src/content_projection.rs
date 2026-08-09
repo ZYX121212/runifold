@@ -1,5 +1,6 @@
 //! Safe, versioned projection for rich content on text-only Provider wires.
 
+use base64::Engine;
 use runifold_model::{ContentPart, MediaSource, ModelError, ModelErrorKind, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,6 +11,8 @@ pub const CONTENT_ENVELOPE_KIND: &str = "runifold.content.v1";
 pub const TOOL_RESULT_ENVELOPE_KIND: &str = "runifold.tool_result.v1";
 /// Maximum encoded envelope size accepted by the projection boundary.
 pub const MAX_CONTENT_ENVELOPE_BYTES: usize = 256 * 1024;
+const MAX_MEDIA_TYPE_BYTES: usize = 255;
+const MAX_MEDIA_URL_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -126,6 +129,7 @@ pub fn decode_tool_result_envelope(input: &str) -> Result<Option<ToolResult>, Mo
     }))
 }
 
+#[cfg(any(feature = "bedrock", feature = "gemini"))]
 pub(crate) fn native_or_projected<T>(
     native: Result<T, ModelError>,
     part: &ContentPart,
@@ -138,6 +142,80 @@ pub(crate) fn native_or_projected<T>(
         }
         Err(error) => Err(error),
     }
+}
+
+pub(crate) fn validate_inline_media(media_type: &str, data: &str) -> Result<(), ModelError> {
+    validate_media_type(media_type)?;
+    if data.trim().is_empty() {
+        return Err(invalid("inline media requires base64 data"));
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| invalid("inline media is not valid base64"))?;
+    Ok(())
+}
+
+pub(crate) fn validate_optional_media_type(media_type: Option<&str>) -> Result<(), ModelError> {
+    media_type.map_or(Ok(()), validate_media_type)
+}
+
+pub(crate) fn validate_media_url(url: &str, schemes: &[&str]) -> Result<(), ModelError> {
+    if url.len() > MAX_MEDIA_URL_BYTES || url.chars().any(char::is_control) {
+        return Err(invalid(
+            "media URL is too long or contains control characters",
+        ));
+    }
+    let parsed = url::Url::parse(url).map_err(|_| invalid("media URL is not absolute"))?;
+    if !schemes.contains(&parsed.scheme())
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(invalid(
+            "media URL uses an unsupported scheme, authority, credentials, or fragment",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_media_type(media_type: &str) -> Result<(), ModelError> {
+    let Some((kind, subtype)) = media_type.split_once('/') else {
+        return Err(invalid(
+            "media MIME type must contain one type/subtype pair",
+        ));
+    };
+    if media_type.len() > MAX_MEDIA_TYPE_BYTES
+        || kind.is_empty()
+        || subtype.is_empty()
+        || subtype.contains('/')
+        || !kind.bytes().all(is_mime_token_byte)
+        || !subtype.bytes().all(is_mime_token_byte)
+    {
+        return Err(invalid("media MIME type is malformed or too long"));
+    }
+    Ok(())
+}
+
+fn is_mime_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
 }
 
 fn envelope_kind(input: &str) -> Option<String> {
@@ -199,20 +277,11 @@ fn validate_projectable(parts: &[ContentPart]) -> Result<(), ModelError> {
 fn validate_media(source: &MediaSource) -> Result<(), ModelError> {
     match source {
         MediaSource::Url { url, media_type } => {
-            if url.trim().is_empty()
-                || media_type
-                    .as_ref()
-                    .is_some_and(|value| value.trim().is_empty())
-            {
-                return Err(invalid("projected media URL or MIME type is blank"));
-            }
+            validate_media_url(url, &["http", "https", "gs"])?;
+            validate_optional_media_type(media_type.as_deref())?;
         }
         MediaSource::Base64 { media_type, data } => {
-            if media_type.trim().is_empty() || data.trim().is_empty() {
-                return Err(invalid(
-                    "projected inline media requires MIME type and data",
-                ));
-            }
+            validate_inline_media(media_type, data)?;
         }
         MediaSource::Artifact { .. } => {
             return Err(unsupported(
@@ -310,6 +379,68 @@ mod tests {
         let error = encode_content_envelope(&part).unwrap_err();
 
         assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
+    }
+
+    #[test]
+    fn invalid_inline_media_is_rejected_on_encode_and_decode() {
+        let part = ContentPart::Audio {
+            source: MediaSource::Base64 {
+                media_type: "audio/wav".into(),
+                data: "not base64".into(),
+            },
+        };
+
+        let error = encode_content_envelope(&part).unwrap_err();
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
+
+        let encoded = serde_json::json!({
+            "type": super::CONTENT_ENVELOPE_KIND,
+            "content": [part],
+        })
+        .to_string();
+        let error = decode_content_envelope(&encoded).unwrap_err();
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
+    }
+
+    #[test]
+    fn unsafe_remote_media_and_mime_types_are_rejected() {
+        for url in [
+            "relative.png",
+            "file:///etc/passwd",
+            "https://user:secret@example.com/image.png",
+            "https://example.com/image.png#fragment",
+        ] {
+            let part = ContentPart::Image {
+                source: MediaSource::Url {
+                    url: url.into(),
+                    media_type: Some("image/png".into()),
+                },
+            };
+            assert_eq!(
+                encode_content_envelope(&part).unwrap_err().kind,
+                runifold_model::ModelErrorKind::InvalidRequest
+            );
+        }
+
+        let invalid_mime = ContentPart::Image {
+            source: MediaSource::Url {
+                url: "https://example.com/image.png".into(),
+                media_type: Some("image/png\r\nunsafe".into()),
+            },
+        };
+        assert_eq!(
+            encode_content_envelope(&invalid_mime).unwrap_err().kind,
+            runifold_model::ModelErrorKind::InvalidRequest
+        );
+
+        let gcs = ContentPart::Document {
+            source: MediaSource::Url {
+                url: "gs://bucket/report.pdf".into(),
+                media_type: Some("application/pdf".into()),
+            },
+            name: Some("report.pdf".into()),
+        };
+        assert!(encode_content_envelope(&gcs).is_ok());
     }
 
     #[test]

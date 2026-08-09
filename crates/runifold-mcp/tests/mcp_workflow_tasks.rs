@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use runifold_core::{Budget, BudgetTracker, CapabilitySet, RunContext};
+use runifold_core::{Budget, BudgetTracker, CapabilitySet, CheckpointId, RunContext};
 use runifold_mcp::{
     CallToolOutcome, CallToolParams, CreateMessageOutcome, CreateMessageParams,
     CreateMessageResult, Implementation, JsonRpcError, McpClient, McpClientConfig, McpError,
@@ -44,6 +44,15 @@ impl WorkflowClock for AdjustableClock {
     fn now_ms(&self) -> u64 {
         self.0.load(Ordering::SeqCst)
     }
+}
+
+struct InterruptedTaskFixture {
+    clock: Arc<AdjustableClock>,
+    store: Arc<InMemoryWorkflowStore>,
+    adapter: WorkflowTaskAdapter,
+    task_id: String,
+    checkpoint_id: CheckpointId,
+    response_key: String,
 }
 
 #[tokio::test]
@@ -495,7 +504,107 @@ async fn workflow_store_is_the_only_task_state_machine_and_survives_reconnect() 
 
 #[tokio::test]
 async fn workflow_interrupt_maps_to_task_input_and_update_wakes_durably() {
-    let store = Arc::new(InMemoryWorkflowStore::new());
+    let fixture = interrupted_task_fixture().await;
+    let unknown_key = runifold_core::CheckpointId::new().to_string();
+    let error = fixture
+        .adapter
+        .update(
+            fixture.task_id.clone(),
+            std::collections::BTreeMap::from([(unknown_key, approval_response())]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        runifold_mcp::McpTaskBackendErrorKind::InvalidInput
+    );
+
+    fixture
+        .adapter
+        .update(
+            fixture.task_id,
+            std::collections::BTreeMap::from([(fixture.response_key, approval_response())]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .inspect(WorkflowTenantId::default(), fixture.checkpoint_id)
+            .await
+            .unwrap()
+            .status,
+        WorkflowTaskStatus::Queued
+    );
+}
+
+#[tokio::test]
+async fn workflow_interrupt_update_replay_is_verified_and_retention_bounded() {
+    let fixture = interrupted_task_fixture().await;
+    fixture
+        .adapter
+        .update(
+            fixture.task_id.clone(),
+            std::collections::BTreeMap::from([(fixture.response_key.clone(), approval_response())]),
+        )
+        .await
+        .unwrap();
+    fixture
+        .adapter
+        .update(
+            fixture.task_id.clone(),
+            std::collections::BTreeMap::from([(fixture.response_key.clone(), approval_response())]),
+        )
+        .await
+        .unwrap();
+    let error = fixture
+        .adapter
+        .update(
+            fixture.task_id.clone(),
+            std::collections::BTreeMap::from([(
+                fixture.response_key.clone(),
+                json!({
+                    "action": "accept",
+                    "content": {"decision": "reject", "reason": "changed"}
+                }),
+            )]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        runifold_mcp::McpTaskBackendErrorKind::InvalidInput
+    );
+
+    fixture.clock.advance(2);
+    assert_eq!(
+        fixture
+            .store
+            .compact_signals(
+                WorkflowTenantId::default(),
+                WorkflowSignalRetention::new(Duration::from_millis(1)).unwrap(),
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    let error = fixture
+        .adapter
+        .update(
+            fixture.task_id,
+            std::collections::BTreeMap::from([(fixture.response_key, approval_response())]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        runifold_mcp::McpTaskBackendErrorKind::InvalidInput
+    );
+}
+
+async fn interrupted_task_fixture() -> InterruptedTaskFixture {
+    let clock = Arc::new(AdjustableClock::default());
+    let store = Arc::new(InMemoryWorkflowStore::with_clock(clock.clone()));
     let mut adapter = WorkflowTaskAdapter::new(store.clone());
     adapter
         .register_route(
@@ -519,43 +628,35 @@ async fn workflow_interrupt_maps_to_task_input_and_update_wakes_durably() {
         .await
         .unwrap()
         .unwrap();
+    let checkpoint_id = claimed.task.checkpoint_id;
     let interrupt =
         WorkflowInterruptRequest::new("Approve the proposal", json!({"amount": 42})).unwrap();
+    let response_key = interrupt.interrupt_id.as_checkpoint_id().to_string();
     store
         .finish(
             claimed.lease,
-            WorkflowDisposition::Suspend(WorkflowWait::Interrupt {
-                request: interrupt.clone(),
-            }),
+            WorkflowDisposition::Suspend(WorkflowWait::Interrupt { request: interrupt }),
         )
         .await
         .unwrap();
-
     let waiting = adapter.get(task.task_id.clone()).await.unwrap();
     assert_eq!(waiting.status, TaskStatus::InputRequired);
-    let key = interrupt.interrupt_id.as_checkpoint_id().to_string();
-    assert!(waiting.input_requests.contains_key(&key));
-    adapter
-        .update(
-            task.task_id.clone(),
-            std::collections::BTreeMap::from([(
-                key,
-                json!({
-                    "action": "accept",
-                    "content": {"decision": "approve"}
-                }),
-            )]),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        store
-            .inspect(WorkflowTenantId::default(), claimed.task.checkpoint_id)
-            .await
-            .unwrap()
-            .status,
-        WorkflowTaskStatus::Queued
-    );
+    assert!(waiting.input_requests.contains_key(&response_key));
+    InterruptedTaskFixture {
+        clock,
+        store,
+        adapter,
+        task_id: task.task_id,
+        checkpoint_id,
+        response_key,
+    }
+}
+
+fn approval_response() -> Value {
+    json!({
+        "action": "accept",
+        "content": {"decision": "approve"}
+    })
 }
 
 async fn task_client(session: runifold_mcp::McpSession) -> McpClient {

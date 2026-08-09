@@ -14,11 +14,10 @@ publish.workspace = true
 [features]
 default = []
 anthropic = ["dep:eventsource-stream", "dep:httpdate"]
-bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types", "dep:base64"]
+bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types"]
 gemini = ["dep:eventsource-stream", "dep:runifold-retrieval"]
 ollama = ["dep:runifold-retrieval"]
 openai = [
-    "dep:base64",
     "dep:eventsource-stream",
     "dep:futures-channel",
     "dep:httpdate",
@@ -35,7 +34,7 @@ openai = [
 async-stream.workspace = true
 aws-sdk-bedrockruntime = { version = "=1.124.0", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-types = { version = "=1.4.3", optional = true }
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.22" }
 eventsource-stream = { workspace = true, optional = true }
 futures-channel = { version = "0.3", optional = true }
 futures-timer = { version = "3", features = ["wasm-bindgen"] }

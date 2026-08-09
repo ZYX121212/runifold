@@ -2,7 +2,9 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::content_projection::{encode_content_envelope_many, encode_tool_result_envelope};
+use crate::content_projection::{
+    encode_content_envelope_many, encode_tool_result_envelope, validate_inline_media,
+};
 
 use runifold_model::{
     ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, Role,
@@ -190,7 +192,10 @@ fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
 
 fn image(source: &MediaSource) -> Result<Value, ModelError> {
     match source {
-        MediaSource::Base64 { data, .. } => Ok(Value::String(data.clone())),
+        MediaSource::Base64 { media_type, data } => {
+            validate_inline_media(media_type, data)?;
+            Ok(Value::String(data.clone()))
+        }
         _ => Err(unsupported(
             "Ollama image input requires inline base64 data",
         )),
@@ -335,5 +340,27 @@ mod tests {
         let decoded = decode_content_envelope(envelope).unwrap().unwrap();
 
         assert_eq!(decoded.len(), 2);
+    }
+
+    #[test]
+    fn native_image_input_rejects_invalid_base64() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Image {
+                source: MediaSource::Base64 {
+                    media_type: "image/png".into(),
+                    data: "not base64".into(),
+                },
+            }],
+        )
+        .unwrap();
+
+        let error = encode_request(&ModelRequest::new(
+            ModelRef::new("ollama", "qwen3"),
+            message,
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
     }
 }

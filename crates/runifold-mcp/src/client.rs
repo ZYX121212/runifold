@@ -513,6 +513,9 @@ impl ClientPeerHandler {
             Ok(params) => params,
             Err(error) => return crate::JsonRpcResponse::error(id, -32602, error, None),
         };
+        if let Err(error) = params.validate() {
+            return sampling_task_error_response(id, error);
+        }
         match method {
             "tasks/get" => match backend.get(params.task_id).await.and_then(|task| {
                 task.validate_metadata()?;

@@ -2,7 +2,10 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::content_projection::{encode_content_envelope, native_or_projected};
+use crate::content_projection::{
+    encode_content_envelope, native_or_projected, validate_inline_media, validate_media_url,
+    validate_optional_media_type,
+};
 
 use runifold_model::{
     ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, Role,
@@ -163,12 +166,20 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
 fn encode_media(source: &MediaSource) -> Result<Value, ModelError> {
     match source {
         MediaSource::Base64 { media_type, data } => {
+            validate_inline_media(media_type, data)?;
             Ok(json!({"inlineData":{"mimeType":media_type,"data":data}}))
         }
-        MediaSource::Url { url, media_type } => Ok(json!({"fileData":{
-            "mimeType":media_type,
-            "fileUri":url
-        }})),
+        MediaSource::Url { url, media_type } => {
+            validate_media_url(url, &["https", "gs"])?;
+            let media_type = media_type
+                .as_deref()
+                .ok_or_else(|| invalid("Gemini remote media requires a MIME type"))?;
+            validate_optional_media_type(Some(media_type))?;
+            Ok(json!({"fileData":{
+                "mimeType":media_type,
+                "fileUri":url
+            }}))
+        }
         MediaSource::Artifact { .. } => Err(unsupported(
             "artifact media must be resolved before Gemini invocation",
         )),
@@ -342,6 +353,55 @@ mod tests {
         let response = &body["contents"][0]["parts"][0]["functionResponse"];
         assert_eq!(response["response"], serde_json::json!({"objects":1}));
         assert_eq!(response["parts"][0]["inlineData"]["mimeType"], "image/png");
+    }
+
+    #[test]
+    fn native_media_input_rejects_invalid_base64() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Image {
+                source: MediaSource::Base64 {
+                    media_type: "image/png".into(),
+                    data: "not base64".into(),
+                },
+            }],
+        )
+        .unwrap();
+
+        let error = encode_request(&ModelRequest::new(
+            ModelRef::new("gemini", "gemini-test"),
+            message,
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
+    }
+
+    #[test]
+    fn remote_media_requires_supported_uri_and_mime_type() {
+        for (url, media_type) in [
+            ("http://example.com/image.png", Some("image/png")),
+            ("https://example.com/image.png", None),
+        ] {
+            let message = Message::new(
+                Role::User,
+                vec![ContentPart::Image {
+                    source: MediaSource::Url {
+                        url: url.into(),
+                        media_type: media_type.map(str::to_owned),
+                    },
+                }],
+            )
+            .unwrap();
+
+            let error = encode_request(&ModelRequest::new(
+                ModelRef::new("gemini", "gemini-test"),
+                message,
+            ))
+            .unwrap_err();
+
+            assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
+        }
     }
 
     #[test]

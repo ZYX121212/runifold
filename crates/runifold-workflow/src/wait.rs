@@ -116,7 +116,8 @@ impl WorkflowInterruptId {
         self.0
     }
 
-    pub(crate) fn signal_name(self) -> WorkflowSignalName {
+    #[doc(hidden)]
+    pub fn signal_name(self) -> WorkflowSignalName {
         WorkflowSignalName(format!("{INTERRUPT_SIGNAL_PREFIX}{}", self.0))
     }
 }

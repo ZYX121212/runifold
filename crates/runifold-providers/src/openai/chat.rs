@@ -10,7 +10,10 @@ use runifold_model::{
 use serde_json::{Map, Value, json};
 use smallvec::SmallVec;
 
-use crate::content_projection::{encode_content_envelope, encode_tool_result_envelope};
+use crate::content_projection::{
+    encode_content_envelope, encode_tool_result_envelope, validate_inline_media,
+    validate_media_url, validate_optional_media_type,
+};
 
 /// Inline canonical events produced by one Chat Completions chunk.
 pub(crate) type ChatEvents = SmallVec<[ModelStreamEvent; 4]>;
@@ -199,8 +202,15 @@ fn chat_text(text: &str) -> Value {
 
 fn chat_image(source: &MediaSource) -> Result<Value, ModelError> {
     let url = match source {
-        MediaSource::Url { url, .. } => url.clone(),
-        MediaSource::Base64 { media_type, data } => format!("data:{media_type};base64,{data}"),
+        MediaSource::Url { url, media_type } => {
+            validate_media_url(url, &["http", "https"])?;
+            validate_optional_media_type(media_type.as_deref())?;
+            url.clone()
+        }
+        MediaSource::Base64 { media_type, data } => {
+            validate_inline_media(media_type, data)?;
+            format!("data:{media_type};base64,{data}")
+        }
         MediaSource::Artifact { .. } => {
             return Err(unsupported(
                 "artifact images must be resolved before provider invocation",
@@ -656,6 +666,50 @@ mod tests {
         let envelope = body["messages"][0]["content"].as_str().unwrap();
 
         assert!(decode_content_envelope(envelope).unwrap().is_some());
+    }
+
+    #[test]
+    fn compatible_chat_rejects_invalid_native_image_base64() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Image {
+                source: MediaSource::Base64 {
+                    media_type: "image/png".into(),
+                    data: "not base64".into(),
+                },
+            }],
+        )
+        .unwrap();
+
+        let error = encode_chat_request(
+            &ModelRequest::new(ModelRef::new("qwen", "qwen-plus"), message),
+            "qwen",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
+    }
+
+    #[test]
+    fn compatible_chat_rejects_unsafe_native_image_url() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Image {
+                source: MediaSource::Url {
+                    url: "file:///etc/passwd".into(),
+                    media_type: Some("image/png".into()),
+                },
+            }],
+        )
+        .unwrap();
+
+        let error = encode_chat_request(
+            &ModelRequest::new(ModelRef::new("qwen", "qwen-plus"), message),
+            "qwen",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
     }
 
     #[test]

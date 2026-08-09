@@ -191,6 +191,9 @@ impl McpSession {
                 return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string(), None);
             }
         };
+        if let Err(error) = params.validate() {
+            return task_backend_error_response(id, error);
+        }
         match backend.get(params.task_id).await.and_then(|task| {
             task.validate()?;
             Ok(task)
@@ -222,6 +225,9 @@ impl McpSession {
                 return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string(), None);
             }
         };
+        if let Err(error) = params.validate() {
+            return task_backend_error_response(id, error);
+        }
         match backend.update(params.task_id, params.input_responses).await {
             Ok(()) => serialize_result(id, &json!({})),
             Err(error) => task_backend_error_response(id, error),
@@ -244,6 +250,9 @@ impl McpSession {
                 return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string(), None);
             }
         };
+        if let Err(error) = params.validate() {
+            return task_backend_error_response(id, error);
+        }
         match backend.cancel(params.task_id).await {
             Ok(()) => serialize_result(id, &json!({})),
             Err(error) => task_backend_error_response(id, error),

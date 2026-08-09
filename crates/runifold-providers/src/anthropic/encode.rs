@@ -2,7 +2,10 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::content_projection::encode_content_envelope;
+use crate::content_projection::{
+    encode_content_envelope, validate_inline_media, validate_media_url,
+    validate_optional_media_type,
+};
 
 use runifold_model::{
     ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, Role,
@@ -202,12 +205,19 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
 
 fn encode_media(source: &MediaSource) -> Result<Value, ModelError> {
     match source {
-        MediaSource::Base64 { media_type, data } => Ok(json!({
-            "type": "base64",
-            "media_type": media_type,
-            "data": data
-        })),
-        MediaSource::Url { url, .. } => Ok(json!({"type": "url", "url": url})),
+        MediaSource::Base64 { media_type, data } => {
+            validate_inline_media(media_type, data)?;
+            Ok(json!({
+                "type": "base64",
+                "media_type": media_type,
+                "data": data
+            }))
+        }
+        MediaSource::Url { url, media_type } => {
+            validate_media_url(url, &["http", "https"])?;
+            validate_optional_media_type(media_type.as_deref())?;
+            Ok(json!({"type": "url", "url": url}))
+        }
         MediaSource::Artifact { .. } => Err(unsupported(
             "artifact images must be resolved before provider invocation",
         )),
@@ -467,6 +477,50 @@ mod tests {
                 .unwrap()
                 .is_some()
         }));
+    }
+
+    #[test]
+    fn native_image_input_rejects_invalid_base64() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Image {
+                source: MediaSource::Base64 {
+                    media_type: "image/png".into(),
+                    data: "not base64".into(),
+                },
+            }],
+        )
+        .unwrap();
+
+        let error = encode_request(
+            &ModelRequest::new(ModelRef::new("anthropic", "claude-test"), message),
+            100,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
+    }
+
+    #[test]
+    fn native_image_input_rejects_unsafe_url() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Image {
+                source: MediaSource::Url {
+                    url: "file:///etc/passwd".into(),
+                    media_type: Some("image/png".into()),
+                },
+            }],
+        )
+        .unwrap();
+
+        let error = encode_request(
+            &ModelRequest::new(ModelRef::new("anthropic", "claude-test"), message),
+            100,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
     }
 
     #[test]

@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use runifold_core::CheckpointId;
 use runifold_workflow::{
     WorkflowCancelOutcome, WorkflowCheckpointHistoryLimit, WorkflowCheckpointPhase,
-    WorkflowInterruptCommand, WorkflowInterruptDecision, WorkflowOutcome, WorkflowSignal,
-    WorkflowSignalId, WorkflowSignalName, WorkflowSignalOutcome, WorkflowStore, WorkflowStoreError,
+    WorkflowInterruptCommand, WorkflowInterruptDecision, WorkflowInterruptDecisionOutcome,
+    WorkflowInterruptId, WorkflowOutcome, WorkflowSignal, WorkflowSignalId, WorkflowSignalName,
+    WorkflowSignalOutcome, WorkflowSignalState, WorkflowStore, WorkflowStoreError,
     WorkflowStoreErrorKind, WorkflowTask, WorkflowTaskStatus, WorkflowTenantId,
 };
 use serde::{Deserialize, Serialize};
@@ -647,8 +648,10 @@ impl McpTaskBackend for WorkflowTaskAdapter {
         input_responses: BTreeMap<String, Value>,
     ) -> McpTaskFuture<'_, ()> {
         Box::pin(async move {
-            if input_responses.is_empty() {
-                return Err(invalid_input("tasks/update inputResponses is empty"));
+            if input_responses.len() != 1 {
+                return Err(invalid_input(
+                    "tasks/update inputResponses must contain exactly one response",
+                ));
             }
             let (route, checkpoint_id) = self.route_for_task(&task_id).await?;
             let snapshot = self
@@ -656,14 +659,28 @@ impl McpTaskBackend for WorkflowTaskAdapter {
                 .inspect(route.tenant_id.clone(), checkpoint_id)
                 .await
                 .map_err(map_store_error)?;
-            let Some(interrupt) = snapshot.interrupt else {
-                return Ok(());
-            };
-            let key = interrupt.interrupt_id.as_checkpoint_id().to_string();
-            let Some(response) = input_responses.get(&key) else {
-                return Ok(());
-            };
+            let (key, response) = input_responses
+                .first_key_value()
+                .expect("the exact response count was validated");
+            let response_id = key
+                .parse::<CheckpointId>()
+                .map_err(|_| invalid_input("Task input response key is not a valid request ID"))?;
             let decision = decode_decision(response)?;
+            let Some(interrupt) = snapshot.interrupt else {
+                return verify_interrupt_update_replay(
+                    self.store.as_ref(),
+                    route.tenant_id.clone(),
+                    checkpoint_id,
+                    response_id,
+                    decision,
+                )
+                .await;
+            };
+            if response_id != interrupt.interrupt_id.as_checkpoint_id() {
+                return Err(invalid_input(
+                    "Task input response key does not match the pending request",
+                ));
+            }
             let command = WorkflowInterruptCommand::with_id(
                 WorkflowSignalId::from_checkpoint_id(interrupt.interrupt_id.as_checkpoint_id()),
                 checkpoint_id,
@@ -671,11 +688,22 @@ impl McpTaskBackend for WorkflowTaskAdapter {
                 decision,
             )
             .map_err(|error| invalid_input(error.to_string()))?;
-            self.store
+            match self
+                .store
                 .decide_interrupt(route.tenant_id.clone(), command)
                 .await
-                .map_err(map_store_error)?;
-            Ok(())
+                .map_err(map_store_error)?
+            {
+                WorkflowInterruptDecisionOutcome::Buffered
+                | WorkflowInterruptDecisionOutcome::WokeWorkflow
+                | WorkflowInterruptDecisionOutcome::Duplicate => Ok(()),
+                WorkflowInterruptDecisionOutcome::DeadLettered => Err(invalid_state(
+                    "Task input request became stale before the decision was applied",
+                )),
+                _ => Err(invalid_state(
+                    "workflow store returned an unsupported interrupt decision outcome",
+                )),
+            }
         })
     }
 
@@ -693,6 +721,61 @@ impl McpTaskBackend for WorkflowTaskAdapter {
             }
         })
     }
+}
+
+async fn verify_interrupt_update_replay(
+    store: &dyn WorkflowStore,
+    tenant_id: WorkflowTenantId,
+    checkpoint_id: CheckpointId,
+    response_id: CheckpointId,
+    decision: WorkflowInterruptDecision,
+) -> Result<(), McpTaskBackendError> {
+    let signal_id = WorkflowSignalId::from_checkpoint_id(response_id);
+    let signal = match store.inspect_signal(tenant_id.clone(), signal_id).await {
+        Ok(signal) => signal,
+        Err(error) if error.kind == WorkflowStoreErrorKind::NotFound => {
+            return Err(invalid_input(
+                "Task input response does not match a pending or retained request",
+            ));
+        }
+        Err(error) => return Err(map_store_error(error)),
+    };
+    let interrupt_id = WorkflowInterruptId::from_checkpoint_id(response_id);
+    if signal.checkpoint_id != checkpoint_id || signal.name != interrupt_id.signal_name() {
+        return Err(invalid_input(
+            "Task input response does not belong to this Task request",
+        ));
+    }
+    match signal.state {
+        WorkflowSignalState::Pending | WorkflowSignalState::Consumed => {}
+        WorkflowSignalState::DeadLettered => {
+            return Err(invalid_state(
+                "Task input request is stale and was not applied",
+            ));
+        }
+        _ => {
+            return Err(invalid_state(
+                "retained Task input decision has an unsupported state",
+            ));
+        }
+    }
+    let retained = match store.load_signal_payload(tenant_id, signal_id).await {
+        Ok(retained) => retained,
+        Err(error) if error.kind == WorkflowStoreErrorKind::NotFound => {
+            return Err(invalid_input(
+                "Task input decision was compacted before the replay could be verified",
+            ));
+        }
+        Err(error) => return Err(map_store_error(error)),
+    };
+    let retained = serde_json::from_value::<WorkflowInterruptDecision>(retained)
+        .map_err(|_| invalid_state("retained Task input decision is invalid"))?;
+    if retained != decision {
+        return Err(invalid_input(
+            "Task input response conflicts with the retained decision",
+        ));
+    }
+    Ok(())
 }
 
 impl McpSamplingTaskBackend for WorkflowTaskAdapter {

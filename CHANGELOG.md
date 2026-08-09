@@ -6,6 +6,21 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-09
+
+- Make durable MCP `tasks/update` review decisions provably idempotent: reject unknown or mismatched response keys, accept exact retries while the decision signal is retained, reject conflicting retries, surface stale/dead-lettered decisions, and fail closed after signal compaction removes the evidence needed to verify a replay.
+
+- Reject malformed Base64 at both provider-neutral rich-content projection and
+  native OpenAI, Anthropic, Gemini, and Ollama encoding boundaries instead of
+  forwarding invalid inline media to Provider APIs.
+- Reject zero MCP Task retention metadata consistently with task-creation
+  policy, closing a client/server validation mismatch.
+- Reject blank, control-character-bearing, and oversized MCP Task identities
+  and input keys before invoking durable backends.
+- Validate native Provider media URLs and MIME types, including Gemini's
+  required MIME field, and reject relative, credential-bearing, fragmented,
+  unsupported-scheme, or oversized references before transport.
+
 ## [0.5.0] - 2026-08-09
 
 - Completed provider-neutral rich Tool-result projection across OpenAI,

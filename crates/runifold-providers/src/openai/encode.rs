@@ -2,7 +2,10 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::content_projection::encode_content_envelope;
+use crate::content_projection::{
+    encode_content_envelope, validate_inline_media, validate_media_url,
+    validate_optional_media_type,
+};
 
 use runifold_model::{
     ContentPart, MediaSource, ModelError, ModelErrorKind, ModelRequest, OutputFormat, ResponseMode,
@@ -231,8 +234,13 @@ fn encode_image(source: &MediaSource, provider: &str) -> Result<Value, ModelErro
         return Ok(json!({"type": "input_image", "file_id": file_id}));
     }
     let image_url = match source {
-        MediaSource::Url { url, .. } => url.clone(),
+        MediaSource::Url { url, media_type } => {
+            validate_media_url(url, &["http", "https"])?;
+            validate_optional_media_type(media_type.as_deref())?;
+            url.clone()
+        }
         MediaSource::Base64 { media_type, data } => {
+            validate_inline_media(media_type, data)?;
             format!("data:{media_type};base64,{data}")
         }
         MediaSource::Artifact { .. } => {
@@ -255,15 +263,22 @@ fn encode_document(
     provider: &str,
 ) -> Result<Value, ModelError> {
     match source {
-        MediaSource::Url { url, .. } => Ok(json!({
-            "type": "input_file",
-            "file_url": url
-        })),
-        MediaSource::Base64 { media_type, data } => Ok(json!({
-            "type": "input_file",
-            "filename": name.unwrap_or("document"),
-            "file_data": format!("data:{media_type};base64,{data}")
-        })),
+        MediaSource::Url { url, media_type } => {
+            validate_media_url(url, &["http", "https"])?;
+            validate_optional_media_type(media_type.as_deref())?;
+            Ok(json!({
+                "type": "input_file",
+                "file_url": url
+            }))
+        }
+        MediaSource::Base64 { media_type, data } => {
+            validate_inline_media(media_type, data)?;
+            Ok(json!({
+                "type": "input_file",
+                "filename": name.unwrap_or("document"),
+                "file_data": format!("data:{media_type};base64,{data}")
+            }))
+        }
         MediaSource::Artifact { .. } => Err(unsupported(
             "artifact documents must be resolved before provider invocation",
         )),
@@ -620,6 +635,51 @@ mod tests {
         let envelope = body["input"][0]["content"][0]["text"].as_str().unwrap();
 
         assert!(decode_content_envelope(envelope).unwrap().is_some());
+    }
+
+    #[test]
+    fn native_image_input_rejects_invalid_base64() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Image {
+                source: MediaSource::Base64 {
+                    media_type: "image/png".into(),
+                    data: "not base64".into(),
+                },
+            }],
+        )
+        .unwrap();
+
+        let error = encode_request(&ModelRequest::new(
+            ModelRef::new("openai", "vision"),
+            message,
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
+    }
+
+    #[test]
+    fn native_document_input_rejects_credentialed_url() {
+        let message = Message::new(
+            Role::User,
+            vec![ContentPart::Document {
+                source: MediaSource::Url {
+                    url: "https://user:secret@example.com/report.pdf".into(),
+                    media_type: Some("application/pdf".into()),
+                },
+                name: Some("report.pdf".into()),
+            }],
+        )
+        .unwrap();
+
+        let error = encode_request(&ModelRequest::new(
+            ModelRef::new("openai", "model"),
+            message,
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
     }
 
     #[test]

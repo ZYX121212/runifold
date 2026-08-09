@@ -17,6 +17,8 @@ pub const TASKS_EXTENSION_ID: &str = "io.modelcontextprotocol/tasks";
 /// `_meta` key carrying a caller-generated UUIDv4/v7 for durable create recovery.
 pub const SAMPLING_TASK_IDEMPOTENCY_KEY: &str = "io.runifold/sampling-task-idempotency-key";
 
+const MAX_TASK_IDENTIFIER_BYTES: usize = 1_024;
+
 /// Optional task augmentation attached to a task-capable MCP request.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TaskMetadata {
@@ -132,11 +134,11 @@ impl McpTask {
             ));
         }
         for (key, request) in &self.input_requests {
-            if key.is_empty() {
-                return Err(McpTaskBackendError::invalid_state(
-                    "task input request key is empty",
-                ));
-            }
+            validate_identifier(
+                key,
+                "task input request key",
+                McpTaskBackendErrorKind::InvalidState,
+            )?;
             request
                 .validate()
                 .map_err(|_| McpTaskBackendError::invalid_state("task input request is invalid"))?;
@@ -145,9 +147,14 @@ impl McpTask {
     }
 
     pub(crate) fn validate_metadata(&self) -> Result<(), McpTaskBackendError> {
-        if self.task_id.is_empty()
-            || self.created_at.is_empty()
+        validate_identifier(
+            &self.task_id,
+            "task identity",
+            McpTaskBackendErrorKind::InvalidState,
+        )?;
+        if self.created_at.is_empty()
             || self.last_updated_at.is_empty()
+            || self.ttl_ms == Some(0)
             || self.poll_interval_ms == Some(0)
         {
             return Err(McpTaskBackendError::invalid_state(
@@ -321,6 +328,16 @@ pub struct TaskIdParams {
     pub task_id: String,
 }
 
+impl TaskIdParams {
+    pub(crate) fn validate(&self) -> Result<(), McpTaskBackendError> {
+        validate_identifier(
+            &self.task_id,
+            "task identity",
+            McpTaskBackendErrorKind::InvalidInput,
+        )
+    }
+}
+
 /// Parameters for `tasks/update`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -329,6 +346,41 @@ pub struct UpdateTaskParams {
     pub task_id: String,
     /// Responses keyed by outstanding `inputRequests`.
     pub input_responses: BTreeMap<String, Value>,
+}
+
+impl UpdateTaskParams {
+    pub(crate) fn validate(&self) -> Result<(), McpTaskBackendError> {
+        validate_identifier(
+            &self.task_id,
+            "task identity",
+            McpTaskBackendErrorKind::InvalidInput,
+        )?;
+        for key in self.input_responses.keys() {
+            validate_identifier(
+                key,
+                "task input response key",
+                McpTaskBackendErrorKind::InvalidInput,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_identifier(
+    value: &str,
+    label: &str,
+    kind: McpTaskBackendErrorKind,
+) -> Result<(), McpTaskBackendError> {
+    if value.trim().is_empty()
+        || value.len() > MAX_TASK_IDENTIFIER_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(McpTaskBackendError::new(
+            kind,
+            format!("{label} is blank, contains control characters, or is too long"),
+        ));
+    }
+    Ok(())
 }
 
 /// One Tool request selected for durable task execution.
@@ -561,6 +613,43 @@ mod tests {
             Err(McpTaskTimeError::RetentionOverflow)
         );
         assert!(task.validate().is_err());
+    }
+
+    #[test]
+    fn zero_task_timing_hints_are_rejected() {
+        let mut task = working_task();
+        task.ttl_ms = Some(0);
+        assert!(task.validate_metadata().is_err());
+
+        task.ttl_ms = Some(1);
+        task.poll_interval_ms = Some(0);
+        assert!(task.validate_metadata().is_err());
+    }
+
+    #[test]
+    fn task_identifiers_fail_closed_at_protocol_boundaries() {
+        for invalid in ["   ".to_owned(), "task\n1".to_owned(), "x".repeat(1_025)] {
+            let params = TaskIdParams {
+                task_id: invalid.clone(),
+            };
+            assert_eq!(
+                params.validate().unwrap_err().kind,
+                McpTaskBackendErrorKind::InvalidInput
+            );
+
+            let mut task = working_task();
+            task.task_id = invalid;
+            assert!(task.validate_metadata().is_err());
+        }
+
+        let update = UpdateTaskParams {
+            task_id: "task-1".into(),
+            input_responses: BTreeMap::from([("\t".into(), Value::Null)]),
+        };
+        assert_eq!(
+            update.validate().unwrap_err().kind,
+            McpTaskBackendErrorKind::InvalidInput
+        );
     }
 
     #[test]
