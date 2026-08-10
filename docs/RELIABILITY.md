@@ -17,7 +17,7 @@ responses are valuable, but they are not labelled as production verification.
 | SQLite WorkflowStore recovery | Forced worker kill, fenced lease takeover, budget adoption, HITL, history, and fork survive reopen | Mandatory |
 | SQLite concurrent workflow claim | Independent connections produce exactly one fenced winner | Mandatory |
 | SQLite durable Agent conversation | Transcript and terminal checkpoint commit atomically; reopen resumes without another model call | Mandatory |
-| Rich Tool results and durable artifacts | Schema/size enforcement, Agent and MCP lossless round trip, Provider projection tests, scoped SQLite lifecycle tests, and real PostgreSQL scope/concurrent-idempotency/expiry/delete checks | Pending CI gate |
+| Rich Tool results and durable artifacts | Dedicated reproducible gate covering schema/size enforcement, Agent and MCP lossless round trip, Provider projections, scoped SQLite lifecycle, and real PostgreSQL scope/concurrent-idempotency/expiry/delete checks | Mandatory |
 | PostgreSQL durable Agent conversation and Effect store | Real PostgreSQL transaction proves transcript/checkpoint atomicity, rollback on stale checkpoint, reconnect replay, Effect CAS, and idempotency conflict | Mandatory |
 | S3 conditional immutable creation | Real pinned MinIO with Object Lock and SSE-S3 | Mandatory |
 | S3 post-commit response loss | Transparent TCP fault proxy plus checksum HEAD reconciliation | Mandatory |
@@ -32,6 +32,22 @@ responses are valuable, but they are not labelled as production verification.
 | Browser Service Workers | Not yet verified | Planned |
 | Reproducible Rig framework benchmark | Scheduled 20×1000 paired rounds, alternating order, raw artifacts, bootstrap confidence intervals, and non-regression enforcement | Scheduled |
 | Independent third-party reproduction | Requires an external maintainer to run and attest the public benchmark contract | External evidence required |
+
+## Rich Tool and artifact evidence
+
+The `Rich Tool and artifact reliability` CI job runs
+`scripts/run-rich-artifact-gate.sh` as an independent required boundary. It
+verifies canonical schema, size and integrity enforcement; Agent and MCP rich
+content preservation; MCP Sampling history extensions; every native Provider
+projection; SQLite lifecycle isolation; and PostgreSQL concurrent idempotency,
+expiration and deletion against a disposable real database.
+
+A successful run writes
+`target/reliability-evidence/rich-artifacts.json`. The report records only the
+revision, Rust compiler, duration, fixed boundary names and pass result. It
+contains no artifact bytes, prompts, model responses, connection URLs or
+credentials. Failure of any command prevents evidence creation and fails the
+job.
 
 ## MinIO evidence artifact
 

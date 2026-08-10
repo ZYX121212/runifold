@@ -128,7 +128,36 @@ async fn concurrent_claim_takeover_and_fencing_round_trip() {
     assert_wait_round_trips(&first, lease_duration).await;
     assert_signal_governance(&first, &client, &table, lease_duration).await;
     assert_tenant_admission(&first, lease_duration).await;
-    assert_concurrent_tenant_limits(&first, &second, lease_duration).await;
+
+    drop_schema(&client, &table).await;
+}
+
+#[tokio::test]
+async fn concurrent_tenant_limits_are_enforced_across_connections() {
+    let database = PostgresTestContext::start("RUNIFOLD_TEST_POSTGRES_URL").await;
+    let connection_url = database.connection_url().to_owned();
+    let suffix = Uuid::now_v7().simple().to_string();
+    let table = format!("runifold_wf_{suffix}");
+    let first = PostgresWorkflowStore::connect(&connection_url, &table)
+        .await
+        .unwrap();
+    let second = PostgresWorkflowStore::connect(&connection_url, &table)
+        .await
+        .unwrap();
+    first.ensure_schema().await.unwrap();
+    let (client, connection) = tokio_postgres::connect(&connection_url, NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    assert_concurrent_tenant_limits(
+        &first,
+        &second,
+        LeaseDuration::new(Duration::from_secs(30)).unwrap(),
+    )
+    .await;
 
     drop_schema(&client, &table).await;
 }

@@ -46,6 +46,20 @@ Testcontainers to start disposable `pgvector/pgvector:pg16` databases, so a
 working Docker-compatible daemon is required. Containers and their writable
 layers are removed automatically when each test binary finishes.
 
+Rich Tool results and durable artifacts have a dedicated reproducible gate:
+
+```bash
+RUNIFOLD_EVIDENCE_REVISION="$(git rev-parse HEAD)" \
+scripts/run-rich-artifact-gate.sh
+```
+
+The gate covers model validation, Tool output limits, Agent and MCP lossless
+round trips, MCP Sampling history, native Provider projections, SQLite
+lifecycle semantics, and real PostgreSQL scope/concurrent-idempotency/expiry
+and deletion. It writes only credential-free boundary metadata to
+`target/reliability-evidence/rich-artifacts.json`; a failed test prevents the
+evidence file from being created.
+
 Externally managed databases remain supported:
 
 ```bash

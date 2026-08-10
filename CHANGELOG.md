@@ -6,6 +6,18 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-10
+
+- Isolated PostgreSQL tenant lease-limit concurrency verification from the
+  multi-scenario workflow test, preventing unrelated globally claimable tasks
+  from producing false failures during long reliability soaks.
+- Added a mandatory, reproducible Rich Tool and durable Artifact CI gate with
+  credential-free evidence across validation, Agent, MCP Sampling, native
+  Provider projections, SQLite lifecycle semantics, and real PostgreSQL
+  concurrent idempotency, expiration, and deletion.
+- Updated the Rig comparison workspace to resolve the exact Runifold 0.5.2
+  development packages.
+
 ## [0.5.1] - 2026-08-09
 
 - Make durable MCP `tasks/update` review decisions provably idempotent: reject unknown or mismatched response keys, accept exact retries while the decision signal is retained, reject conflicting retries, surface stale/dead-lettered decisions, and fail closed after signal compaction removes the evidence needed to verify a replay.

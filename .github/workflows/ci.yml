@@ -482,6 +482,37 @@ jobs:
         if: always()
         run: docker rm --force runifold-minio
 
+  rich-artifacts:
+    name: Rich Tool and artifact reliability
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Cache Cargo
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-rich-artifacts-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Verify rich Tool and durable artifact boundaries
+        env:
+          RUNIFOLD_EVIDENCE_PATH: target/reliability-evidence/rich-artifacts.json
+          RUNIFOLD_EVIDENCE_REVISION: ${{ github.sha }}
+        run: scripts/run-rich-artifact-gate.sh
+
+      - name: Upload rich Tool and artifact evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rich-artifact-reliability-${{ github.sha }}
+          path: target/reliability-evidence/rich-artifacts.json
+          if-no-files-found: error
+          retention-days: 30
+
   msrv:
     name: MSRV 1.88
     runs-on: ubuntu-latest
