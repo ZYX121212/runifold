@@ -2,8 +2,8 @@
 
 ## Status
 
-Implemented. PostgreSQL artifact evidence is part of the real database suite;
-the change remains unreleased until the next version is published.
+Implemented and released in Runifold 0.4.0. PostgreSQL artifact evidence is
+part of the real database suite.
 
 ## Problem
 

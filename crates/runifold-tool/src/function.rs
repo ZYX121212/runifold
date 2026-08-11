@@ -41,7 +41,43 @@ where
             types: PhantomData,
         }
     }
+}
 
+impl<Input, Handler> FunctionTool<Input, ToolOutput, Handler>
+where
+    Input: JsonSchema,
+{
+    /// Creates a typed Tool whose handler returns canonical rich content.
+    ///
+    /// Unlike [`Self::new`], this constructor preserves the returned
+    /// [`ToolOutput`] instead of serializing it into JSON text. The default
+    /// output schema is permissive because rich presentation content and
+    /// optional structured content are validated by the canonical Tool
+    /// boundary rather than one generated Rust output type.
+    pub fn new_rich(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: Handler,
+    ) -> Self {
+        Self {
+            descriptor: ToolDescriptor {
+                id: CapabilityId::new(),
+                name: name.into(),
+                version: "1".into(),
+                description: description.into(),
+                input_schema: schema_for!(Input).to_value(),
+                output_schema: serde_json::json!({}),
+                effect: EffectClass::Pure,
+                risk: RiskLevel::Low,
+                metadata: std::collections::BTreeMap::new(),
+            },
+            handler,
+            types: PhantomData,
+        }
+    }
+}
+
+impl<Input, Output, Handler> FunctionTool<Input, Output, Handler> {
     /// Replaces the stable capability identity.
     #[must_use]
     pub const fn capability_id(mut self, id: CapabilityId) -> Self {
@@ -76,6 +112,17 @@ where
         self.descriptor.metadata.insert(key.into(), value);
         self
     }
+
+    /// Replaces the successful output schema.
+    ///
+    /// This is primarily useful for rich Tools that attach typed
+    /// `structured_content` alongside media. The registry compiles and
+    /// enforces the schema before exposing a successful result to an Agent.
+    #[must_use]
+    pub fn output_schema(mut self, schema: serde_json::Value) -> Self {
+        self.descriptor.output_schema = schema;
+        self
+    }
 }
 
 impl<Input, Output, Handler> std::fmt::Debug for FunctionTool<Input, Output, Handler> {
@@ -103,15 +150,10 @@ where
         input: serde_json::Value,
         context: ToolContext,
     ) -> ToolFuture<'_, Result<ToolOutput, ToolError>> {
-        let input = match serde_json::from_value(input) {
+        let input = match decode_input(input) {
             Ok(input) => input,
             Err(error) => {
-                return Box::pin(async move {
-                    Err(ToolError::local(
-                        ToolErrorKind::InvalidInput,
-                        format!("typed Tool input is invalid: {error}"),
-                    ))
-                });
+                return Box::pin(async move { Err(error) });
             }
         };
         let future = (self.handler)(input, context);
@@ -128,6 +170,41 @@ where
     }
 }
 
+impl<Input, Handler, HandlerFuture> Tool for FunctionTool<Input, ToolOutput, Handler>
+where
+    Input: DeserializeOwned + JsonSchema + Send + 'static,
+    Handler: Fn(Input, ToolContext) -> HandlerFuture + Send + Sync,
+    HandlerFuture: Future<Output = Result<ToolOutput, ToolError>> + Send + 'static,
+{
+    fn descriptor(&self) -> &ToolDescriptor {
+        &self.descriptor
+    }
+
+    fn invoke(
+        &self,
+        input: serde_json::Value,
+        context: ToolContext,
+    ) -> ToolFuture<'_, Result<ToolOutput, ToolError>> {
+        let input = match decode_input(input) {
+            Ok(input) => input,
+            Err(error) => {
+                return Box::pin(async move { Err(error) });
+            }
+        };
+        let future = (self.handler)(input, context);
+        Box::pin(future)
+    }
+}
+
+fn decode_input<Input: DeserializeOwned>(input: serde_json::Value) -> Result<Input, ToolError> {
+    serde_json::from_value(input).map_err(|error| {
+        ToolError::local(
+            ToolErrorKind::InvalidInput,
+            format!("typed Tool input is invalid: {error}"),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -136,12 +213,13 @@ mod tests {
     };
 
     use runifold_core::{Budget, BudgetTracker, CapabilitySet, RunContext};
+    use runifold_model::{ContentPart, MediaSource};
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
 
     use super::FunctionTool;
-    use crate::{Tool, ToolErrorKind, ToolRegistry};
+    use crate::{Tool, ToolError, ToolErrorKind, ToolOutput, ToolRegistry};
 
     #[derive(Deserialize, JsonSchema)]
     struct AddInput {
@@ -221,5 +299,63 @@ mod tests {
 
         assert_eq!(error.kind, ToolErrorKind::InvalidInput);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn rich_function_preserves_image_and_structured_content() {
+        let tool = Arc::new(
+            FunctionTool::new_rich(
+                "kline",
+                "returns a K-line chart",
+                |input: AddInput, _context| async move {
+                    Ok::<_, ToolError>(
+                        ToolOutput::rich(vec![
+                            ContentPart::text("K-line chart"),
+                            ContentPart::Image {
+                                source: MediaSource::Url {
+                                    url: "https://example.com/kline.png".into(),
+                                    media_type: Some("image/png".into()),
+                                },
+                            },
+                        ])
+                        .with_structured_content(json!({
+                            "left": input.left,
+                            "right": input.right,
+                        })),
+                    )
+                },
+            )
+            .output_schema(json!({
+                "type": "object",
+                "required": ["left", "right"],
+                "properties": {
+                    "left": { "type": "integer" },
+                    "right": { "type": "integer" }
+                }
+            })),
+        );
+        let mut capabilities = CapabilitySet::new();
+        capabilities.grant(tool.descriptor().capability());
+        let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+        let mut registry = ToolRegistry::new();
+        registry.register(tool).unwrap();
+
+        let output = futures_executor::block_on(registry.invoke(
+            "kline",
+            json!({"left": 20, "right": 22}),
+            &run,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            output.structured_content,
+            Some(json!({"left": 20, "right": 22}))
+        );
+        assert!(matches!(
+            &output.content[1],
+            ContentPart::Image {
+                source: MediaSource::Url { media_type, .. }
+            } if media_type.as_deref() == Some("image/png")
+        ));
     }
 }

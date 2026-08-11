@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use runifold::{
-    Budget, BudgetTracker, CapabilitySet, IntoToolError, JsonSchema, RunContext, State, Tool,
-    ToolContext, ToolError, ToolErrorKind, ToolRegistry,
+    Budget, BudgetTracker, CapabilitySet, ContentPart, IntoToolError, JsonSchema, MediaSource,
+    RunContext, State, Tool, ToolContext, ToolError, ToolErrorKind, ToolOutput, ToolRegistry,
     core::{EffectClass, RiskLevel},
 };
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,11 @@ struct ScaleInput {
 #[derive(JsonSchema, Serialize)]
 struct ScaleOutput {
     value: i64,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct ChartInput {
+    symbol: String,
 }
 
 struct Multiplier {
@@ -80,6 +85,25 @@ async fn scale(
     Ok(ScaleOutput {
         value: input.value * state.factor,
     })
+}
+
+#[runifold::tool(
+    description = "Return an existing K-line chart as model-visible media",
+    output = "rich",
+    effect = "read_only",
+    risk = "low"
+)]
+async fn kline_chart(input: ChartInput, _context: ToolContext) -> Result<ToolOutput, ToolError> {
+    std::future::ready(()).await;
+    Ok(ToolOutput::rich(vec![
+        ContentPart::text(format!("K-line chart for {}", input.symbol)),
+        ContentPart::Image {
+            source: MediaSource::Url {
+                url: "https://example.com/kline.png".into(),
+                media_type: Some("image/png".into()),
+            },
+        },
+    ]))
 }
 
 #[test]
@@ -134,4 +158,28 @@ fn attribute_injects_host_state_and_maps_application_errors_explicitly() {
     assert_eq!(error.kind, ToolErrorKind::Execution);
     assert_eq!(error.message, "the value cannot be scaled safely");
     assert!(!error.message.contains("database policy row"));
+}
+
+#[test]
+fn attribute_preserves_rich_function_output() {
+    let tool = Arc::new(kline_chart_tool());
+    assert_eq!(tool.descriptor().name, "kline_chart");
+    assert_eq!(tool.descriptor().effect, EffectClass::ReadOnly);
+
+    let mut capabilities = CapabilitySet::new();
+    capabilities.grant(tool.descriptor().capability());
+    let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+    let mut tools = ToolRegistry::new();
+    tools.register(tool).unwrap();
+
+    let output =
+        futures_executor::block_on(tools.invoke("kline_chart", json!({"symbol": "AAPL"}), &run))
+            .unwrap();
+
+    assert!(matches!(
+        &output.content[1],
+        ContentPart::Image {
+            source: MediaSource::Url { url, media_type }
+        } if url.ends_with("kline.png") && media_type.as_deref() == Some("image/png")
+    ));
 }

@@ -876,6 +876,49 @@ output is serialized after it succeeds, and both JSON Schemas become part of
 the Tool capability contract. `FunctionTool` exposes the same mechanism
 without using the attribute macro.
 
+Functions that return images, audio, documents, resources, or mixed content
+use the explicit rich-output mode. The returned `ToolOutput` remains canonical
+media instead of being flattened into JSON text:
+
+```rust,ignore
+use runifold::{
+    ContentPart, JsonSchema, MediaSource, ToolContext, ToolError, ToolOutput,
+};
+use serde::Deserialize;
+
+#[derive(Deserialize, JsonSchema)]
+struct KlineInput {
+    symbol: String,
+}
+
+#[runifold::tool(
+    description = "Return the existing K-line chart for a symbol",
+    output = "rich",
+    effect = "read_only",
+    risk = "low"
+)]
+async fn kline_chart(
+    input: KlineInput,
+    _context: ToolContext,
+) -> Result<ToolOutput, ToolError> {
+    Ok(ToolOutput::rich(vec![
+        ContentPart::text(format!("K-line chart for {}", input.symbol)),
+        ContentPart::Image {
+            source: MediaSource::Url {
+                url: "https://example.com/kline.png".into(),
+                media_type: Some("image/png".into()),
+            },
+        },
+    ]))
+}
+```
+
+The constructor API is `FunctionTool::new_rich`. It uses the same input
+schema, capability, Effect, risk, cancellation, output-size, Agent, Artifact,
+and Provider boundaries as ordinary typed Tools. Call `.output_schema(...)`
+when rich content also carries typed `structured_content` that must be
+validated.
+
 Application services can be injected without exposing them to the model:
 
 ```rust,ignore

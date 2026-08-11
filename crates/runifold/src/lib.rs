@@ -118,7 +118,7 @@ pub use runifold_macros::tool;
 pub use runifold_model::{
     Artifact, ArtifactError, ArtifactFuture, ArtifactPage, ArtifactRef, ArtifactResolvingModel,
     ArtifactScope, ArtifactStore, ArtifactWrite, CircuitBreakerConfig, CircuitBreakerConfigError,
-    CircuitState, DEFAULT_MAX_ARTIFACT_BYTES, FeaturePolicy, GenerationOptions,
+    CircuitState, ContentPart, DEFAULT_MAX_ARTIFACT_BYTES, FeaturePolicy, GenerationOptions,
     InMemoryArtifactStore, MAX_ARTIFACT_IDEMPOTENCY_KEY_BYTES, MAX_ARTIFACT_NAME_BYTES,
     MAX_ARTIFACT_PAGE_SIZE, MediaSource, Message, Model, ModelCallContext, ModelEventStream,
     ModelFallbackPolicy, ModelRef, ModelRequest, ModelResponse, ModelRetryPolicy,

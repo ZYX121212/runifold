@@ -15,7 +15,9 @@ use syn::{
 /// The function must accept `(Input, ToolContext)` or
 /// `(State<Service>, Input, ToolContext)`. It may return any error implementing
 /// `IntoToolError`. `Input` must implement `DeserializeOwned` and `JsonSchema`;
-/// `Output` must implement `Serialize` and `JsonSchema`.
+/// ordinary `Output` values must implement `Serialize` and `JsonSchema`.
+/// Set `output = "rich"` when the function returns `ToolOutput` containing
+/// images, audio, documents, resources, or mixed content.
 ///
 /// ```ignore
 /// #[runifold::tool(
@@ -48,6 +50,7 @@ struct ToolArguments {
     version: Option<LitStr>,
     effect: Option<LitStr>,
     risk: Option<LitStr>,
+    output: Option<LitStr>,
 }
 
 impl Parse for ToolArguments {
@@ -70,10 +73,11 @@ impl Parse for ToolArguments {
                 "version" => set_once(&mut arguments.version, value, identifier)?,
                 "effect" => set_once(&mut arguments.effect, value, identifier)?,
                 "risk" => set_once(&mut arguments.risk, value, identifier)?,
+                "output" => set_once(&mut arguments.output, value, identifier)?,
                 _ => {
                     return Err(syn::Error::new_spanned(
                         identifier,
-                        "supported keys are name, description, version, effect, and risk",
+                        "supported keys are name, description, version, effect, risk, and output",
                     ));
                 }
             }
@@ -137,6 +141,8 @@ fn expand_tool(
         .unwrap_or_else(|| LitStr::new("1", function_name.span()));
     let effect = effect_tokens(arguments.effect.as_ref())?;
     let risk = risk_tokens(arguments.risk.as_ref())?;
+    let rich_output = output_mode(arguments.output.as_ref())?;
+    let constructor_path = function_tool_constructor(input_type, output_type, rich_output);
 
     let constructor = if let Some(state_type) = state_type {
         quote! {
@@ -144,7 +150,7 @@ fn expand_tool(
                 state: ::std::sync::Arc<#state_type>,
             ) -> impl ::runifold::Tool {
                 let state = ::runifold::State::from_shared(state);
-                ::runifold::FunctionTool::<#input_type, #output_type, _>::new(
+                #constructor_path(
                     #name,
                     #description,
                     move |input: #input_type, context: ::runifold::ToolContext| {
@@ -164,7 +170,7 @@ fn expand_tool(
     } else {
         quote! {
             #visibility fn #constructor() -> impl ::runifold::Tool {
-                ::runifold::FunctionTool::<#input_type, #output_type, _>::new(
+                #constructor_path(
                     #name,
                     #description,
                     |input: #input_type, context: ::runifold::ToolContext| async move {
@@ -184,6 +190,14 @@ fn expand_tool(
         #function
         #constructor
     })
+}
+
+fn function_tool_constructor(input: &Type, output: &Type, rich: bool) -> proc_macro2::TokenStream {
+    if rich {
+        quote!(::runifold::FunctionTool::<#input, ::runifold::ToolOutput, _>::new_rich)
+    } else {
+        quote!(::runifold::FunctionTool::<#input, #output, _>::new)
+    }
 }
 
 fn string_literal(expression: &Expr) -> syn::Result<LitStr> {
@@ -341,4 +355,15 @@ fn risk_tokens(risk: Option<&LitStr>) -> syn::Result<proc_macro2::TokenStream> {
         }
     };
     Ok(quote!(::runifold::core::RiskLevel::#variant))
+}
+
+fn output_mode(output: Option<&LitStr>) -> syn::Result<bool> {
+    match output.map(LitStr::value).as_deref() {
+        None | Some("json") => Ok(false),
+        Some("rich") => Ok(true),
+        Some(_) => Err(syn::Error::new_spanned(
+            output.expect("invalid values are present"),
+            "invalid output; expected json or rich",
+        )),
+    }
 }

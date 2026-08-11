@@ -6,6 +6,16 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-11
+
+- Added first-class rich typed functions through `FunctionTool::new_rich` and
+  `#[runifold::tool(output = "rich")]`, allowing ordinary async Tool handlers
+  to return canonical images, audio, documents, resources, structured content,
+  and application-error results without manually implementing `Tool`.
+- Kept the existing JSON `FunctionTool::new` path source-compatible, exposed
+  optional rich structured-output schema validation, and re-exported
+  `ContentPart` from the facade for complete media construction ergonomics.
+
 ## [0.5.2] - 2026-08-10
 
 - Isolated PostgreSQL tenant lease-limit concurrency verification from the
