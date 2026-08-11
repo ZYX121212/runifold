@@ -16,7 +16,7 @@ use runifold_effect::{
 use runifold_model::{
     ContentPart, FeaturePolicy, GenerationOptions, Message, Model, ModelCallContext, ModelError,
     ModelErrorKind, ModelRef, ModelRequest, ModelResponse, ModelStreamAccumulator, OutputFormat,
-    ProviderToolSpec, ResponseMode, Role, ToolCall, ToolResult,
+    ProviderToolSpec, ResponseMode, Role, ToolCall, ToolChoice, ToolResult,
 };
 use runifold_retrieval::{Document, Retriever};
 use runifold_tool::{ToolError, ToolErrorKind, ToolOutput, ToolRegistry};
@@ -29,6 +29,8 @@ use crate::{
     AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, DurableConversationCheckpoint,
     ResumePolicy,
 };
+
+const TOOL_RESULT_EXECUTION_ID_METADATA: &str = "runifold.agent.execution_id";
 use crate::{
     AgentError, AgentEventStream, AgentGateway, AgentOutcome, AgentStreamEvent, CallableKind,
     GatewayError, GatewayErrorKind, StructuredAgent,
@@ -111,6 +113,7 @@ pub struct Agent {
     pub(crate) effects: EffectExecutor,
     pub(crate) effect_recovery: EffectRecoveryPolicy,
     pub(crate) config: AgentConfig,
+    pub(crate) min_successful_tool_calls: u32,
     pub(crate) output_format: OutputFormat,
     pub(crate) generation: GenerationOptions,
     pub(crate) response_mode: ResponseMode,
@@ -142,6 +145,7 @@ impl Agent {
             effects: EffectExecutor::new(Arc::new(InMemoryEffectStore::new())),
             effect_recovery: EffectRecoveryPolicy::RejectAmbiguous,
             config: AgentConfig::default(),
+            min_successful_tool_calls: 0,
             output_format: OutputFormat::Text,
             generation: GenerationOptions::default(),
             response_mode: ResponseMode::Streaming,
@@ -189,6 +193,17 @@ impl Agent {
     #[must_use]
     pub const fn with_config(mut self, config: AgentConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Requires this many successful local Tool calls before terminal output.
+    ///
+    /// Failed Tool results, child-Agent delegations, provider-hosted Tools,
+    /// and Tool results from earlier conversation turns do not satisfy this
+    /// execution-local completion contract. A value of zero disables it.
+    #[must_use]
+    pub const fn min_successful_tool_calls(mut self, minimum: u32) -> Self {
+        self.min_successful_tool_calls = minimum;
         self
     }
 

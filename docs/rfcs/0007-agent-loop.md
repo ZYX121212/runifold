@@ -27,7 +27,8 @@ An `Agent` owns:
 - a provider-qualified `ModelRef`;
 - zero or more system messages;
 - a `ToolRegistry`;
-- local turn, feature-degradation, and tool-error policy.
+- local turn, feature-degradation, and tool-error policy;
+- an optional execution-local minimum for successful local Tool calls.
 
 Execution occurs inside a caller-provided `RunContext`. This makes authority,
 budget, deadline, cancellation, and lineage explicit rather than hidden in a
@@ -58,6 +59,25 @@ Tool-call budget is consumed before tool execution, so a rejected call performs
 no external effect. Model usage is accounted immediately after each completed
 model response.
 
+## Tool completion contracts
+
+`min_successful_tool_calls` is a completion invariant rather than a resource
+budget. While the current execution has fewer successful local Tool results
+than required, the model request uses `ToolChoice::Required`. Once the minimum
+is satisfied, later requests return to `Auto` so the model can terminate.
+
+Only non-error results from the Agent's local `ToolRegistry` count. Attempts,
+application-error results, child-Agent delegations, provider-hosted Tools, and
+Tool results loaded from earlier conversation turns do not satisfy the
+contract. Results carry the private execution identity in canonical message
+metadata, so a stable checkpoint can recover the count without extending the
+public checkpoint schema or counting historical transcript entries.
+
+If the remaining shared Tool-call budget is lower than the unsatisfied
+minimum, execution fails before another model request. If a Provider ignores
+`Required` and returns terminal output, the Agent fails closed with
+`ToolRequirementUnsatisfied`.
+
 ## Initial invariants
 
 1. Every model and tool call receives a descendant cancellation token.
@@ -68,6 +88,7 @@ model response.
 6. Empty model output is a protocol error.
 7. The successful outcome contains the complete canonical transcript.
 8. Provider selection remains outside the loop.
+9. Configured successful Tool-call minima are satisfied before terminal output.
 
 ## Deferred decisions
 

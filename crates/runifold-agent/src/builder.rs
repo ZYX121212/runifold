@@ -36,6 +36,12 @@ pub enum AgentBuildError {
     /// The configured turn limit cannot execute any model turn.
     #[error("max_turns must be greater than zero")]
     ZeroMaxTurns,
+    /// A successful Tool minimum was configured without a local Tool.
+    #[error("min_successful_tool_calls={minimum} requires at least one registered local Tool")]
+    MinimumSuccessfulToolCallsWithoutTool {
+        /// Configured successful local Tool-call minimum.
+        minimum: u32,
+    },
     /// A static or dynamic context registration was invalid.
     #[error("agent retrieval configuration failed: {0}")]
     Retrieval(#[from] RetrievalError),
@@ -205,6 +211,17 @@ impl AgentBuilder {
         self
     }
 
+    /// Requires this many successful local Tool calls before terminal output.
+    ///
+    /// The runtime requests at least one Tool while the requirement remains
+    /// unsatisfied and returns an explicit error if the model violates that
+    /// contract. A value of zero disables the requirement.
+    #[must_use]
+    pub const fn min_successful_tool_calls(mut self, minimum: u32) -> Self {
+        self.agent.min_successful_tool_calls = minimum;
+        self
+    }
+
     /// Sets Tool failure behavior.
     #[must_use]
     pub const fn tool_error_policy(mut self, policy: ToolErrorPolicy) -> Self {
@@ -324,6 +341,11 @@ impl AgentBuilder {
         }
         if self.agent.config.max_turns == 0 {
             return Err(AgentBuildError::ZeroMaxTurns);
+        }
+        if self.agent.min_successful_tool_calls > 0 && self.agent.tools.is_empty() {
+            return Err(AgentBuildError::MinimumSuccessfulToolCallsWithoutTool {
+                minimum: self.agent.min_successful_tool_calls,
+            });
         }
         if let Some(collision) = self
             .agent
@@ -466,6 +488,7 @@ mod tests {
         let agent = Agent::builder("worker", model, ModelRef::new("test", "scripted"))
             .system("Be precise")
             .tool(TestTool::named("lookup"))
+            .min_successful_tool_calls(3)
             .max_turns(4)
             .build()
             .unwrap();
@@ -474,7 +497,25 @@ mod tests {
         assert_eq!(agent.instructions.len(), 1);
         assert!(agent.tools.contains("lookup"));
         assert_eq!(agent.config.max_turns, 4);
+        assert_eq!(agent.min_successful_tool_calls, 3);
         assert_eq!(agent.callable_capabilities().len(), 1);
+    }
+
+    #[test]
+    fn builder_rejects_a_tool_minimum_without_a_local_tool() {
+        let error = Agent::builder(
+            "worker",
+            Arc::new(ScriptedModel::new()),
+            ModelRef::new("test", "scripted"),
+        )
+        .min_successful_tool_calls(1)
+        .build()
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            AgentBuildError::MinimumSuccessfulToolCallsWithoutTool { minimum: 1 }
+        ));
     }
 
     #[test]

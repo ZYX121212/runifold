@@ -53,6 +53,26 @@ pub enum AgentError {
         /// Configured local turn bound.
         max_turns: u32,
     },
+    /// The model terminated before the successful local Tool-call minimum.
+    #[error(
+        "agent completed only {successful} successful local Tool calls; at least {required} required"
+    )]
+    ToolRequirementUnsatisfied {
+        /// Required successful local Tool calls.
+        required: u32,
+        /// Successful local Tool calls observed in this execution.
+        successful: u32,
+    },
+    /// The remaining shared Tool-call budget cannot satisfy the local minimum.
+    #[error(
+        "agent requires {required} successful local Tool calls but only {remaining} Tool calls remain in the shared budget"
+    )]
+    ToolRequirementExceedsBudget {
+        /// Additional successful local Tool calls still required.
+        required: u32,
+        /// Remaining shared Tool-call budget.
+        remaining: u64,
+    },
     /// A tool produced output that policy forbids exposing to the model.
     #[error("tool `{tool}` returned host-only output")]
     ToolOutputNotVisible {

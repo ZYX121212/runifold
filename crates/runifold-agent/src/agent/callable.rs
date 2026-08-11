@@ -6,8 +6,9 @@ use super::{
     Agent, AgentError, AgentGateway, AgentObserver, AgentStreamEvent, BTreeMap, CallableKind,
     ContentPart, Deserialize, EffectExecutionContext, EffectFuture, EffectHandler, EffectId,
     EffectKind, EffectRequest, EventId, GatewayError, GatewayErrorKind, InvocationId, Message,
-    RetrySafety, Role, RunContext, RunError, RunErrorKind, Serialize, ToolCall, ToolError,
-    ToolErrorKind, ToolErrorPolicy, ToolOutput, ToolRegistry, ToolResult, Usage, emit_agent_event,
+    RetrySafety, Role, RunContext, RunError, RunErrorKind, Serialize,
+    TOOL_RESULT_EXECUTION_ID_METADATA, ToolCall, ToolError, ToolErrorKind, ToolErrorPolicy,
+    ToolOutput, ToolRegistry, ToolResult, Usage, emit_agent_event,
 };
 
 impl Agent {
@@ -39,9 +40,12 @@ impl Agent {
                 self.execute_local_tool_call(&call, &mut progress.tool_calls, &context)
                     .await?
             };
-            progress
-                .transcript
-                .push(tool_result_message(call.id, call.name, result)?);
+            progress.transcript.push(tool_result_message(
+                call.id,
+                call.name,
+                result,
+                &progress.execution_id,
+            )?);
         }
         Ok(())
     }
@@ -489,6 +493,7 @@ fn tool_result_message(
     call_id: String,
     name: String,
     result: Result<ToolOutput, String>,
+    execution_id: &str,
 ) -> Result<Message, AgentError> {
     let (content, structured_content, metadata, is_error) = match result {
         Ok(output) => (
@@ -504,7 +509,7 @@ fn tool_result_message(
             true,
         ),
     };
-    Message::new(
+    let mut message = Message::new(
         Role::Tool,
         vec![ContentPart::ToolResult(ToolResult {
             call_id,
@@ -515,7 +520,12 @@ fn tool_result_message(
             metadata,
         })],
     )
-    .map_err(|error| AgentError::Protocol(error.to_string()))
+    .map_err(|error| AgentError::Protocol(error.to_string()))?;
+    message.metadata.insert(
+        TOOL_RESULT_EXECUTION_ID_METADATA.into(),
+        serde_json::Value::String(execution_id.into()),
+    );
+    Ok(message)
 }
 
 #[cfg(test)]
@@ -534,7 +544,9 @@ mod rich_result_tests {
             },
         }])
         .with_structured_content(json!({"width":1}));
-        let message = tool_result_message("call-1".into(), "render".into(), Ok(output)).unwrap();
+        let message =
+            tool_result_message("call-1".into(), "render".into(), Ok(output), "execution-1")
+                .unwrap();
 
         let ContentPart::ToolResult(ToolResult {
             content,

@@ -15,7 +15,7 @@ use runifold_core::{
 };
 use runifold_model::{
     ContentBlockKind, ContentPart, FinishReason, Message, ModelError, ModelErrorKind, ModelRef,
-    ModelStreamEvent, Role, ToolCall,
+    ModelStreamEvent, Role, ToolCall, ToolChoice,
 };
 use runifold_retrieval::{
     Document, RetrievalContext, RetrievalError, RetrievalFuture, RetrievalQuery, RetrievalResponse,
@@ -41,6 +41,11 @@ use crate::{
 
 #[derive(Debug)]
 struct EchoTool {
+    descriptor: ToolDescriptor,
+}
+
+#[derive(Debug)]
+struct ApplicationErrorTool {
     descriptor: ToolDescriptor,
 }
 
@@ -119,6 +124,32 @@ impl Tool for EchoTool {
         _context: ToolContext,
     ) -> ToolFuture<'_, Result<ToolOutput, ToolError>> {
         Box::pin(async move { Ok(ToolOutput::model_visible(input)) })
+    }
+}
+
+impl ApplicationErrorTool {
+    fn new() -> Self {
+        Self {
+            descriptor: EchoTool::new().descriptor,
+        }
+    }
+}
+
+impl Tool for ApplicationErrorTool {
+    fn descriptor(&self) -> &ToolDescriptor {
+        &self.descriptor
+    }
+
+    fn invoke(
+        &self,
+        _input: Value,
+        _context: ToolContext,
+    ) -> ToolFuture<'_, Result<ToolOutput, ToolError>> {
+        Box::pin(async {
+            Ok(ToolOutput::model_error(vec![ContentPart::text(
+                "application failure",
+            )]))
+        })
     }
 }
 
@@ -240,6 +271,224 @@ fn completes_a_model_tool_model_loop() {
                 Some(ContentPart::ToolResult(result)) if !result.is_error
             )
     }));
+}
+
+#[test]
+fn minimum_successful_tool_calls_switches_from_required_to_auto() {
+    let model = ScriptedModel::new();
+    for index in 1..=3 {
+        model.enqueue(response_events(
+            &format!("tool-{index}"),
+            vec![tool_call(
+                &format!("call_{index}"),
+                "echo",
+                json!({"value": index}),
+            )],
+            FinishReason::ToolCalls,
+        ));
+    }
+    model.enqueue(response_events(
+        "done",
+        vec![ContentPart::text("finished")],
+        FinishReason::Stop,
+    ));
+    let tool = Arc::new(EchoTool::new());
+    let mut tools = ToolRegistry::new();
+    tools.register(tool.clone()).unwrap();
+    let mut capabilities = CapabilitySet::new();
+    capabilities.grant(tool.descriptor().capability());
+    let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .tools(tools)
+    .min_successful_tool_calls(3);
+
+    let outcome = futures_executor::block_on(agent.run("start", &run)).unwrap();
+
+    assert_eq!(outcome.tool_calls, 3);
+    let requests = model.recorded_requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[0].tool_choice, ToolChoice::Required);
+    assert_eq!(requests[1].tool_choice, ToolChoice::Required);
+    assert_eq!(requests[2].tool_choice, ToolChoice::Required);
+    assert_eq!(requests[3].tool_choice, ToolChoice::Auto);
+}
+
+#[test]
+fn terminal_response_before_tool_minimum_fails_closed() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "early",
+        vec![ContentPart::text("finished too early")],
+        FinishReason::Stop,
+    ));
+    let tool = Arc::new(EchoTool::new());
+    let mut tools = ToolRegistry::new();
+    tools.register(tool.clone()).unwrap();
+    let mut capabilities = CapabilitySet::new();
+    capabilities.grant(tool.descriptor().capability());
+    let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .tools(tools)
+    .min_successful_tool_calls(3);
+
+    let error = futures_executor::block_on(agent.run("start", &run)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        AgentError::ToolRequirementUnsatisfied {
+            required: 3,
+            successful: 0
+        }
+    ));
+    assert_eq!(
+        model.recorded_requests()[0].tool_choice,
+        ToolChoice::Required
+    );
+}
+
+#[test]
+fn application_error_tool_results_do_not_satisfy_the_minimum() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "tool",
+        vec![tool_call("call_1", "echo", json!({}))],
+        FinishReason::ToolCalls,
+    ));
+    model.enqueue(response_events(
+        "early",
+        vec![ContentPart::text("finished too early")],
+        FinishReason::Stop,
+    ));
+    let tool = Arc::new(ApplicationErrorTool::new());
+    let mut tools = ToolRegistry::new();
+    tools.register(tool.clone()).unwrap();
+    let mut capabilities = CapabilitySet::new();
+    capabilities.grant(tool.descriptor().capability());
+    let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .tools(tools)
+    .min_successful_tool_calls(1);
+
+    let error = futures_executor::block_on(agent.run("start", &run)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        AgentError::ToolRequirementUnsatisfied {
+            required: 1,
+            successful: 0
+        }
+    ));
+    assert_eq!(run.budget().usage().tool_calls, 1);
+    let requests = model.recorded_requests();
+    assert_eq!(requests[0].tool_choice, ToolChoice::Required);
+    assert_eq!(requests[1].tool_choice, ToolChoice::Required);
+}
+
+#[test]
+fn previous_conversation_tool_results_do_not_satisfy_the_current_turn() {
+    let model = ScriptedModel::new();
+    for (call_id, answer) in [("call_1", "first"), ("call_2", "second")] {
+        model.enqueue(response_events(
+            call_id,
+            vec![tool_call(call_id, "echo", json!({}))],
+            FinishReason::ToolCalls,
+        ));
+        model.enqueue(response_events(
+            answer,
+            vec![ContentPart::text(answer)],
+            FinishReason::Stop,
+        ));
+    }
+    let tool = Arc::new(EchoTool::new());
+    let mut tools = ToolRegistry::new();
+    tools.register(tool.clone()).unwrap();
+    let mut capabilities = CapabilitySet::new();
+    capabilities.grant(tool.descriptor().capability());
+    let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .tools(tools)
+    .min_successful_tool_calls(1);
+    let store = InMemoryConversationStore::new();
+    let conversation_id = ConversationId::new();
+    let namespace = MemoryNamespace::parse("tenant.user").unwrap();
+    let policy = ConversationContextPolicy::new(ConversationWindow::new(8).unwrap());
+
+    futures_executor::block_on(agent.run_conversation(
+        "first",
+        &run,
+        &store,
+        conversation_id,
+        namespace.clone(),
+        policy,
+    ))
+    .unwrap();
+    futures_executor::block_on(agent.run_conversation(
+        "second",
+        &run,
+        &store,
+        conversation_id,
+        namespace,
+        policy,
+    ))
+    .unwrap();
+
+    let requests = model.recorded_requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[0].tool_choice, ToolChoice::Required);
+    assert_eq!(requests[1].tool_choice, ToolChoice::Auto);
+    assert_eq!(requests[2].tool_choice, ToolChoice::Required);
+    assert_eq!(requests[3].tool_choice, ToolChoice::Auto);
+}
+
+#[test]
+fn tool_minimum_rejects_an_obviously_insufficient_shared_budget() {
+    let model = ScriptedModel::new();
+    let tool = Arc::new(EchoTool::new());
+    let mut tools = ToolRegistry::new();
+    tools.register(tool.clone()).unwrap();
+    let mut capabilities = CapabilitySet::new();
+    capabilities.grant(tool.descriptor().capability());
+    let run = RunContext::root(
+        BudgetTracker::new(Budget {
+            tool_calls: Some(2),
+            ..Budget::default()
+        }),
+        capabilities,
+    );
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .tools(tools)
+    .min_successful_tool_calls(3);
+
+    let error = futures_executor::block_on(agent.run("start", &run)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        AgentError::ToolRequirementExceedsBudget {
+            required: 3,
+            remaining: 2
+        }
+    ));
+    assert!(model.recorded_requests().is_empty());
 }
 
 #[test]
@@ -819,7 +1068,8 @@ fn checkpoint_retry_replays_completed_tool_effect_without_reexecution() {
         Arc::new(model.clone()),
         ModelRef::new("test", "scripted"),
     )
-    .tools(tools);
+    .tools(tools)
+    .min_successful_tool_calls(1);
 
     futures_executor::block_on(agent.run_checkpointed("start", &run, &checkpoint)).unwrap_err();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -837,6 +1087,10 @@ fn checkpoint_retry_replays_completed_tool_effect_without_reexecution() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(model.recorded_requests().len(), 3);
+    let requests = model.recorded_requests();
+    assert_eq!(requests[0].tool_choice, ToolChoice::Required);
+    assert_eq!(requests[1].tool_choice, ToolChoice::Required);
+    assert_eq!(requests[2].tool_choice, ToolChoice::Auto);
     assert_eq!(outcome.usage.tool_calls, 2);
 }
 

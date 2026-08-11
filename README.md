@@ -775,6 +775,26 @@ let response = agent.run("Why is durable execution useful?", &run).await?;
 # }
 ```
 
+An Agent can also make successful local Tool use part of its completion
+contract instead of relying on a prompt instruction:
+
+```rust,ignore
+let agent = client
+    .agent("researcher", "model")
+    .tool(search)
+    .min_successful_tool_calls(3)
+    .max_turns(8)
+    .build()?;
+```
+
+While fewer than three successful calls have completed, Runifold sends
+`ToolChoice::Required`. It switches back to `Auto` after the requirement is
+satisfied so the model can produce terminal output. Application-error Tool
+results, child-Agent delegations, provider-hosted Tools, and results from an
+earlier conversation turn do not count. An impossible shared Tool-call budget
+and a Provider that terminates early both fail explicitly before an unchecked
+answer can escape.
+
 The library does not read credentials implicitly. Applications decide how
 secrets enter their process.
 

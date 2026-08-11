@@ -202,7 +202,9 @@ fn agent_error_kind(error: &AgentError) -> RunErrorKind {
             runifold_retrieval::RetrievalError::DeadlineExceeded => RunErrorKind::DeadlineExceeded,
             _ => RunErrorKind::Invocation,
         },
-        AgentError::Budget(_) | AgentError::MaxTurns { .. } => RunErrorKind::BudgetExceeded,
+        AgentError::Budget(_)
+        | AgentError::MaxTurns { .. }
+        | AgentError::ToolRequirementExceedsBudget { .. } => RunErrorKind::BudgetExceeded,
         AgentError::Gateway(error) => match error.kind {
             GatewayErrorKind::CapabilityDenied
             | GatewayErrorKind::AuthorityEscalation
@@ -219,7 +221,9 @@ fn agent_error_kind(error: &AgentError) -> RunErrorKind {
             }
         },
         AgentError::InvalidConfig(_) => RunErrorKind::InvalidInput,
-        AgentError::Protocol(_) | AgentError::ToolOutputNotVisible { .. } => RunErrorKind::Protocol,
+        AgentError::Protocol(_)
+        | AgentError::ToolRequirementUnsatisfied { .. }
+        | AgentError::ToolOutputNotVisible { .. } => RunErrorKind::Protocol,
         AgentError::Journal(_) => RunErrorKind::Extension("runifold.observability".into()),
         AgentError::Checkpoint(_) | AgentError::AmbiguousCheckpoint { .. } => {
             RunErrorKind::Extension("runifold.checkpoint".into())

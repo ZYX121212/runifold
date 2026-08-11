@@ -6,6 +6,18 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-08-11
+
+- Added `Agent::min_successful_tool_calls` and the matching fluent builder API,
+  making successful local Tool use a fail-closed completion contract rather
+  than a prompt-only convention.
+- Dynamically use `ToolChoice::Required` until the execution-local minimum is
+  satisfied, then restore `Auto`; failed results, delegations, provider-hosted
+  Tools, and earlier conversation turns cannot satisfy the requirement.
+- Reject impossible shared Tool-call budgets before model execution and retain
+  correct requirement state across checkpoint effect replay without extending
+  the public checkpoint schema.
+
 ## [0.5.3] - 2026-08-11
 
 - Added first-class rich typed functions through `FunctionTool::new_rich` and

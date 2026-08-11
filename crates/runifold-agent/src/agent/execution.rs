@@ -8,9 +8,10 @@ use super::{
     Agent, AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, AgentError,
     AgentEventStream, AgentFuture, AgentObserver, AgentOutcome, AgentStreamEvent, Arc,
     BufferedObserver, CheckpointCursor, ContentPart, DurableConversationCheckpoint, Either,
-    EventId, Instant, LifecycleEvent, Message, ModelCallContext, ModelError, ModelErrorKind,
-    ModelRequest, ModelResponse, ModelStreamAccumulator, NoopObserver, ResumePolicy, Role,
-    RunContext, RunEventKind, StreamExt, ToolCall, Usage, emit_agent_event, select,
+    EventId, Instant, InvocationId, LifecycleEvent, Message, ModelCallContext, ModelError,
+    ModelErrorKind, ModelRequest, ModelResponse, ModelStreamAccumulator, NoopObserver,
+    ResumePolicy, Role, RunContext, RunEventKind, StreamExt, TOOL_RESULT_EXECUTION_ID_METADATA,
+    ToolCall, ToolChoice, Usage, emit_agent_event, select,
 };
 use crate::conversation::{
     AgentConversationError, AgentConversationOutcome, AutomaticConversationSummary,
@@ -60,7 +61,7 @@ impl Agent {
         run: &'a RunContext,
     ) -> AgentFuture<'a, Result<AgentOutcome, AgentError>> {
         let input = input.into();
-        let state = self.initial_state(input, run.root_run_id().to_string());
+        let state = self.initial_state(input, InvocationId::new().to_string());
         Box::pin(async move {
             self.execute_state(state, run, None, Arc::new(NoopObserver), true, true)
                 .await
@@ -121,7 +122,7 @@ impl Agent {
             let persisted_prefix_len = transcript.len();
             transcript.push(Message::user(input));
             let state =
-                self.initial_state_from_transcript(transcript, run.root_run_id().to_string());
+                self.initial_state_from_transcript(transcript, InvocationId::new().to_string());
             let outcome = self
                 .execute_state(state, run, None, Arc::new(NoopObserver), true, true)
                 .await
@@ -226,7 +227,7 @@ impl Agent {
         input: impl Into<String> + Send + 'a,
         run: &'a RunContext,
     ) -> AgentEventStream<'a> {
-        let state = self.initial_state(input.into(), run.root_run_id().to_string());
+        let state = self.initial_state(input.into(), InvocationId::new().to_string());
         let observer = BufferedObserver::default();
         let events = observer.events();
         let execution =
@@ -553,11 +554,8 @@ impl Agent {
 
         loop {
             Self::check_lifecycle(run)?;
-            if progress.turns >= self.config.max_turns {
-                return Err(AgentError::MaxTurns {
-                    max_turns: self.config.max_turns,
-                });
-            }
+            let tool_choice = self.next_tool_choice(&progress, run)?;
+            let requires_tool = matches!(tool_choice, ToolChoice::Required);
             save_checkpoint(
                 &mut checkpoint,
                 &self.checkpoint_state(
@@ -597,6 +595,7 @@ impl Agent {
                     &progress.transcript,
                     run,
                     progress.turns,
+                    tool_choice,
                     caused_by,
                     observer,
                 )
@@ -615,6 +614,12 @@ impl Agent {
                     return Err(AgentError::Protocol(
                         "model stopped for tool calls without emitting a tool call".into(),
                     ));
+                }
+                if requires_tool {
+                    return Err(AgentError::ToolRequirementUnsatisfied {
+                        required: self.min_successful_tool_calls,
+                        successful: self.successful_local_tool_calls(&progress)?,
+                    });
                 }
                 if persist_terminal_checkpoint {
                     save_checkpoint(
@@ -645,6 +650,7 @@ impl Agent {
         transcript: &[Message],
         run: &RunContext,
         turn: u32,
+        tool_choice: ToolChoice,
         caused_by: Option<EventId>,
         observer: &dyn AgentObserver,
     ) -> Result<ModelResponse, AgentError> {
@@ -660,7 +666,7 @@ impl Agent {
             caused_by,
         )?;
         let response = match self
-            .stream_model_response(self.request(transcript)?, run, turn, observer)
+            .stream_model_response(self.request(transcript, tool_choice)?, run, turn, observer)
             .await
         {
             Ok(response) => response,
@@ -739,6 +745,12 @@ impl Agent {
             return Err(AgentError::InvalidConfig(
                 "max_turns must be greater than zero".into(),
             ));
+        }
+        if self.min_successful_tool_calls > 0 && self.tools.is_empty() {
+            return Err(AgentError::InvalidConfig(format!(
+                "min_successful_tool_calls={} requires at least one registered local Tool",
+                self.min_successful_tool_calls
+            )));
         }
         if let Some(collision) = self
             .agents
@@ -870,7 +882,11 @@ impl Agent {
         Ok(())
     }
 
-    fn request(&self, transcript: &[Message]) -> Result<ModelRequest, AgentError> {
+    fn request(
+        &self,
+        transcript: &[Message],
+        tool_choice: ToolChoice,
+    ) -> Result<ModelRequest, AgentError> {
         let (first, rest) = transcript
             .split_first()
             .ok_or_else(|| AgentError::Protocol("agent transcript is empty".into()))?;
@@ -878,6 +894,7 @@ impl Agent {
         request.messages.extend_from_slice(rest);
         request.tools = self.tools.model_specs();
         request.tools.extend(self.agents.model_specs());
+        request.tool_choice = tool_choice;
         for tool in &self.provider_tools {
             request = request.provider_tool(tool.clone());
         }
@@ -887,6 +904,77 @@ impl Agent {
         request.feature_policy = self.config.feature_policy;
         request.output_format.clone_from(&self.output_format);
         Ok(request)
+    }
+
+    fn successful_local_tool_calls(&self, progress: &AgentProgress) -> Result<u32, AgentError> {
+        let count = progress
+            .transcript
+            .iter()
+            .filter(|message| {
+                message
+                    .metadata
+                    .get(TOOL_RESULT_EXECUTION_ID_METADATA)
+                    .and_then(serde_json::Value::as_str)
+                    == Some(progress.execution_id.as_str())
+            })
+            .flat_map(|message| &message.content)
+            .filter(|part| {
+                matches!(
+                    part,
+                    ContentPart::ToolResult(result)
+                        if !result.is_error
+                            && result
+                                .name
+                                .as_deref()
+                                .is_some_and(|name| self.tools.contains(name))
+                )
+            })
+            .count();
+        u32::try_from(count)
+            .map_err(|_| AgentError::Protocol("successful Tool-call counter overflow".into()))
+    }
+
+    fn next_tool_choice(
+        &self,
+        progress: &AgentProgress,
+        run: &RunContext,
+    ) -> Result<ToolChoice, AgentError> {
+        let successful = self.successful_local_tool_calls(progress)?;
+        let remaining_required = self.min_successful_tool_calls.saturating_sub(successful);
+        Self::validate_tool_requirement_budget(remaining_required, run)?;
+        if progress.turns >= self.config.max_turns {
+            if remaining_required > 0 {
+                return Err(AgentError::ToolRequirementUnsatisfied {
+                    required: self.min_successful_tool_calls,
+                    successful,
+                });
+            }
+            return Err(AgentError::MaxTurns {
+                max_turns: self.config.max_turns,
+            });
+        }
+        Ok(if remaining_required > 0 {
+            ToolChoice::Required
+        } else {
+            ToolChoice::Auto
+        })
+    }
+
+    fn validate_tool_requirement_budget(
+        remaining_required: u32,
+        run: &RunContext,
+    ) -> Result<(), AgentError> {
+        let Some(limit) = run.budget().limit().tool_calls else {
+            return Ok(());
+        };
+        let remaining = limit.saturating_sub(run.budget().usage().tool_calls);
+        if u64::from(remaining_required) > remaining {
+            return Err(AgentError::ToolRequirementExceedsBudget {
+                required: remaining_required,
+                remaining,
+            });
+        }
+        Ok(())
     }
 }
 
