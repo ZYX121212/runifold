@@ -152,12 +152,11 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                         .raw_arguments
                         .clone()
                         .unwrap_or_else(|| call.arguments.to_string());
-                    input.push(json!({
-                        "type": "function_call",
-                        "call_id": call.id,
-                        "name": call.name,
-                        "arguments": arguments
-                    }));
+                    input.push(encode_function_call(
+                        call,
+                        arguments,
+                        &request.model.provider,
+                    )?);
                 }
                 ContentPart::ToolResult(result) => {
                     flush_message(&mut input, message.role, &mut message_content)?;
@@ -206,6 +205,53 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
         flush_message(&mut input, message.role, &mut message_content)?;
     }
     Ok(input)
+}
+
+fn encode_function_call(
+    call: &runifold_model::ToolCall,
+    arguments: String,
+    provider: &str,
+) -> Result<Value, ModelError> {
+    let mut item = Map::from_iter([
+        ("type".into(), Value::String("function_call".into())),
+        ("call_id".into(), Value::String(call.id.clone())),
+        ("name".into(), Value::String(call.name.clone())),
+        ("arguments".into(), Value::String(arguments)),
+        ("status".into(), Value::String("completed".into())),
+    ]);
+    if let Some(id) = provider_metadata_string(&call.metadata, provider, "id")? {
+        item.insert("id".into(), Value::String(id));
+    }
+    if let Some(status) = provider_metadata_string(&call.metadata, provider, "status")?
+        && status != "completed"
+    {
+        return Err(invalid(format!(
+            "completed tool call `{}` cannot replay provider status `{status}`",
+            call.id
+        )));
+    }
+    Ok(Value::Object(item))
+}
+
+fn provider_metadata_string(
+    metadata: &runifold_model::ExtensionMap,
+    provider: &str,
+    field: &str,
+) -> Result<Option<String>, ModelError> {
+    let compatible_key = format!("openai-compatible.{field}");
+    let provider_key = format!("{provider}.{field}");
+    let value = metadata
+        .get(&provider_key)
+        .or_else(|| metadata.get(&compatible_key));
+    value
+        .map(|value| {
+            value.as_str().map(str::to_owned).ok_or_else(|| {
+                invalid(format!(
+                    "tool-call metadata `{provider_key}` must be a string"
+                ))
+            })
+        })
+        .transpose()
 }
 
 fn flush_message(
@@ -530,7 +576,10 @@ mod tests {
                 name: "lookup".into(),
                 arguments: serde_json::json!({"value": 7}),
                 raw_arguments: Some("{ \"value\": 7 }".into()),
-                metadata: BTreeMap::new(),
+                metadata: BTreeMap::from([
+                    ("openai.id".into(), serde_json::json!("fc_7")),
+                    ("openai.status".into(), serde_json::json!("completed")),
+                ]),
             })],
         )
         .unwrap();
@@ -539,7 +588,50 @@ mod tests {
         let encoded = encode_request(&request).unwrap();
 
         assert_eq!(encoded["input"][0]["call_id"], "call-7");
+        assert_eq!(encoded["input"][0]["id"], "fc_7");
+        assert_eq!(encoded["input"][0]["status"], "completed");
         assert_eq!(encoded["input"][0]["arguments"], "{ \"value\": 7 }");
+    }
+
+    #[test]
+    fn legacy_tool_calls_replay_as_completed() {
+        let message = Message::new(
+            Role::Assistant,
+            vec![ContentPart::ToolCall(ToolCall {
+                id: "call-legacy".into(),
+                name: "lookup".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: Some("{}".into()),
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+
+        let encoded =
+            encode_request(&ModelRequest::new(ModelRef::new("ark", "doubao"), message)).unwrap();
+
+        assert_eq!(encoded["input"][0]["status"], "completed");
+        assert!(encoded["input"][0].get("id").is_none());
+    }
+
+    #[test]
+    fn rejects_replaying_an_incomplete_canonical_tool_call() {
+        let message = Message::new(
+            Role::Assistant,
+            vec![ContentPart::ToolCall(ToolCall {
+                id: "call-incomplete".into(),
+                name: "lookup".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: Some("{}".into()),
+                metadata: BTreeMap::from([("ark.status".into(), serde_json::json!("incomplete"))]),
+            })],
+        )
+        .unwrap();
+
+        let error = encode_request(&ModelRequest::new(ModelRef::new("ark", "doubao"), message))
+            .unwrap_err();
+
+        assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
     }
 
     #[test]

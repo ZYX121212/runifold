@@ -16,6 +16,7 @@ pub struct OllamaChunkDecoder {
     open_blocks: BTreeSet<u32>,
     next_part_index: u32,
     model: String,
+    response_model: Option<String>,
 }
 
 impl OllamaChunkDecoder {
@@ -34,9 +35,13 @@ impl OllamaChunkDecoder {
     ///
     /// Returns an error for malformed chunks or provider error objects.
     pub fn decode(&mut self, chunk: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        if self.completed {
+            return Err(protocol("Ollama chunk arrived after response completion"));
+        }
         if let Some(message) = chunk.get("error").and_then(Value::as_str) {
             return Err(provider_error(message));
         }
+        self.validate_model(chunk)?;
         let mut events = Vec::new();
         if !self.started {
             self.started = true;
@@ -126,6 +131,23 @@ impl OllamaChunkDecoder {
             self.completed = true;
         }
         Ok(events)
+    }
+
+    fn validate_model(&mut self, chunk: &Value) -> Result<(), ModelError> {
+        let Some(model) = chunk.get("model").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        if self
+            .response_model
+            .as_deref()
+            .is_some_and(|expected| expected != model)
+        {
+            return Err(protocol(
+                "Ollama stream changed model identity between chunks",
+            ));
+        }
+        self.response_model.get_or_insert_with(|| model.into());
+        Ok(())
     }
 
     /// Ensures a terminal `done` chunk was observed.
@@ -235,5 +257,33 @@ mod tests {
             }
         )));
         decoder.finish().unwrap();
+    }
+
+    #[test]
+    fn rejects_chunks_after_done() {
+        let mut decoder = OllamaChunkDecoder::new("qwen3");
+        decoder
+            .decode(&json!({"message":{"content":""},"done":true}))
+            .unwrap();
+
+        assert!(
+            decoder
+                .decode(&json!({"message":{"content":"late"},"done":false}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_model_identity_changes_between_chunks() {
+        let mut decoder = OllamaChunkDecoder::new("qwen3");
+        decoder
+            .decode(&json!({"model":"qwen3","message":{"content":"a"},"done":false}))
+            .unwrap();
+
+        assert!(
+            decoder
+                .decode(&json!({"model":"other","message":{"content":"b"},"done":true}))
+                .is_err()
+        );
     }
 }

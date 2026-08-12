@@ -96,6 +96,9 @@ impl Model for OllamaClient {
             if request.model.provider != "ollama" {
                 return Err(invalid("Ollama client requires provider `ollama`"));
             }
+            if request.model.name.trim().is_empty() {
+                return Err(invalid("Ollama model identity cannot be empty"));
+            }
             let warnings = self.capabilities.validate_request(&request, true)?;
             let body = encode_request(&request)?;
             let mut builder = self

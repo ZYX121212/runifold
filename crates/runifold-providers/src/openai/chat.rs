@@ -32,7 +32,7 @@ pub fn encode_chat_request(request: &ModelRequest, provider: &str) -> Result<Val
     body.insert("model".into(), Value::String(request.model.name.clone()));
     body.insert(
         "messages".into(),
-        Value::Array(encode_chat_messages(request)?),
+        Value::Array(encode_chat_messages(request, provider)?),
     );
     if !request.provider_tools().is_empty() {
         return Err(unsupported(
@@ -107,7 +107,7 @@ pub fn encode_chat_request(request: &ModelRequest, provider: &str) -> Result<Val
     Ok(Value::Object(body))
 }
 
-fn encode_chat_messages(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
+fn encode_chat_messages(request: &ModelRequest, provider: &str) -> Result<Vec<Value>, ModelError> {
     let mut messages = Vec::with_capacity(request.messages.len());
     for message in &request.messages {
         if let [ContentPart::Text { text }] = message.content.as_slice() {
@@ -133,7 +133,7 @@ fn encode_chat_messages(request: &ModelRequest) -> Result<Vec<Value>, ModelError
                     content.push(chat_text(&encode_content_envelope(part)?));
                 }
                 ContentPart::ToolCall(call) if message.role == Role::Assistant => {
-                    tool_calls.push(json!({
+                    let mut encoded = json!({
                         "id": call.id,
                         "type": "function",
                         "function": {
@@ -141,7 +141,15 @@ fn encode_chat_messages(request: &ModelRequest) -> Result<Vec<Value>, ModelError
                             "arguments": call.raw_arguments.clone()
                                 .unwrap_or_else(|| call.arguments.to_string())
                         }
-                    }));
+                    });
+                    if let Some(extra_content) = call
+                        .metadata
+                        .get(&format!("{provider}.extra_content"))
+                        .or_else(|| call.metadata.get("openai-compatible.extra_content"))
+                    {
+                        encoded["extra_content"] = extra_content.clone();
+                    }
+                    tool_calls.push(encoded);
                 }
                 ContentPart::ToolResult(result) => {
                     flush_chat_message(&mut messages, message.role, &mut content, &mut tool_calls)?;
@@ -177,7 +185,9 @@ fn flush_chat_message(
             "tool messages must contain canonical tool-result parts",
         ));
     }
-    let content_value = if content.len() == 1 && content[0]["type"] == "text" {
+    let content_value = if content.is_empty() {
+        Value::Null
+    } else if content.len() == 1 && content[0]["type"] == "text" {
         content[0]["text"].clone()
     } else {
         Value::Array(std::mem::take(content))
@@ -294,9 +304,12 @@ fn insert_optional(body: &mut Map<String, Value>, name: &str, value: Option<Valu
 pub struct ChatCompletionsDecoder {
     provider: String,
     started: bool,
+    response_id: Option<String>,
+    model: Option<String>,
     reasoning_index: Option<u32>,
     text_index: Option<u32>,
     tool_indices: BTreeMap<u64, u32>,
+    tool_identities: BTreeMap<u64, (String, String)>,
     open: BTreeSet<u32>,
     next_index: u32,
     finish_reason: Option<FinishReason>,
@@ -309,9 +322,12 @@ impl ChatCompletionsDecoder {
         Self {
             provider: provider.into(),
             started: false,
+            response_id: None,
+            model: None,
             reasoning_index: None,
             text_index: None,
             tool_indices: BTreeMap::new(),
+            tool_identities: BTreeMap::new(),
             open: BTreeSet::new(),
             next_index: 0,
             finish_reason: None,
@@ -332,11 +348,29 @@ impl ChatCompletionsDecoder {
 
     /// Decodes one chunk without allocating for the common event count.
     pub(crate) fn decode_compact(&mut self, payload: Value) -> Result<ChatEvents, ModelError> {
+        if let Some(error) = payload.get("error").filter(|value| !value.is_null()) {
+            return Err(chat_stream_error(&self.provider, error));
+        }
         let mut events = ChatEvents::new();
+        self.validate_chunk_identity(&payload)?;
+        let choices = payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .ok_or_else(|| protocol("chat chunk field `choices` must be an array"))?;
+        if self.finish_reason.is_some() && !choices.is_empty() {
+            return Err(protocol(
+                "chat content arrived after a terminal finish reason",
+            ));
+        }
         if !self.started {
             events.push(ModelStreamEvent::ResponseStarted {
-                id: payload.get("id").and_then(Value::as_str).map(String::from),
-                model: ModelRef::new(self.provider.clone(), required_string(&payload, "model")?),
+                id: self.response_id.clone(),
+                model: ModelRef::new(
+                    self.provider.clone(),
+                    self.model
+                        .as_deref()
+                        .ok_or_else(|| protocol("chat chunk is missing model identity"))?,
+                ),
             });
             self.started = true;
         }
@@ -344,10 +378,6 @@ impl ChatCompletionsDecoder {
             self.usage = chat_usage(usage);
             events.push(ModelStreamEvent::UsageUpdated { usage: self.usage });
         }
-        let choices = payload
-            .get("choices")
-            .and_then(Value::as_array)
-            .ok_or_else(|| protocol("chat chunk field `choices` must be an array"))?;
         for choice in choices {
             if choice.get("index").and_then(Value::as_u64).unwrap_or(0) != 0 {
                 return Err(protocol(
@@ -377,6 +407,15 @@ impl ChatCompletionsDecoder {
                 }
             }
             if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+                if reason == "error" || choice.get("error").is_some_and(|error| !error.is_null()) {
+                    return Err(chat_stream_error(
+                        &self.provider,
+                        choice.get("error").unwrap_or(choice),
+                    ));
+                }
+                if self.finish_reason.is_some() {
+                    return Err(protocol("chat stream emitted more than one finish reason"));
+                }
                 self.finish_reason = Some(chat_finish_reason(reason));
             }
         }
@@ -388,6 +427,29 @@ impl ChatCompletionsDecoder {
             },
         });
         Ok(events)
+    }
+
+    fn validate_chunk_identity(&mut self, payload: &Value) -> Result<(), ModelError> {
+        let model = required_string(payload, "model")?;
+        if let Some(expected) = &self.model {
+            if expected != model {
+                return Err(protocol(
+                    "chat stream changed model identity between chunks",
+                ));
+            }
+        } else {
+            self.model = Some(model.into());
+        }
+        if let Some(id) = payload.get("id").and_then(Value::as_str) {
+            if let Some(expected) = &self.response_id {
+                if expected != id {
+                    return Err(protocol("chat stream changed response ID between chunks"));
+                }
+            } else {
+                self.response_id = Some(id.into());
+            }
+        }
+        Ok(())
     }
 
     /// Finalizes a stream after `[DONE]` or a clean EOF.
@@ -462,21 +524,35 @@ impl ChatCompletionsDecoder {
             .and_then(Value::as_u64)
             .ok_or_else(|| protocol("tool-call delta is missing `index`"))?;
         let index = if let Some(index) = self.tool_indices.get(&call_index).copied() {
+            self.validate_tool_identity(call_index, call)?;
             index
         } else {
             let function = call.get("function").unwrap_or(&Value::Null);
+            let id = required_string(call, "id")?;
+            let name = required_string(function, "name")?;
             let index = self.allocate()?;
             self.tool_indices.insert(call_index, index);
+            self.tool_identities
+                .insert(call_index, (id.into(), name.into()));
             self.open.insert(index);
             events.push(ModelStreamEvent::ContentBlockStarted {
                 index,
                 kind: ContentBlockKind::ToolCall {
-                    id: required_string(call, "id")?.into(),
-                    name: required_string(function, "name")?.into(),
+                    id: id.into(),
+                    name: name.into(),
                 },
             });
             index
         };
+        if let Some(extra_content) = call.get("extra_content") {
+            events.push(ModelStreamEvent::ContentBlockMetadata {
+                index,
+                metadata: BTreeMap::from([(
+                    format!("{}.extra_content", self.provider),
+                    extra_content.clone(),
+                )]),
+            });
+        }
         if let Some(arguments) = call
             .get("function")
             .and_then(|function| function.get("arguments"))
@@ -486,6 +562,28 @@ impl ChatCompletionsDecoder {
                 index,
                 json: arguments.into(),
             });
+        }
+        Ok(())
+    }
+
+    fn validate_tool_identity(&self, call_index: u64, call: &Value) -> Result<(), ModelError> {
+        let Some((expected_id, expected_name)) = self.tool_identities.get(&call_index) else {
+            return Err(protocol("chat tool-call identity state is missing"));
+        };
+        if call
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id != expected_id)
+        {
+            return Err(protocol("chat tool-call ID changed between deltas"));
+        }
+        if call
+            .get("function")
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str)
+            .is_some_and(|name| name != expected_name)
+        {
+            return Err(protocol("chat tool-call name changed between deltas"));
         }
         Ok(())
     }
@@ -552,6 +650,29 @@ fn chat_finish_reason(reason: &str) -> FinishReason {
         "content_filter" => FinishReason::ContentFilter,
         other => FinishReason::Other(other.into()),
     }
+}
+
+fn chat_stream_error(provider: &str, value: &Value) -> ModelError {
+    let message = value
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("compatible Chat Completions stream failed");
+    let mut error = ModelError::local(ModelErrorKind::Provider, message);
+    error.provider = Some(provider.into());
+    if let Some(code) = value.get("code") {
+        error
+            .metadata
+            .insert(format!("{provider}.error.code"), code.clone());
+    }
+    if let Some(error_type) = value
+        .get("metadata")
+        .and_then(|metadata| metadata.get("error_type"))
+    {
+        error
+            .metadata
+            .insert(format!("{provider}.error.type"), error_type.clone());
+    }
+    error
 }
 
 fn required_string<'a>(value: &'a Value, name: &str) -> Result<&'a str, ModelError> {
@@ -771,6 +892,62 @@ mod tests {
     }
 
     #[test]
+    fn compatible_tool_metadata_round_trips_exactly() {
+        let chunks = [json!({
+            "id":"chat-gemini",
+            "model":"gemini-3",
+            "choices":[{"index":0,"delta":{"tool_calls":[{
+                "index":0,
+                "id":"call-1",
+                "type":"function",
+                "function":{"name":"lookup","arguments":"{}"},
+                "extra_content":{"google":{"thought_signature":"opaque"}}
+            }]},"finish_reason":"tool_calls"}]
+        })];
+        let response = decode_chunks_for("gemini", chunks);
+        let ContentPart::ToolCall(call) = &response.content[0] else {
+            panic!("fixture must decode a tool call");
+        };
+        assert_eq!(
+            call.metadata["gemini.extra_content"],
+            json!({"google":{"thought_signature":"opaque"}})
+        );
+
+        let message = Message::new(Role::Assistant, response.content).unwrap();
+        let request = ModelRequest::new(ModelRef::new("gemini", "gemini-3"), message);
+        let body = encode_chat_request(&request, "gemini").unwrap();
+        assert_eq!(
+            body["messages"][0]["tool_calls"][0]["extra_content"],
+            json!({"google":{"thought_signature":"opaque"}})
+        );
+        assert!(body["messages"][0]["content"].is_null());
+    }
+
+    #[test]
+    fn rejects_tool_identity_changes_between_deltas() {
+        let mut decoder = ChatCompletionsDecoder::new("compatible");
+        decoder
+            .decode(json!({
+                "id":"chat-1","model":"model",
+                "choices":[{"index":0,"delta":{"tool_calls":[{
+                    "index":0,"id":"call-1","function":{"name":"lookup","arguments":"{"}
+                }]},"finish_reason":null}]
+            }))
+            .unwrap();
+
+        assert!(
+            decoder
+                .decode(json!({
+                    "id":"chat-1","model":"model",
+                    "choices":[{"index":0,"delta":{"tool_calls":[{
+                        "index":0,"id":"call-2","function":{"arguments":"}"}
+                    }]},"finish_reason":"tool_calls"}]
+                }))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn normalizes_reasoning_and_detailed_usage() {
         let chunks = [
             json!({
@@ -838,6 +1015,76 @@ mod tests {
 
         assert_eq!(response.usage.reasoning_tokens, 1);
         assert_eq!(response.usage.cached_input_tokens, 2);
+    }
+
+    #[test]
+    fn terminal_chunk_allows_only_empty_usage_tail_chunks() {
+        let mut decoder = ChatCompletionsDecoder::new("qwen");
+        decoder
+            .decode(json!({
+                "id":"chat-1",
+                "model":"qwen-plus",
+                "choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}]
+            }))
+            .unwrap();
+        decoder
+            .decode(json!({
+                "id":"chat-1",
+                "model":"qwen-plus",
+                "choices":[],
+                "usage":{"prompt_tokens":2,"completion_tokens":1}
+            }))
+            .unwrap();
+
+        let error = decoder
+            .decode(json!({
+                "id":"chat-1",
+                "model":"qwen-plus",
+                "choices":[{"index":0,"delta":{"content":"late"},"finish_reason":null}]
+            }))
+            .unwrap_err();
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::Protocol);
+    }
+
+    #[test]
+    fn rejects_identity_changes_between_chunks() {
+        let mut decoder = ChatCompletionsDecoder::new("qwen");
+        decoder
+            .decode(json!({
+                "id":"chat-1","model":"qwen-plus",
+                "choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]
+            }))
+            .unwrap();
+
+        assert!(
+            decoder
+                .decode(json!({
+                    "id":"chat-2","model":"qwen-plus",
+                    "choices":[{"index":0,"delta":{"content":"b"},"finish_reason":"stop"}]
+                }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn classifies_in_stream_provider_errors_without_partial_success() {
+        let mut decoder = ChatCompletionsDecoder::new("openrouter");
+        let error = decoder
+            .decode(json!({
+                "error": {
+                    "code": 502,
+                    "message": "upstream disconnected",
+                    "metadata": {"error_type":"provider_unavailable"}
+                }
+            }))
+            .unwrap_err();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::Provider);
+        assert_eq!(error.provider.as_deref(), Some("openrouter"));
+        assert_eq!(
+            error.metadata["openrouter.error.type"],
+            "provider_unavailable"
+        );
     }
 
     fn decode_chunks(chunks: impl IntoIterator<Item = Value>) -> runifold_model::ModelResponse {

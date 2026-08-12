@@ -24,20 +24,7 @@ pub fn encode_request(request: &ModelRequest) -> Result<Value, ModelError> {
     if request.generation.seed.is_some() {
         return Err(unsupported("Gemini adapter does not support seed"));
     }
-    let mut system_parts = Vec::new();
-    let mut contents = Vec::new();
-    for message in &request.messages {
-        let parts = message
-            .content
-            .iter()
-            .map(|part| encode_part(part, message.role))
-            .collect::<Result<Vec<_>, _>>()?;
-        if message.role == Role::System {
-            system_parts.extend(parts);
-        } else {
-            contents.push(json!({"role": role(message.role)?, "parts": parts}));
-        }
-    }
+    let (system_parts, contents) = encode_messages(request)?;
     if contents.is_empty() {
         return Err(invalid("Gemini requires non-system content"));
     }
@@ -116,6 +103,60 @@ pub fn encode_request(request: &ModelRequest) -> Result<Value, ModelError> {
     Ok(Value::Object(body))
 }
 
+fn encode_messages(request: &ModelRequest) -> Result<(Vec<Value>, Vec<Value>), ModelError> {
+    let mut system_parts = Vec::new();
+    let mut contents = Vec::new();
+    for message in &request.messages {
+        let mut parts = Vec::new();
+        for part in &message.content {
+            if let ContentPart::ProviderOpaque(data) = part
+                && data.provider == "gemini"
+                && data.kind == "signed_part_replay"
+            {
+                replace_signed_part(&mut parts, &data.value)?;
+            } else {
+                parts.push(encode_part(part, message.role)?);
+            }
+        }
+        if message.role == Role::System {
+            system_parts.extend(parts);
+        } else {
+            contents.push(json!({"role": role(message.role)?, "parts": parts}));
+        }
+    }
+    Ok((system_parts, contents))
+}
+
+fn replace_signed_part(parts: &mut Vec<Value>, signed: &Value) -> Result<(), ModelError> {
+    if let Some(signed_text) = signed.get("text").and_then(Value::as_str) {
+        let previous = parts
+            .last_mut()
+            .and_then(|part| part.get_mut("text"))
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| invalid("Gemini signed text part has no preceding canonical text"))?;
+        let prefix = previous
+            .strip_suffix(signed_text)
+            .ok_or_else(|| {
+                invalid("Gemini signed text part does not match its canonical text suffix")
+            })?
+            .to_owned();
+        if prefix.is_empty() {
+            parts.pop();
+        } else if let Some(value) = parts.last_mut() {
+            value["text"] = Value::String(prefix);
+        }
+        parts.push(signed.clone());
+        return Ok(());
+    }
+    if parts.pop().is_none() {
+        return Err(invalid(
+            "Gemini signed-part replay is missing its preceding canonical part",
+        ));
+    }
+    parts.push(signed.clone());
+    Ok(())
+}
+
 fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
     match part {
         ContentPart::Text { text } => Ok(json!({"text":text})),
@@ -134,9 +175,15 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
             part,
             |text| json!({"text":text}),
         ),
-        ContentPart::ToolCall(call) if role == Role::Assistant => Ok(json!({
-            "functionCall":{"id":call.id,"name":call.name,"args":call.arguments}
-        })),
+        ContentPart::ToolCall(call) if role == Role::Assistant => {
+            let mut part = json!({
+                "functionCall":{"id":call.id,"name":call.name,"args":call.arguments}
+            });
+            if let Some(signature) = gemini_tool_signature(call)? {
+                part["thoughtSignature"] = Value::String(signature);
+            }
+            Ok(part)
+        }
         ContentPart::ToolResult(result) if matches!(role, Role::Tool | Role::User) => {
             encode_tool_result(result)
         }
@@ -161,6 +208,17 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
             "content cannot be represented by the Gemini adapter",
         )),
     }
+}
+
+fn gemini_tool_signature(call: &runifold_model::ToolCall) -> Result<Option<String>, ModelError> {
+    call.metadata
+        .get("gemini.thought_signature")
+        .map(|value| {
+            value.as_str().map(str::to_owned).ok_or_else(|| {
+                invalid("tool-call metadata `gemini.thought_signature` must be a string")
+            })
+        })
+        .transpose()
 }
 
 fn encode_media(source: &MediaSource) -> Result<Value, ModelError> {
@@ -308,8 +366,10 @@ mod tests {
     use runifold_model::{
         ContentPart, MediaSource, Message, ModelRef, ModelRequest, Role, ToolResult,
     };
+    use serde_json::json;
 
     use super::encode_request;
+    use crate::gemini::GeminiEventDecoder;
 
     #[test]
     fn encodes_native_contents_and_system_instruction() {
@@ -323,6 +383,67 @@ mod tests {
 
         assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be exact");
         assert_eq!(body["contents"][0]["role"], "user");
+    }
+
+    #[test]
+    fn replays_function_call_thought_signature_at_the_part_level() {
+        let call = runifold_model::ToolCall {
+            id: "call-1".into(),
+            name: "lookup".into(),
+            arguments: json!({}),
+            raw_arguments: Some("{}".into()),
+            metadata: std::collections::BTreeMap::from([(
+                "gemini.thought_signature".into(),
+                json!("opaque-signature"),
+            )]),
+        };
+        let message =
+            runifold_model::Message::new(Role::Assistant, vec![ContentPart::ToolCall(call)])
+                .unwrap();
+        let body = encode_request(&ModelRequest::new(
+            runifold_model::ModelRef::new("gemini", "gemini-3-test"),
+            message,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            body["contents"][0]["parts"][0]["thoughtSignature"],
+            "opaque-signature"
+        );
+    }
+
+    #[test]
+    fn signed_text_part_round_trips_without_merging_unsigned_text() {
+        let mut decoder = GeminiEventDecoder::new("gemini-3-test");
+        let events = decoder
+            .decode(&json!({
+                "candidates":[{
+                    "content":{"parts":[
+                        {"text":"unsigned prefix"},
+                        {"text":"signed suffix","thoughtSignature":"opaque"}
+                    ]},
+                    "finishReason":"STOP"
+                }]
+            }))
+            .unwrap();
+        let mut accumulator = runifold_model::ModelStreamAccumulator::new();
+        let response = events
+            .into_iter()
+            .find_map(|event| accumulator.push(event).unwrap())
+            .unwrap();
+        let message = Message::new(Role::Assistant, response.content).unwrap();
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("gemini", "gemini-3-test"),
+            message,
+        ))
+        .unwrap();
+
+        assert_eq!(body["contents"][0]["parts"][0]["text"], "unsigned prefix");
+        assert_eq!(body["contents"][0]["parts"][1]["text"], "signed suffix");
+        assert_eq!(
+            body["contents"][0]["parts"][1]["thoughtSignature"],
+            "opaque"
+        );
     }
 
     #[test]

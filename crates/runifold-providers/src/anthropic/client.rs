@@ -83,6 +83,12 @@ impl AnthropicClient {
                 ),
             ));
         }
+        if request.model.name.trim().is_empty() {
+            return Err(ModelError::local(
+                ModelErrorKind::InvalidRequest,
+                "Anthropic model identity cannot be empty",
+            ));
+        }
         let warnings = self.capabilities.validate_request(request, true)?;
         let body = encode_request(request, self.config.default_max_tokens)?;
         Ok((body, warnings))

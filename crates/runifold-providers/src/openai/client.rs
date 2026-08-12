@@ -133,6 +133,12 @@ impl OpenAiClient {
                 ),
             ));
         }
+        if request.model.name.trim().is_empty() {
+            return Err(ModelError::local(
+                ModelErrorKind::InvalidRequest,
+                "model identity cannot be empty",
+            ));
+        }
         let streaming = matches!(request.selected_response_mode(), ResponseMode::Streaming);
         let warnings = self.capabilities.validate_request(request, streaming)?;
         let body = match self.config.wire_protocol {
@@ -489,7 +495,10 @@ impl WireDecoder {
 
     fn finish(&mut self) -> Result<ChatEvents, ModelError> {
         match self {
-            Self::Responses(_) => Ok(ChatEvents::new()),
+            Self::Responses(decoder) => {
+                decoder.finish()?;
+                Ok(ChatEvents::new())
+            }
             Self::Chat(decoder) => decoder.finish_compact(),
         }
     }

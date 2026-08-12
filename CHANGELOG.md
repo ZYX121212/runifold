@@ -6,6 +6,57 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-12
+
+### Fixed
+
+- Preserved Responses `function_call` item identity and status across complete
+  and streaming decode, canonical accumulation, checkpoint serialization, and
+  subsequent request replay. Replayed calls now include `status: "completed"`
+  for OpenAI-compatible endpoints, including Ark/Doubao.
+- Treated `response.function_call_arguments.done` and
+  `response.output_item.done` as authoritative completion events, so providers
+  that omit argument deltas no longer produce an accidental empty `{}` call.
+- Retained completed provider-native Responses items such as Ark web-search and
+  reasoning calls as replayable opaque input items. Mixed native/function-tool
+  Agent turns no longer discard provider context before the next model call.
+- Rejected queued, in-progress, cancelled, incomplete, truncated, and
+  status-mismatched Responses function calls before they can reach an Agent
+  tool boundary. Agents now execute calls only from an explicit canonical
+  `ToolCalls` terminal response.
+- Made Responses streaming EOF fail closed unless `response.created` and one
+  matching terminal event were observed with no unfinished function calls.
+  Events arriving after completion are rejected instead of being silently
+  appended.
+- Applied the same post-terminal lifecycle guard to Anthropic, Gemini, and
+  Ollama stream decoders, and normalized a provider `Stop` containing complete
+  tool content to the canonical `ToolCalls` reason without hiding unknown or
+  explicit failure reasons.
+- Enforced Provider stream identity and lifecycle invariants: OpenAI Responses
+  sequence numbers, complete message status and closed content blocks;
+  Chat-Completions response/model and fragmented Tool identity; Gemini
+  response/model identity; and Ollama model identity now fail closed on drift.
+- Preserved Gemini thought signatures in both native GenerateContent and
+  OpenAI-compatible `extra_content` history replay, including signed non-Tool
+  parts. This prevents mandatory Gemini 3 signatures from disappearing between
+  a Tool call and its result turn.
+- Preserved Anthropic server Tool blocks for exact replay and continued
+  `pause_turn` responses within the Agent's existing budgets. Known content
+  blocks now retain non-empty start payloads, and terminal stop reasons cannot
+  be duplicated.
+- Classified OpenRouter-compatible errors embedded in successful HTTP streams
+  as Provider failures instead of partial success, and rejected late content
+  after the terminal Chat-Completions chunk while retaining usage-only tails.
+- Corrected the built-in Perplexity Sonar endpoint from the retired
+  `/chat/completions` path to the documented `/v1/sonar` path.
+- Encoded Chat-Completions assistant Tool-call messages with protocol-correct
+  `content: null` instead of an empty content array, and made Bedrock reject
+  unsupported start/stop-only content blocks rather than inventing empty text.
+- Bound Responses terminal envelopes to the response ID and model announced by
+  `response.created`, rejecting cross-response stream contamination.
+- Rejected blank model identities consistently at every HTTP Provider client
+  boundary before constructing a URL or opening transport.
+
 ## [0.5.5] - 2026-08-12
 
 - Added `CompletionRequirement` for Agent-level bounded recovery from empty

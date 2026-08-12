@@ -159,6 +159,24 @@ pub enum ModelStreamEvent {
         /// Namespaced terminal provider metadata.
         provider_metadata: BTreeMap<String, Value>,
     },
+    /// The provider's authoritative complete JSON argument text.
+    ToolArgumentsCompleted {
+        /// Target tool-call block index.
+        index: u32,
+        /// Complete raw JSON text, replacing any accumulated deltas.
+        json: String,
+    },
+    /// Namespaced metadata for an open or completed content block.
+    ///
+    /// Providers may learn final item metadata only after the delta-capable
+    /// block itself has completed. Accumulators therefore apply these updates
+    /// to either state without reopening the block.
+    ContentBlockMetadata {
+        /// Target block index.
+        index: u32,
+        /// Namespaced metadata to merge into the canonical content part.
+        metadata: BTreeMap<String, Value>,
+    },
 }
 
 #[derive(Debug)]
@@ -173,6 +191,7 @@ enum PartialBlock {
         id: String,
         name: String,
         arguments: String,
+        metadata: BTreeMap<String, Value>,
     },
     Refusal(String),
     Media {
@@ -211,6 +230,7 @@ impl PartialBlock {
                 id,
                 name,
                 arguments: String::new(),
+                metadata: BTreeMap::new(),
             },
             ContentBlockKind::Refusal => Self::Refusal(String::new()),
             ContentBlockKind::Image { media_type } => Self::Media {
@@ -245,6 +265,7 @@ impl PartialBlock {
                 id,
                 name,
                 arguments,
+                metadata,
             } => {
                 let parsed = if arguments.trim().is_empty() {
                     serde_json::json!({})
@@ -261,7 +282,7 @@ impl PartialBlock {
                     name,
                     arguments: parsed,
                     raw_arguments: Some(arguments),
-                    metadata: BTreeMap::new(),
+                    metadata,
                 }))
             }
             Self::Refusal(text) => Ok(ContentPart::Refusal { text }),
@@ -343,11 +364,15 @@ impl ModelStreamAccumulator {
                 Ok(None)
             }
             ModelStreamEvent::ToolArgumentsDelta { index, json } => {
-                match self.open_block_mut(index)? {
-                    PartialBlock::ToolCall { arguments, .. } => arguments.push_str(&json),
-                    _ => return Err(wrong_delta(index, "tool arguments")),
-                }
+                self.update_tool_arguments(index, json, false)?;
                 Ok(None)
+            }
+            ModelStreamEvent::ToolArgumentsCompleted { index, json } => {
+                self.update_tool_arguments(index, json, true)?;
+                Ok(None)
+            }
+            ModelStreamEvent::ContentBlockMetadata { index, metadata } => {
+                self.merge_block_metadata(index, metadata)
             }
             ModelStreamEvent::RefusalDelta { index, text } => {
                 match self.open_block_mut(index)? {
@@ -424,6 +449,21 @@ impl ModelStreamAccumulator {
         Ok(None)
     }
 
+    fn update_tool_arguments(
+        &mut self,
+        index: u32,
+        json: String,
+        complete: bool,
+    ) -> Result<(), ModelError> {
+        match self.open_block_mut(index)? {
+            PartialBlock::ToolCall { arguments, .. } if complete => *arguments = json,
+            PartialBlock::ToolCall { arguments, .. } => arguments.push_str(&json),
+            _ if complete => return Err(wrong_delta(index, "completed tool arguments")),
+            _ => return Err(wrong_delta(index, "tool arguments")),
+        }
+        Ok(())
+    }
+
     fn start_block(
         &mut self,
         index: u32,
@@ -457,9 +497,38 @@ impl ModelStreamAccumulator {
         Ok(None)
     }
 
+    fn merge_block_metadata(
+        &mut self,
+        index: u32,
+        metadata: BTreeMap<String, Value>,
+    ) -> Result<Option<ModelResponse>, ModelError> {
+        self.require_started()?;
+        if let Some(block) = self.open_blocks.get_mut(&index) {
+            return match block {
+                PartialBlock::ToolCall {
+                    metadata: current, ..
+                } => {
+                    current.extend(metadata);
+                    Ok(None)
+                }
+                _ => Err(wrong_delta(index, "content metadata")),
+            };
+        }
+        match self.content.get_mut(&index) {
+            Some(ContentPart::ToolCall(call)) => {
+                call.metadata.extend(metadata);
+                Ok(None)
+            }
+            Some(_) => Err(wrong_delta(index, "content metadata")),
+            None => Err(state_error(format!(
+                "content metadata targeted unknown block {index}"
+            ))),
+        }
+    }
+
     fn complete(
         &mut self,
-        finish_reason: FinishReason,
+        mut finish_reason: FinishReason,
         provider_metadata: BTreeMap<String, Value>,
     ) -> Result<Option<ModelResponse>, ModelError> {
         self.require_started()?;
@@ -475,6 +544,13 @@ impl ModelStreamAccumulator {
             )));
         }
         self.completed = true;
+        let has_tool_calls = self
+            .content
+            .values()
+            .any(|part| matches!(part, ContentPart::ToolCall(_)));
+        if has_tool_calls && matches!(finish_reason, FinishReason::Stop) {
+            finish_reason = FinishReason::ToolCalls;
+        }
         let model = self
             .model
             .clone()
@@ -579,6 +655,10 @@ mod tests {
                 index: 1,
                 json: "\"rust\"}".into(),
             },
+            ModelStreamEvent::ContentBlockMetadata {
+                index: 1,
+                metadata: BTreeMap::from([("test.status".into(), serde_json::json!("completed"))]),
+            },
             ModelStreamEvent::ContentBlockCompleted { index: 0 },
             ModelStreamEvent::ContentBlockCompleted { index: 1 },
             ModelStreamEvent::UsageUpdated {
@@ -604,7 +684,7 @@ mod tests {
                 name: "search".into(),
                 arguments: serde_json::json!({"query": "rust"}),
                 raw_arguments: Some("{\"query\":\"rust\"}".into()),
-                metadata: BTreeMap::new(),
+                metadata: BTreeMap::from([("test.status".into(), serde_json::json!("completed"),)]),
             })
         );
         assert_eq!(response.usage.input_tokens, 5);
@@ -695,6 +775,123 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.kind, ModelErrorKind::MalformedToolArguments);
+    }
+
+    #[test]
+    fn completed_arguments_replace_partial_deltas() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        accumulator.push(started()).unwrap();
+        accumulator
+            .push(ModelStreamEvent::ContentBlockStarted {
+                index: 0,
+                kind: ContentBlockKind::ToolCall {
+                    id: "call".into(),
+                    name: "tool".into(),
+                },
+            })
+            .unwrap();
+        accumulator
+            .push(ModelStreamEvent::ToolArgumentsDelta {
+                index: 0,
+                json: "{\"stale\":".into(),
+            })
+            .unwrap();
+        accumulator
+            .push(ModelStreamEvent::ToolArgumentsCompleted {
+                index: 0,
+                json: "{\"final\":true}".into(),
+            })
+            .unwrap();
+        accumulator
+            .push(ModelStreamEvent::ContentBlockCompleted { index: 0 })
+            .unwrap();
+        let response = accumulator.push(completed()).unwrap().unwrap();
+
+        let ContentPart::ToolCall(call) = &response.content[0] else {
+            panic!("fixture must produce a tool call");
+        };
+        assert_eq!(call.arguments, serde_json::json!({"final": true}));
+        assert_eq!(call.raw_arguments.as_deref(), Some("{\"final\":true}"));
+    }
+
+    #[test]
+    fn tool_content_normalizes_stop_reason() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        accumulator.push(started()).unwrap();
+        accumulator
+            .push(ModelStreamEvent::ContentPartCompleted {
+                index: 0,
+                part: ContentPart::ToolCall(ToolCall {
+                    id: "call".into(),
+                    name: "tool".into(),
+                    arguments: serde_json::json!({}),
+                    raw_arguments: Some("{}".into()),
+                    metadata: BTreeMap::new(),
+                }),
+            })
+            .unwrap();
+        let response = accumulator.push(completed()).unwrap().unwrap();
+
+        assert_eq!(response.finish_reason, FinishReason::ToolCalls);
+    }
+
+    #[test]
+    fn tool_content_does_not_hide_unknown_finish_reason() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        accumulator
+            .push(ModelStreamEvent::ResponseStarted {
+                id: None,
+                model: ModelRef::new("test", "model"),
+            })
+            .unwrap();
+        accumulator
+            .push(ModelStreamEvent::ContentPartCompleted {
+                index: 0,
+                part: ContentPart::ToolCall(ToolCall {
+                    id: "call-1".into(),
+                    name: "lookup".into(),
+                    arguments: serde_json::json!({}),
+                    raw_arguments: Some("{}".into()),
+                    metadata: BTreeMap::new(),
+                }),
+            })
+            .unwrap();
+        let response = accumulator
+            .push(ModelStreamEvent::ResponseCompleted {
+                finish_reason: FinishReason::Unknown,
+                provider_metadata: BTreeMap::new(),
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(response.finish_reason, FinishReason::Unknown);
+    }
+
+    #[test]
+    fn explicit_failure_reason_is_not_hidden_by_tool_content() {
+        let mut accumulator = ModelStreamAccumulator::new();
+        accumulator.push(started()).unwrap();
+        accumulator
+            .push(ModelStreamEvent::ContentPartCompleted {
+                index: 0,
+                part: ContentPart::ToolCall(ToolCall {
+                    id: "partial".into(),
+                    name: "tool".into(),
+                    arguments: serde_json::json!({}),
+                    raw_arguments: Some("{}".into()),
+                    metadata: BTreeMap::new(),
+                }),
+            })
+            .unwrap();
+        let response = accumulator
+            .push(ModelStreamEvent::ResponseCompleted {
+                finish_reason: FinishReason::Length,
+                provider_metadata: BTreeMap::new(),
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(response.finish_reason, FinishReason::Length);
     }
 
     #[test]

@@ -593,12 +593,7 @@ impl Agent {
             )
             .await;
             emit_usage(observer, run).await;
-            record_domain(
-                run,
-                "turn.started",
-                serde_json::json!({"agent": self.name, "turn": progress.turns}),
-                caused_by,
-            )?;
+            self.record_turn_started(run, progress.turns, caused_by)?;
 
             let response = self
                 .invoke_model(
@@ -612,7 +607,16 @@ impl Agent {
                 .await?;
 
             let calls = tool_calls_from(&response.content);
+            validate_tool_call_completion(&calls, &response.finish_reason)?;
             if calls.is_empty() {
+                if self.continue_provider_turn(
+                    response.clone(),
+                    &mut progress,
+                    run,
+                    &mut checkpoint,
+                )? {
+                    continue;
+                }
                 if matches!(
                     response.finish_reason,
                     runifold_model::FinishReason::ToolCalls
@@ -658,6 +662,43 @@ impl Agent {
                 &self.checkpoint_state(&progress, run, AgentCheckpointPhase::ReadyForTurn),
             )?;
         }
+    }
+
+    fn record_turn_started(
+        &self,
+        run: &RunContext,
+        turn: u32,
+        caused_by: Option<EventId>,
+    ) -> Result<(), AgentError> {
+        record_domain(
+            run,
+            "turn.started",
+            serde_json::json!({"agent": self.name, "turn": turn}),
+            caused_by,
+        )
+    }
+
+    fn continue_provider_turn(
+        &self,
+        response: ModelResponse,
+        progress: &mut AgentProgress,
+        run: &RunContext,
+        checkpoint: &mut Option<&mut CheckpointCursor>,
+    ) -> Result<bool, AgentError> {
+        if !matches!(
+            &response.finish_reason,
+            runifold_model::FinishReason::Other(reason) if reason == "pause_turn"
+        ) {
+            return Ok(false);
+        }
+        let assistant = Message::new(Role::Assistant, response.content)
+            .map_err(|error| AgentError::Protocol(error.to_string()))?;
+        progress.transcript.push(assistant);
+        save_checkpoint(
+            checkpoint,
+            &self.checkpoint_state(progress, run, AgentCheckpointPhase::ReadyForTurn),
+        )?;
+        Ok(true)
     }
 
     async fn invoke_model(
@@ -991,6 +1032,18 @@ impl Agent {
         }
         Ok(())
     }
+}
+
+fn validate_tool_call_completion(
+    calls: &[ToolCall],
+    finish_reason: &runifold_model::FinishReason,
+) -> Result<(), AgentError> {
+    if !calls.is_empty() && !matches!(finish_reason, runifold_model::FinishReason::ToolCalls) {
+        return Err(AgentError::Protocol(format!(
+            "refusing to execute tool calls from a {finish_reason:?} model response"
+        )));
+    }
+    Ok(())
 }
 
 fn checkpoint_payload_error(message: &str) -> AgentError {

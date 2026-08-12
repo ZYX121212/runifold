@@ -40,6 +40,18 @@ request encoding, fragmented stream decoding, provider identity, tools,
 reasoning fields, and detailed token usage are deterministic tests; it does not
 claim a live request against the vendor on every CI run.
 
+Built-in endpoint profiles are contract tests, not aliases assembled at call
+sites. In particular, Perplexity Sonar uses its current `/v1/sonar` path while
+still decoding the documented Chat-Completions response shape. Custom or
+gateway endpoints retain caller-owned paths and contracts.
+
+Streaming decoders are strict state machines. They reject response/model
+identity drift, duplicated or out-of-order terminal state, unfinished content,
+and content arriving after completion. Provider-private continuation data is
+retained where the official protocol requires exact history replay: OpenAI and
+Ark output items, Anthropic server-Tool blocks, and Gemini thought signatures
+in both native and OpenAI-compatible forms.
+
 Ark additionally has a manually dispatched live gate covering strict JSON
 Schema, native `web_search`, mixed native/function tools, and both streamed and
 complete Responses delivery. Its artifact excludes credentials and response

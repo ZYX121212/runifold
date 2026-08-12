@@ -281,6 +281,131 @@ fn completes_a_model_tool_model_loop() {
 }
 
 #[test]
+fn agent_preserves_provider_tool_call_metadata_for_the_next_turn() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "one",
+        vec![ContentPart::ToolCall(ToolCall {
+            id: "call_ark".into(),
+            name: "echo".into(),
+            arguments: json!({"value": 7}),
+            raw_arguments: Some("{\"value\":7}".into()),
+            metadata: BTreeMap::from([
+                ("ark.id".into(), json!("fc_ark")),
+                ("ark.status".into(), json!("completed")),
+            ]),
+        })],
+        FinishReason::ToolCalls,
+    ));
+    model.enqueue(response_events(
+        "two",
+        vec![ContentPart::text("done")],
+        FinishReason::Stop,
+    ));
+    let tool = Arc::new(EchoTool::new());
+    let mut registry = ToolRegistry::new();
+    registry.register(tool.clone()).unwrap();
+    let mut capabilities = CapabilitySet::new();
+    capabilities.grant(tool.descriptor().capability());
+    let run = RunContext::root(
+        BudgetTracker::new(Budget {
+            turns: Some(2),
+            tool_calls: Some(1),
+            ..Budget::default()
+        }),
+        capabilities,
+    );
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("ark", "doubao"),
+    )
+    .tools(registry);
+
+    futures_executor::block_on(agent.run("start", &run)).unwrap();
+
+    let requests = model.recorded_requests();
+    let replayed = requests[1]
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|part| match part {
+            ContentPart::ToolCall(call) => Some(call),
+            _ => None,
+        })
+        .expect("the next turn must retain the assistant tool call");
+    assert_eq!(replayed.metadata["ark.id"], "fc_ark");
+    assert_eq!(replayed.metadata["ark.status"], "completed");
+}
+
+#[test]
+fn agent_continues_provider_pause_turn_with_preserved_assistant_context() {
+    let model = ScriptedModel::new();
+    let opaque = ContentPart::ProviderOpaque(runifold_model::ProviderData {
+        provider: "anthropic".into(),
+        kind: "content_block".into(),
+        value: json!({
+            "type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"Rust"}
+        }),
+    });
+    model.enqueue(response_events(
+        "paused",
+        vec![opaque.clone()],
+        FinishReason::Other("pause_turn".into()),
+    ));
+    model.enqueue(response_events(
+        "done",
+        vec![ContentPart::text("complete")],
+        FinishReason::Stop,
+    ));
+    let run = RunContext::root(
+        BudgetTracker::new(Budget {
+            turns: Some(2),
+            ..Budget::default()
+        }),
+        CapabilitySet::new(),
+    );
+    let agent = Agent::new(
+        "researcher",
+        Arc::new(model.clone()),
+        ModelRef::new("anthropic", "claude"),
+    );
+
+    let outcome = futures_executor::block_on(agent.run("research", &run)).unwrap();
+
+    assert_eq!(outcome.turns, 2);
+    let requests = model.recorded_requests();
+    assert!(requests[1].messages.iter().any(|message| {
+        message.role == Role::Assistant && message.content == vec![opaque.clone()]
+    }));
+}
+
+#[test]
+fn agent_never_executes_tool_calls_from_a_truncated_response() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "partial",
+        vec![tool_call("partial_call", "echo", json!({"value": 7}))],
+        FinishReason::Length,
+    ));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = Arc::new(CountingTool::new(calls.clone()));
+    let mut registry = ToolRegistry::new();
+    registry.register(tool.clone()).unwrap();
+    let mut capabilities = CapabilitySet::new();
+    capabilities.grant(tool.descriptor().capability());
+    let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+    let agent =
+        Agent::new("worker", Arc::new(model), ModelRef::new("test", "scripted")).tools(registry);
+
+    let error = futures_executor::block_on(agent.run("start", &run)).unwrap_err();
+
+    assert!(matches!(error, AgentError::Protocol(message) if message.contains("Length")));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(run.budget().usage().tool_calls, 0);
+}
+
+#[test]
 fn empty_terminal_response_is_repaired_inside_the_agent_loop() {
     let model = ScriptedModel::new();
     model.enqueue(response_events("empty", Vec::new(), FinishReason::Stop));

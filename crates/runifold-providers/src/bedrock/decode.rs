@@ -54,6 +54,16 @@ impl BedrockEventDecoder {
         &mut self,
         output: ConverseStreamOutput,
     ) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        if self.phase == MessagePhase::Completed {
+            return Err(protocol("Bedrock event arrived after response completion"));
+        }
+        if self.phase == MessagePhase::Stopped
+            && !matches!(&output, ConverseStreamOutput::Metadata(_))
+        {
+            return Err(protocol(
+                "Bedrock emitted a non-metadata event after messageStop",
+            ));
+        }
         let (name, payload, mut events) = match output {
             ConverseStreamOutput::MessageStart(event) => {
                 if self.phase != MessagePhase::AwaitingStart {
@@ -122,11 +132,9 @@ impl BedrockEventDecoder {
                 let index = index(event.content_block_index())?;
                 let mut events = Vec::new();
                 if self.pending_blocks.remove(&index) {
-                    events.push(ModelStreamEvent::ContentBlockStarted {
-                        index,
-                        kind: ContentBlockKind::Text,
-                    });
-                    self.open_blocks.insert(index);
+                    return Err(protocol(format!(
+                        "Bedrock stopped content block {index} before emitting a supported delta"
+                    )));
                 }
                 if !self.open_blocks.remove(&index) {
                     return Err(protocol(format!(
@@ -162,6 +170,9 @@ impl BedrockEventDecoder {
             }
             ConverseStreamOutput::Metadata(event) => {
                 self.require_message_started()?;
+                if self.saw_metadata {
+                    return Err(protocol("Bedrock emitted metadata more than once"));
+                }
                 self.saw_metadata = true;
                 let usage = event.usage().map(decode_usage).unwrap_or_default();
                 let payload = json!({
@@ -489,5 +500,36 @@ mod tests {
                 .all(|event| event.provider == "bedrock")
         );
         assert!(decoder.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rejects_a_block_without_a_supported_delta() {
+        let mut decoder = BedrockEventDecoder::new("model");
+        decoder
+            .decode(ConverseStreamOutput::MessageStart(
+                MessageStartEvent::builder()
+                    .role(ConversationRole::Assistant)
+                    .build()
+                    .unwrap(),
+            ))
+            .unwrap();
+        decoder
+            .decode(ConverseStreamOutput::ContentBlockStart(
+                ContentBlockStartEvent::builder()
+                    .content_block_index(0)
+                    .build()
+                    .unwrap(),
+            ))
+            .unwrap();
+
+        let error = decoder
+            .decode(ConverseStreamOutput::ContentBlockStop(
+                ContentBlockStopEvent::builder()
+                    .content_block_index(0)
+                    .build()
+                    .unwrap(),
+            ))
+            .unwrap_err();
+        assert!(error.message.contains("supported delta"));
     }
 }

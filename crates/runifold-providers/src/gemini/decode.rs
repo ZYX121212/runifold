@@ -14,7 +14,11 @@ pub struct GeminiEventDecoder {
     started: bool,
     completed: bool,
     open_blocks: BTreeSet<u32>,
+    next_index: u32,
+    text_index: Option<u32>,
     model: String,
+    response_id: Option<String>,
+    model_version: Option<String>,
 }
 
 impl GeminiEventDecoder {
@@ -32,10 +36,14 @@ impl GeminiEventDecoder {
     ///
     /// Returns an error for malformed responses or provider-reported blocks.
     pub fn decode(&mut self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        if self.completed {
+            return Err(protocol("Gemini chunk arrived after response completion"));
+        }
         if let Some(error) = payload.get("error") {
             return Err(provider_error(error));
         }
         validate_prompt(payload)?;
+        self.validate_identity(payload)?;
         let mut events = Vec::new();
         if !self.started {
             self.started = true;
@@ -86,10 +94,8 @@ impl GeminiEventDecoder {
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        for (part_position, part) in parts.iter().enumerate() {
-            let index = u32::try_from(part_position)
-                .map_err(|_| protocol("Gemini part index exceeds u32"))?;
-            decode_part(self, part, index, events)?;
+        for part in parts {
+            decode_part(self, part, events)?;
         }
         if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
             for index in std::mem::take(&mut self.open_blocks) {
@@ -102,6 +108,42 @@ impl GeminiEventDecoder {
             self.completed = true;
         }
         Ok(())
+    }
+
+    fn allocate(&mut self) -> Result<u32, ModelError> {
+        let index = self.next_index;
+        self.next_index = self
+            .next_index
+            .checked_add(1)
+            .ok_or_else(|| protocol("Gemini content index overflow"))?;
+        Ok(index)
+    }
+
+    fn validate_identity(&mut self, payload: &Value) -> Result<(), ModelError> {
+        validate_stable_string(
+            &mut self.response_id,
+            payload.get("responseId").and_then(Value::as_str),
+            "response ID",
+        )?;
+        validate_stable_string(
+            &mut self.model_version,
+            payload.get("modelVersion").and_then(Value::as_str),
+            "model version",
+        )
+    }
+
+    fn text_index(&mut self, events: &mut Vec<ModelStreamEvent>) -> Result<u32, ModelError> {
+        if let Some(index) = self.text_index {
+            return Ok(index);
+        }
+        let index = self.allocate()?;
+        self.text_index = Some(index);
+        self.open_blocks.insert(index);
+        events.push(ModelStreamEvent::ContentBlockStarted {
+            index,
+            kind: ContentBlockKind::Text,
+        });
+        Ok(index)
     }
 
     /// Ensures the body ended after a terminal candidate.
@@ -120,22 +162,43 @@ impl GeminiEventDecoder {
     }
 }
 
+fn validate_stable_string(
+    state: &mut Option<String>,
+    incoming: Option<&str>,
+    label: &str,
+) -> Result<(), ModelError> {
+    let Some(incoming) = incoming else {
+        return Ok(());
+    };
+    if state
+        .as_deref()
+        .is_some_and(|expected| expected != incoming)
+    {
+        return Err(protocol(format!(
+            "Gemini stream changed {label} between chunks"
+        )));
+    }
+    state.get_or_insert_with(|| incoming.into());
+    Ok(())
+}
+
 fn decode_part(
     decoder: &mut GeminiEventDecoder,
     part: &Value,
-    index: u32,
     events: &mut Vec<ModelStreamEvent>,
 ) -> Result<(), ModelError> {
     if let Some(call) = part.get("functionCall") {
+        let index = decoder.allocate()?;
         events.push(ModelStreamEvent::ContentPartCompleted {
             index,
-            part: decode_tool_call(call, index)?,
+            part: decode_tool_call(call, part, index)?,
         });
     } else if part
         .get("thought")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
+        let index = decoder.allocate()?;
         events.push(ModelStreamEvent::ContentPartCompleted {
             index,
             part: ContentPart::Reasoning(ReasoningPart {
@@ -149,27 +212,27 @@ fn decode_part(
             }),
         });
     } else if let Some(text) = part.get("text").and_then(Value::as_str) {
-        if decoder.open_blocks.insert(index) {
-            events.push(ModelStreamEvent::ContentBlockStarted {
+        let signature = thought_signature(part);
+        if !text.is_empty() {
+            let index = decoder.text_index(events)?;
+            events.push(ModelStreamEvent::TextDelta {
                 index,
-                kind: ContentBlockKind::Text,
+                text: text.into(),
             });
         }
-        events.push(ModelStreamEvent::TextDelta {
-            index,
-            text: text.into(),
-        });
+        preserve_signed_part(decoder, part, signature, !text.is_empty(), events)?;
     } else if let Some(inline) = part.get("inlineData") {
+        let index = decoder.allocate()?;
         let media_type = required_string(inline, "mimeType")?.to_owned();
-        let kind = media_kind(&media_type)?;
-        if decoder.open_blocks.insert(index) {
-            events.push(ModelStreamEvent::ContentBlockStarted { index, kind });
-        }
-        events.push(ModelStreamEvent::BinaryDelta {
+        let data = required_string(inline, "data")?.to_owned();
+        let content = media_part(&media_type, data)?;
+        events.push(ModelStreamEvent::ContentPartCompleted {
             index,
-            data: required_string(inline, "data")?.to_owned(),
+            part: content,
         });
+        preserve_signed_part(decoder, part, thought_signature(part), true, events)?;
     } else if let Some(file) = part.get("fileData") {
+        let index = decoder.allocate()?;
         events.push(ModelStreamEvent::ContentPartCompleted {
             index,
             part: ContentPart::ResourceLink {
@@ -184,32 +247,62 @@ fn decode_part(
                 size: None,
             },
         });
+        preserve_signed_part(decoder, part, thought_signature(part), true, events)?;
     } else {
         events.push(provider_event("part", part.clone()));
     }
     Ok(())
 }
 
-fn media_kind(media_type: &str) -> Result<ContentBlockKind, ModelError> {
+fn thought_signature(part: &Value) -> Option<&str> {
+    part.get("thoughtSignature")
+        .or_else(|| part.get("thought_signature"))
+        .and_then(Value::as_str)
+}
+
+fn preserve_signed_part(
+    decoder: &mut GeminiEventDecoder,
+    part: &Value,
+    signature: Option<&str>,
+    replaces_previous: bool,
+    events: &mut Vec<ModelStreamEvent>,
+) -> Result<(), ModelError> {
+    if signature.is_none() {
+        return Ok(());
+    }
+    let index = decoder.allocate()?;
+    events.push(ModelStreamEvent::ContentPartCompleted {
+        index,
+        part: ContentPart::ProviderOpaque(runifold_model::ProviderData {
+            provider: "gemini".into(),
+            kind: if replaces_previous {
+                "signed_part_replay".into()
+            } else {
+                "part".into()
+            },
+            value: part.clone(),
+        }),
+    });
+    Ok(())
+}
+
+fn media_part(media_type: &str, data: String) -> Result<ContentPart, ModelError> {
+    let source = runifold_model::MediaSource::Base64 {
+        media_type: media_type.into(),
+        data,
+    };
     if media_type.starts_with("image/") {
-        Ok(ContentBlockKind::Image {
-            media_type: media_type.into(),
-        })
+        Ok(ContentPart::Image { source })
     } else if media_type.starts_with("audio/") {
-        Ok(ContentBlockKind::Audio {
-            media_type: media_type.into(),
-        })
+        Ok(ContentPart::Audio { source })
     } else if media_type.contains('/') {
-        Ok(ContentBlockKind::Document {
-            media_type: media_type.into(),
-            name: None,
-        })
+        Ok(ContentPart::Document { source, name: None })
     } else {
         Err(protocol("Gemini inlineData MIME type is invalid"))
     }
 }
 
-fn decode_tool_call(call: &Value, index: u32) -> Result<ContentPart, ModelError> {
+fn decode_tool_call(call: &Value, part: &Value, index: u32) -> Result<ContentPart, ModelError> {
     let name = required_string(call, "name")?;
     let arguments = call
         .get("args")
@@ -219,12 +312,23 @@ fn decode_tool_call(call: &Value, index: u32) -> Result<ContentPart, ModelError>
         .get("id")
         .and_then(Value::as_str)
         .map_or_else(|| format!("gemini-call-{index}"), String::from);
+    let mut metadata = BTreeMap::new();
+    if let Some(signature) = part
+        .get("thoughtSignature")
+        .or_else(|| part.get("thought_signature"))
+        .and_then(Value::as_str)
+    {
+        metadata.insert(
+            "gemini.thought_signature".into(),
+            Value::String(signature.into()),
+        );
+    }
     Ok(ContentPart::ToolCall(ToolCall {
         id,
         name: name.into(),
         raw_arguments: Some(arguments.to_string()),
         arguments,
-        metadata: BTreeMap::new(),
+        metadata,
     }))
 }
 
@@ -255,7 +359,8 @@ fn finish_reason(reason: &str) -> FinishReason {
     match reason {
         "STOP" => FinishReason::Stop,
         "MAX_TOKENS" => FinishReason::Length,
-        "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" => FinishReason::ContentFilter,
+        "SAFETY" | "RECITATION" | "LANGUAGE" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII"
+        | "IMAGE_SAFETY" => FinishReason::ContentFilter,
         "MALFORMED_FUNCTION_CALL" => FinishReason::Error,
         other => FinishReason::Other(other.into()),
     }
@@ -395,5 +500,58 @@ mod tests {
             } if media_type == "image/png" && data == "aW1hZ2U="
         ));
         decoder.finish().unwrap();
+    }
+
+    #[test]
+    fn rejects_chunks_after_terminal_candidate() {
+        let mut decoder = GeminiEventDecoder::new("gemini-test");
+        decoder
+            .decode(&json!({"candidates":[{"finishReason":"STOP"}]}))
+            .unwrap();
+
+        assert!(decoder.decode(&json!({"candidates":[]})).is_err());
+    }
+
+    #[test]
+    fn rejects_response_identity_changes_between_chunks() {
+        let mut decoder = GeminiEventDecoder::new("gemini-test");
+        decoder
+            .decode(&json!({"responseId":"one","modelVersion":"v1","candidates":[]}))
+            .unwrap();
+
+        assert!(
+            decoder
+                .decode(&json!({"responseId":"two","modelVersion":"v1","candidates":[]}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn preserves_function_call_thought_signature_for_replay() {
+        let mut decoder = GeminiEventDecoder::new("gemini-3-test");
+        let events = decoder
+            .decode(&json!({
+                "candidates":[{
+                    "content":{"parts":[{
+                        "functionCall":{"id":"call-1","name":"lookup","args":{}},
+                        "thoughtSignature":"opaque-signature"
+                    }]},
+                    "finishReason":"STOP"
+                }]
+            }))
+            .unwrap();
+        let mut accumulator = ModelStreamAccumulator::new();
+        let response = events
+            .into_iter()
+            .find_map(|event| accumulator.push(event).unwrap())
+            .unwrap();
+        let ContentPart::ToolCall(call) = &response.content[0] else {
+            panic!("fixture must decode a function call");
+        };
+
+        assert_eq!(
+            call.metadata["gemini.thought_signature"],
+            "opaque-signature"
+        );
     }
 }

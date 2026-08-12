@@ -122,6 +122,9 @@ impl Model for GeminiClient {
             if request.model.provider != "gemini" {
                 return Err(invalid("Gemini client requires provider `gemini`"));
             }
+            if request.model.name.trim().is_empty() {
+                return Err(invalid("Gemini model identity cannot be empty"));
+            }
             let warnings = self.capabilities.validate_request(&request, true)?;
             let cancellation = context.cancellation().clone();
             let deadline = context.deadline();

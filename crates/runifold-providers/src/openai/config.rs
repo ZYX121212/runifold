@@ -125,6 +125,13 @@ impl OpenAiCompatibleProfile {
             _ => OpenAiWireProtocol::ChatCompletions,
         }
     }
+
+    const fn endpoint_path(self) -> Option<&'static str> {
+        match self {
+            Self::Perplexity => Some("v1/sonar"),
+            _ => None,
+        }
+    }
 }
 
 /// Configuration error detected before creating an `OpenAI` client.
@@ -166,6 +173,7 @@ pub struct OpenAiConfig {
     pub(crate) base_url: Url,
     pub(crate) provider: String,
     pub(crate) wire_protocol: OpenAiWireProtocol,
+    endpoint_path_override: Option<String>,
     pub(crate) organization: Option<String>,
     pub(crate) project: Option<String>,
     pub(crate) application_url: Option<Url>,
@@ -191,6 +199,7 @@ impl OpenAiConfig {
             base_url,
             provider: "openai".into(),
             wire_protocol: OpenAiWireProtocol::Responses,
+            endpoint_path_override: None,
             organization: None,
             project: None,
             application_url: None,
@@ -236,6 +245,10 @@ impl OpenAiConfig {
             profile.base_url(),
             profile.wire_protocol(),
         )
+        .map(|mut config| {
+            config.endpoint_path_override = profile.endpoint_path().map(String::from);
+            config
+        })
     }
 
     /// Creates a custom endpoint without assuming Bearer authentication.
@@ -260,6 +273,7 @@ impl OpenAiConfig {
             base_url: default_base_url,
             provider,
             wire_protocol,
+            endpoint_path_override: None,
             organization: None,
             project: None,
             application_url: None,
@@ -420,10 +434,13 @@ impl OpenAiConfig {
     }
 
     pub(crate) fn endpoint_url(&self) -> Url {
-        let path = match self.wire_protocol {
-            OpenAiWireProtocol::Responses => "responses",
-            OpenAiWireProtocol::ChatCompletions => "chat/completions",
-        };
+        let path = self
+            .endpoint_path_override
+            .as_deref()
+            .unwrap_or(match self.wire_protocol {
+                OpenAiWireProtocol::Responses => "responses",
+                OpenAiWireProtocol::ChatCompletions => "chat/completions",
+            });
         let mut endpoint = self
             .base_url
             .join(path)
@@ -485,6 +502,7 @@ impl fmt::Debug for OpenAiConfig {
             .field("base_url", &self.base_url)
             .field("provider", &self.provider)
             .field("wire_protocol", &self.wire_protocol)
+            .field("endpoint_path_override", &self.endpoint_path_override)
             .field("organization", &self.organization)
             .field("project", &self.project)
             .field("application_url", &self.application_url)
@@ -705,7 +723,7 @@ mod tests {
             (
                 OpenAiCompatibleProfile::Perplexity,
                 "perplexity",
-                "https://api.perplexity.ai/chat/completions",
+                "https://api.perplexity.ai/v1/sonar",
             ),
             (
                 OpenAiCompatibleProfile::MiniMaxInternational,
