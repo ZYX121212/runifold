@@ -26,6 +26,8 @@ use runifold_tool::{
     Tool, ToolContext, ToolDescriptor, ToolError, ToolErrorKind, ToolFuture, ToolOutput,
     ToolRegistry,
 };
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{AgentStreamEvent, CallableKind};
@@ -33,11 +35,16 @@ use crate::{AgentStreamEvent, CallableKind};
 use crate::{
     Agent, AgentCheckpoint, AgentCheckpointPhase, AgentConfig, AgentConversationError,
     AgentDescriptor, AgentError, AgentGateway, AgentRoute, AutomaticConversationSummary,
-    ConversationAppend, ConversationContextPolicy, ConversationId, ConversationStore,
-    ConversationSummaryBatch, ConversationSummaryPassLimit, ConversationVersion,
+    CompletionRequirement, ConversationAppend, ConversationContextPolicy, ConversationId,
+    ConversationStore, ConversationSummaryBatch, ConversationSummaryPassLimit, ConversationVersion,
     ConversationWindow, GatewayErrorKind, InMemoryConversationStore, MemoryNamespace, ResumePolicy,
-    ToolErrorPolicy,
+    TerminalRequirementFailureKind, ToolErrorPolicy,
 };
+
+#[derive(Debug, Deserialize, Eq, JsonSchema, PartialEq)]
+struct TypedAnswer {
+    value: u32,
+}
 
 #[derive(Debug)]
 struct EchoTool {
@@ -271,6 +278,294 @@ fn completes_a_model_tool_model_loop() {
                 Some(ContentPart::ToolResult(result)) if !result.is_error
             )
     }));
+}
+
+#[test]
+fn empty_terminal_response_is_repaired_inside_the_agent_loop() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events("empty", Vec::new(), FinishReason::Stop));
+    model.enqueue(response_events(
+        "repaired",
+        vec![ContentPart::text("done")],
+        FinishReason::Stop,
+    ));
+    let run = root_run(Budget {
+        turns: Some(2),
+        ..Budget::default()
+    });
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .completion_requirement(
+        CompletionRequirement::new()
+            .max_repairs(1)
+            .retry_empty_response(true),
+    );
+
+    let outcome = futures_executor::block_on(agent.run("start", &run)).unwrap();
+
+    assert_eq!(outcome.text(), "done");
+    assert_eq!(outcome.turns, 2);
+    assert_eq!(outcome.terminal_repairs(), 1);
+    assert_eq!(model.recorded_requests().len(), 2);
+    assert!(
+        message_text(model.recorded_requests()[1].messages.last().unwrap())
+            .contains("runifold_terminal_repair")
+    );
+}
+
+#[test]
+fn terminal_repair_observability_is_bounded_and_output_free() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "invalid",
+        vec![ContentPart::text("sensitive generated body")],
+        FinishReason::Stop,
+    ));
+    model.enqueue(response_events(
+        "valid",
+        vec![ContentPart::text("{\"value\":42}")],
+        FinishReason::Stop,
+    ));
+    let journal = InMemoryJournal::new();
+    let run = root_run(Budget::default()).with_journal(Arc::new(journal.clone()));
+    let agent = Agent::new("typed", Arc::new(model), ModelRef::new("test", "scripted"))
+        .completion_requirement(CompletionRequirement::new().max_repairs(1))
+        .into_structured::<TypedAnswer>("answer");
+
+    futures_executor::block_on(agent.run("answer", &run)).unwrap();
+
+    let events = journal.events();
+    let encoded = serde_json::to_string(&events).unwrap();
+    assert!(!encoded.contains("sensitive generated body"));
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            RunEventKind::Domain(event)
+                if event.name == "terminal_candidate.rejected"
+                    && event.payload["kind"] == "invalid_structured_output"
+        )
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            RunEventKind::Domain(event) if event.name == "terminal_repair.scheduled"
+        )
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.kind,
+            RunEventKind::Domain(event) if event.name == "completion_requirement.satisfied"
+        )
+    }));
+}
+
+#[test]
+fn empty_terminal_response_exhaustion_is_checkpointed_as_failure() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events("empty-1", Vec::new(), FinishReason::Stop));
+    model.enqueue(response_events("empty-2", Vec::new(), FinishReason::Stop));
+    let run = root_run(Budget::default());
+    let agent = Agent::new("worker", Arc::new(model), ModelRef::new("test", "scripted"))
+        .completion_requirement(
+            CompletionRequirement::new()
+                .max_repairs(1)
+                .retry_empty_response(true),
+        );
+    let checkpoint = AgentCheckpoint::new(Arc::new(InMemoryCheckpointStore::new()));
+
+    let error =
+        futures_executor::block_on(agent.run_checkpointed("start", &run, &checkpoint)).unwrap_err();
+    assert!(matches!(
+        error,
+        AgentError::EmptyTerminalResponse { attempts: 1 }
+    ));
+    let (_, state) = checkpoint.load().unwrap();
+    assert!(matches!(
+        state.phase,
+        AgentCheckpointPhase::TerminalRequirementFailed {
+            failure,
+            attempts: 1,
+            ..
+        } if failure.kind == TerminalRequirementFailureKind::EmptyResponse
+    ));
+
+    let resumed =
+        futures_executor::block_on(agent.resume(&checkpoint, &run, ResumePolicy::RejectAmbiguous))
+            .unwrap_err();
+    assert!(matches!(
+        resumed,
+        AgentError::EmptyTerminalResponse { attempts: 1 }
+    ));
+}
+
+#[test]
+fn structured_terminal_output_repairs_before_completed_checkpoint() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "invalid",
+        vec![ContentPart::text("{\"value\":\"wrong\"}")],
+        FinishReason::Stop,
+    ));
+    model.enqueue(response_events(
+        "valid",
+        vec![ContentPart::text("{\"value\":42}")],
+        FinishReason::Stop,
+    ));
+    let run = root_run(Budget::default());
+    let agent = Agent::new(
+        "typed",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .completion_requirement(CompletionRequirement::new().max_repairs(1))
+    .into_structured::<TypedAnswer>("answer");
+    let checkpoint = AgentCheckpoint::new(Arc::new(InMemoryCheckpointStore::new()));
+
+    let outcome =
+        futures_executor::block_on(agent.agent().run_checkpointed("answer", &run, &checkpoint))
+            .unwrap();
+    let typed = outcome.into_structured::<TypedAnswer>().unwrap();
+
+    assert_eq!(typed.output, TypedAnswer { value: 42 });
+    assert_eq!(typed.outcome.terminal_repairs(), 1);
+    let (_, state) = checkpoint.load().unwrap();
+    assert!(matches!(
+        state.phase,
+        AgentCheckpointPhase::Completed { .. }
+    ));
+    assert_eq!(
+        state
+            .transcript
+            .iter()
+            .filter(|message| message.metadata.get("runifold.terminal_repair")
+                == Some(&Value::Bool(true)))
+            .count(),
+        1
+    );
+    assert!(model.recorded_requests()[1].messages.iter().any(|message| {
+        message
+            .metadata
+            .contains_key("runifold.terminal_candidate.rejected")
+    }));
+}
+
+#[test]
+fn structured_terminal_repair_does_not_pollute_persistent_conversation() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "invalid",
+        vec![ContentPart::text("{\"value\":\"wrong\"}")],
+        FinishReason::Stop,
+    ));
+    model.enqueue(response_events(
+        "valid",
+        vec![ContentPart::text("{\"value\":42}")],
+        FinishReason::Stop,
+    ));
+    let agent = Agent::new("typed", Arc::new(model), ModelRef::new("test", "scripted"))
+        .completion_requirement(CompletionRequirement::new().max_repairs(1))
+        .into_structured::<TypedAnswer>("answer");
+    let store = InMemoryConversationStore::new();
+    let conversation_id = ConversationId::new();
+    let namespace = MemoryNamespace::parse("tenant.user").unwrap();
+
+    let outcome = futures_executor::block_on(agent.agent().run_conversation(
+        "answer",
+        &root_run(Budget::default()),
+        &store,
+        conversation_id,
+        namespace.clone(),
+        ConversationContextPolicy::new(ConversationWindow::new(8).unwrap()),
+    ))
+    .unwrap();
+
+    assert_eq!(outcome.outcome.terminal_repairs(), 1);
+    let transcript = futures_executor::block_on(store.list_transcript(
+        conversation_id,
+        namespace,
+        None,
+        ConversationWindow::new(8).unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(transcript.len(), 2);
+    assert_eq!(message_text(&transcript[0].message), "answer");
+    assert_eq!(message_text(&transcript[1].message), "{\"value\":42}");
+}
+
+#[test]
+fn terminal_repair_preserves_completed_tool_effect_without_reexecution() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "tool",
+        vec![tool_call("call_1", "echo", json!({"value": 7}))],
+        FinishReason::ToolCalls,
+    ));
+    model.enqueue(response_events(
+        "invalid",
+        vec![ContentPart::text("{\"value\":\"wrong\"}")],
+        FinishReason::Stop,
+    ));
+    model.enqueue(response_events(
+        "valid",
+        vec![ContentPart::text("{\"value\":42}")],
+        FinishReason::Stop,
+    ));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = Arc::new(CountingTool::new(calls.clone()));
+    let mut tools = ToolRegistry::new();
+    tools.register(tool.clone()).unwrap();
+    let mut capabilities = CapabilitySet::new();
+    capabilities.grant(tool.descriptor().capability());
+    let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+    let agent = Agent::new(
+        "typed",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .tools(tools)
+    .completion_requirement(CompletionRequirement::new().max_repairs(1))
+    .into_structured::<TypedAnswer>("answer");
+
+    let outcome = futures_executor::block_on(agent.run("answer", &run)).unwrap();
+
+    assert_eq!(outcome.output, TypedAnswer { value: 42 });
+    assert_eq!(outcome.outcome.tool_calls, 1);
+    assert_eq!(outcome.outcome.terminal_repairs(), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.recorded_requests().len(), 3);
+}
+
+#[test]
+fn structured_terminal_repair_respects_turn_budget() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "invalid",
+        vec![ContentPart::text("{\"value\":\"wrong\"}")],
+        FinishReason::Stop,
+    ));
+    let run = root_run(Budget {
+        turns: Some(1),
+        ..Budget::default()
+    });
+    let agent = Agent::new(
+        "typed",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .completion_requirement(CompletionRequirement::new().max_repairs(2))
+    .into_structured::<TypedAnswer>("answer");
+
+    let error = futures_executor::block_on(agent.run("answer", &run)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::StructuredAgentError::Agent(AgentError::Budget(_))
+    ));
+    assert_eq!(model.recorded_requests().len(), 1);
+    assert_eq!(run.budget().usage().turns, 1);
 }
 
 #[test]

@@ -14,7 +14,8 @@ use thiserror::Error;
 use crate::agent::DynamicContext;
 use crate::{
     Agent, AgentConfig, AgentDescriptor, AgentError, AgentFuture, AgentOutcome,
-    AgentRegistrationError, AgentRoute, GatewayMiddleware, StructuredAgent, ToolErrorPolicy,
+    AgentRegistrationError, AgentRoute, CompletionRequirement, GatewayMiddleware, StructuredAgent,
+    ToolErrorPolicy,
 };
 
 /// Failure while assembling an [`Agent`].
@@ -229,6 +230,15 @@ impl AgentBuilder {
         self
     }
 
+    /// Sets terminal validation and bounded repair behavior.
+    #[must_use]
+    pub fn completion_requirement(self, requirement: CompletionRequirement) -> Self {
+        Self {
+            agent: self.agent.completion_requirement(requirement),
+            error: self.error,
+        }
+    }
+
     /// Sets provider feature-degradation behavior.
     #[must_use]
     pub const fn feature_policy(mut self, policy: FeaturePolicy) -> Self {
@@ -406,11 +416,9 @@ impl AgentBuilder {
         name: impl Into<String>,
     ) -> Result<StructuredAgent<T>, AgentBuildError>
     where
-        T: JsonSchema,
+        T: JsonSchema + serde::de::DeserializeOwned + Send + 'static,
     {
-        self.structured_output::<T>(name)
-            .build()
-            .map(StructuredAgent::new)
+        self.build().map(|agent| agent.into_structured::<T>(name))
     }
 }
 

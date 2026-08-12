@@ -3,6 +3,7 @@
 mod agent;
 mod builder;
 mod checkpoint;
+mod completion;
 mod conversation;
 mod descriptor;
 mod error;
@@ -17,6 +18,9 @@ pub use builder::{AgentBuildError, AgentBuilder, AgentPromptError};
 pub use checkpoint::{
     AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, DurableConversationCheckpoint,
     ResumePolicy,
+};
+pub use completion::{
+    CompletionRequirement, TerminalRequirementFailure, TerminalRequirementFailureKind,
 };
 pub use conversation::{
     AgentConversationError, AgentConversationOutcome, AutomaticConversationSummary,

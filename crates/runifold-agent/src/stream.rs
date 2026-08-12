@@ -11,7 +11,7 @@ use runifold_core::Usage;
 use runifold_model::{ModelStreamEvent, ToolCall};
 use serde::{Deserialize, Serialize};
 
-use crate::{AgentError, AgentFuture, AgentOutcome};
+use crate::{AgentError, AgentFuture, AgentOutcome, TerminalRequirementFailure};
 
 /// The callable boundary represented by an Agent stream event.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -82,6 +82,13 @@ pub enum AgentStreamEvent {
     Completed {
         /// Complete canonical outcome.
         outcome: AgentOutcome,
+    },
+    /// An invalid terminal candidate scheduled a bounded repair turn.
+    TerminalRepairScheduled {
+        /// One-based repair attempt number.
+        attempt: u32,
+        /// Safe reason the candidate was rejected.
+        failure: TerminalRequirementFailure,
     },
 }
 

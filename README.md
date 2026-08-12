@@ -839,6 +839,11 @@ struct ResearchAnswer {
 
 let agent = client
     .agent("researcher", "your-model")
+    .completion_requirement(
+        runifold::CompletionRequirement::new()
+            .max_repairs(2)
+            .retry_empty_response(true),
+    )
     .build_structured::<ResearchAnswer>("research_answer")?;
 
 let typed = agent
@@ -850,9 +855,13 @@ println!("{} ({})", typed.output.summary, typed.output.confidence);
 
 The Rust type generates the provider-facing JSON Schema, but provider
 acceptance is never treated as proof. Runifold assembles only canonical text,
-fails closed on refusals, and deserializes locally before returning the typed
-value. The full response, transcript, counters, and usage remain available in
-`typed.outcome`.
+fails closed on refusals, and deserializes locally before committing a
+completed Agent checkpoint. Invalid or empty terminal candidates can consume
+an explicitly bounded repair turn; every repair remains subject to the normal
+turn, Token, cost, duration, deadline, and cancellation budgets and never
+restarts completed Tool effects. The full response, transcript, counters,
+repair count (through `typed.outcome.terminal_repairs()`), and usage remain
+available in `typed.outcome`.
 
 Typed Tools are ordinary async Rust functions:
 

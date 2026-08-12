@@ -1,6 +1,6 @@
 use runifold_core::{BudgetExceeded, CheckpointError, JournalError};
 use runifold_effect::EffectExecutorError;
-use runifold_model::ModelError;
+use runifold_model::{ModelError, StructuredOutputErrorKind};
 use runifold_retrieval::RetrievalError;
 use runifold_tool::ToolError;
 use thiserror::Error;
@@ -72,6 +72,26 @@ pub enum AgentError {
         required: u32,
         /// Remaining shared Tool-call budget.
         remaining: u64,
+    },
+    /// The provider exhausted bounded repairs without producing usable content.
+    #[error("model produced no usable terminal content after {attempts} repair attempts")]
+    EmptyTerminalResponse {
+        /// Repair turns completed before failing.
+        attempts: u32,
+    },
+    /// The provider exhausted bounded repairs without satisfying the Rust type.
+    #[error(
+        "structured terminal output remained unsatisfied after {attempts} repair attempts: {kind:?}"
+    )]
+    StructuredOutputUnsatisfied {
+        /// Repair turns completed before failing.
+        attempts: u32,
+        /// Stable local structured-output failure category.
+        kind: StructuredOutputErrorKind,
+        /// One-based JSON line, when available.
+        line: Option<usize>,
+        /// One-based JSON column, when available.
+        column: Option<usize>,
     },
     /// A tool produced output that policy forbids exposing to the model.
     #[error("tool `{tool}` returned host-only output")]

@@ -3,6 +3,7 @@
 use super::checkpointing::{
     AgentProgress, save_checkpoint, validate_exact_usage, validate_usage_floor,
 };
+use super::completion::TerminalCompletionContext;
 use super::observability::{consume_budget, emit_usage, record_domain, terminal_event};
 use super::{
     Agent, AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, AgentError,
@@ -364,6 +365,11 @@ impl Agent {
                     conversation_version,
                 });
             }
+            if let Some(error) = state.terminal_failure() {
+                validate_exact_usage(state.usage, run.budget().usage())
+                    .map_err(AgentConversationError::Run)?;
+                return Err(AgentConversationError::Run(error));
+            }
             if let AgentCheckpointPhase::TurnInFlight { turn } = state.phase {
                 if policy == ResumePolicy::RejectAmbiguous {
                     return Err(AgentConversationError::Run(
@@ -432,6 +438,10 @@ impl Agent {
             if let Some(outcome) = state.outcome() {
                 validate_exact_usage(state.usage, run.budget().usage())?;
                 return Ok(outcome);
+            }
+            if let Some(error) = state.terminal_failure() {
+                validate_exact_usage(state.usage, run.budget().usage())?;
+                return Err(error);
             }
             if let AgentCheckpointPhase::TurnInFlight { turn } = state.phase {
                 if policy == ResumePolicy::RejectAmbiguous {
@@ -602,15 +612,12 @@ impl Agent {
                 .await?;
 
             let calls = tool_calls_from(&response.content);
-            let assistant = Message::new(Role::Assistant, response.content.clone())
-                .map_err(|error| AgentError::Protocol(error.to_string()))?;
-            progress.transcript.push(assistant);
-
             if calls.is_empty() {
                 if matches!(
                     response.finish_reason,
                     runifold_model::FinishReason::ToolCalls
-                ) {
+                ) && !response.content.is_empty()
+                {
                     return Err(AgentError::Protocol(
                         "model stopped for tool calls without emitting a tool call".into(),
                     ));
@@ -621,20 +628,28 @@ impl Agent {
                         successful: self.successful_local_tool_calls(&progress)?,
                     });
                 }
-                if persist_terminal_checkpoint {
-                    save_checkpoint(
+                if let Some(outcome) = self
+                    .complete_terminal_candidate(
+                        response,
+                        run,
+                        &mut progress,
                         &mut checkpoint,
-                        &self.checkpoint_state(
-                            &progress,
-                            run,
-                            AgentCheckpointPhase::Completed {
-                                response: Box::new(response.clone()),
-                            },
-                        ),
-                    )?;
+                        TerminalCompletionContext {
+                            caused_by,
+                            observer,
+                            persist_terminal_checkpoint,
+                        },
+                    )
+                    .await?
+                {
+                    return Ok(outcome);
                 }
-                return Ok(progress.outcome(response, run.budget().usage()));
+                continue;
             }
+
+            let assistant = Message::new(Role::Assistant, response.content.clone())
+                .map_err(|error| AgentError::Protocol(error.to_string()))?;
+            progress.transcript.push(assistant);
 
             self.execute_calls(calls, run, caused_by, &mut progress, observer)
                 .await?;
@@ -777,7 +792,7 @@ impl Agent {
         Ok(())
     }
 
-    fn checkpoint_state(
+    pub(super) fn checkpoint_state(
         &self,
         progress: &AgentProgress,
         run: &RunContext,

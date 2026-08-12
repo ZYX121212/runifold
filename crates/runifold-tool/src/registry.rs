@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{collections::BTreeMap, fmt, fmt::Write as _, sync::Arc};
 
 use futures_util::future::{Either, select};
-use jsonschema::Validator;
+use jsonschema::{ValidationError, Validator, error::ValidationErrorKind};
 use runifold_core::RunContext;
 use runifold_model::{ArtifactScope, ArtifactStore, ToolSpec};
 use serde_json::Value;
@@ -159,15 +159,7 @@ impl ToolRegistry {
             registered
                 .input_validator
                 .validate(&input)
-                .map_err(|error| {
-                    ToolError::local(
-                        ToolErrorKind::InvalidInput,
-                        format!(
-                            "Tool input violates its declared schema at `{}`",
-                            error.schema_path()
-                        ),
-                    )
-                })?;
+                .map_err(|error| input_validation_error(name, &error))?;
             if context
                 .remaining()
                 .is_some_and(|remaining| remaining.is_zero())
@@ -195,6 +187,69 @@ impl ToolRegistry {
                 }
             }
         })
+    }
+}
+
+fn input_validation_error(tool: &str, error: &ValidationError<'_>) -> ToolError {
+    let input_path = error.instance_path().to_string();
+    let schema_path = error.schema_path().to_string();
+    let keyword = error.kind().keyword().to_owned();
+    let mut diagnostic = ToolError::local(
+        ToolErrorKind::InvalidInput,
+        format!(
+            "Tool `{tool}` rejected its arguments: input at `{input_path}` violates `{keyword}` at schema `{schema_path}`; call the tool again with corrected arguments and do not guess its result"
+        ),
+    );
+    diagnostic
+        .metadata
+        .insert("validation.input_path".into(), Value::String(input_path));
+    diagnostic
+        .metadata
+        .insert("validation.schema_path".into(), Value::String(schema_path));
+    diagnostic
+        .metadata
+        .insert("validation.keyword".into(), Value::String(keyword));
+    diagnostic
+        .metadata
+        .insert("tool.name".into(), Value::String(tool.into()));
+    if let ValidationErrorKind::Enum { options } = error.kind() {
+        diagnostic
+            .metadata
+            .insert("validation.allowed_values".into(), options.clone());
+        let _ = write!(
+            diagnostic.message,
+            "; allowed values: {}",
+            bounded_json(options, 512)
+        );
+    }
+    if is_safe_scalar(error.instance()) {
+        diagnostic.metadata.insert(
+            "validation.actual_value".into(),
+            error.instance().as_ref().clone(),
+        );
+        let _ = write!(
+            diagnostic.message,
+            "; received: {}",
+            bounded_json(error.instance(), 128)
+        );
+    }
+    diagnostic
+}
+
+fn is_safe_scalar(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => true,
+        Value::String(value) => value.len() <= 64,
+        Value::Array(_) | Value::Object(_) => false,
+    }
+}
+
+fn bounded_json(value: &Value, maximum: usize) -> String {
+    let encoded = value.to_string();
+    if encoded.len() <= maximum {
+        encoded
+    } else {
+        "<redacted: value exceeds diagnostic limit>".into()
     }
 }
 
@@ -356,6 +411,42 @@ mod tests {
             futures_executor::block_on(registry.invoke("echo", json!({"x": 1}), &run)).unwrap();
 
         assert_eq!(output.structured_content, Some(json!({"x": 1})));
+    }
+
+    #[test]
+    fn invalid_enum_reports_input_path_allowed_values_and_safe_actual_value() {
+        let mut tool = EchoTool::new("market_history");
+        tool.descriptor.input_schema = json!({
+            "type": "object",
+            "properties": {
+                "lookback": {"type": "string", "enum": ["1d", "7d", "30d"]}
+            },
+            "required": ["lookback"]
+        });
+        let tool = Arc::new(tool);
+        let mut capabilities = CapabilitySet::new();
+        capabilities.grant(tool.descriptor().capability());
+        let run = RunContext::root(BudgetTracker::new(Budget::default()), capabilities);
+        let mut registry = ToolRegistry::new();
+        registry.register(tool).unwrap();
+
+        let error = futures_executor::block_on(registry.invoke(
+            "market_history",
+            json!({"lookback": "forever"}),
+            &run,
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.kind, ToolErrorKind::InvalidInput);
+        assert_eq!(error.metadata["tool.name"], "market_history");
+        assert_eq!(error.metadata["validation.input_path"], "/lookback");
+        assert_eq!(error.metadata["validation.keyword"], "enum");
+        assert_eq!(error.metadata["validation.actual_value"], "forever");
+        assert_eq!(
+            error.metadata["validation.allowed_values"],
+            json!(["1d", "7d", "30d"])
+        );
+        assert!(error.message.contains("call the tool again"));
     }
 
     #[test]

@@ -33,11 +33,12 @@ use crate::{
 const TOOL_RESULT_EXECUTION_ID_METADATA: &str = "runifold.agent.execution_id";
 use crate::{
     AgentError, AgentEventStream, AgentGateway, AgentOutcome, AgentStreamEvent, CallableKind,
-    GatewayError, GatewayErrorKind, StructuredAgent,
+    CompletionRequirement, GatewayError, GatewayErrorKind, StructuredAgent,
 };
 
 mod callable;
 mod checkpointing;
+pub(crate) mod completion;
 mod execution;
 mod observability;
 mod retrieval;
@@ -119,6 +120,8 @@ pub struct Agent {
     pub(crate) response_mode: ResponseMode,
     pub(crate) provider_tools: Vec<ProviderToolSpec>,
     pub(crate) provider_options: BTreeMap<String, serde_json::Value>,
+    pub(crate) completion_requirement: CompletionRequirement,
+    pub(crate) completion_validator: completion::CompletionValidator,
 }
 
 impl Agent {
@@ -151,6 +154,8 @@ impl Agent {
             response_mode: ResponseMode::Streaming,
             provider_tools: Vec::new(),
             provider_options: BTreeMap::new(),
+            completion_requirement: CompletionRequirement::default(),
+            completion_validator: completion::CompletionValidator::content(),
         }
     }
 
@@ -196,6 +201,13 @@ impl Agent {
         self
     }
 
+    /// Sets terminal validation and bounded repair behavior.
+    #[must_use]
+    pub const fn completion_requirement(mut self, requirement: CompletionRequirement) -> Self {
+        self.completion_requirement = requirement;
+        self
+    }
+
     /// Requires this many successful local Tool calls before terminal output.
     ///
     /// Failed Tool results, child-Agent delegations, provider-hosted Tools,
@@ -224,11 +236,13 @@ impl Agent {
     }
 
     /// Binds provider schema generation and local decoding to the same type.
-    pub fn into_structured<T>(self, name: impl Into<String>) -> StructuredAgent<T>
+    pub fn into_structured<T>(mut self, name: impl Into<String>) -> StructuredAgent<T>
     where
-        T: JsonSchema,
+        T: JsonSchema + serde::de::DeserializeOwned + Send + 'static,
     {
-        StructuredAgent::new(self.structured_output::<T>(name))
+        self = self.structured_output::<T>(name);
+        self.completion_validator = completion::CompletionValidator::structured::<T>();
+        StructuredAgent::new(self)
     }
 
     /// Returns the stable local agent name.

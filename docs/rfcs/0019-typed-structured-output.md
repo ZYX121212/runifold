@@ -52,8 +52,25 @@ invalid output. JSON line and column are retained for diagnostics. The error
 does not copy the response body or the deserializer's value-bearing message,
 preventing model output from entering logs through ordinary error formatting.
 
-Local decode failures are terminal application-boundary failures. Runifold
-does not silently repair JSON or issue another billable model call.
+Local decode validation is part of the Agent completion boundary. By default,
+an invalid candidate fails immediately. Applications may install an explicit
+`CompletionRequirement` with a bounded repair count; every repair is a normal
+billable Agent turn and remains subject to the shared Token, cost, duration,
+turn, deadline, and cancellation budgets. Refusals are never repaired by
+default, missing fields are never filled locally, and the requested schema is
+not relaxed.
+
+Rejected non-empty candidates and a safe runtime repair instruction are kept
+as transient model context so the model can correct its own output. They are
+excluded from durable conversation transcripts. Completed Tool results and
+their Effect identities remain in the canonical execution transcript, so a
+terminal repair does not restart the Agent or silently re-execute committed
+side effects.
+
+Checkpoint completion happens only after local validation succeeds. A repair
+boundary persists the rejected candidate and repair count; exhausted repairs
+persist an explicit terminal-requirement failure rather than a false
+`Completed` state.
 
 ## Capability semantics
 
@@ -69,5 +86,5 @@ Generating a schema never upgrades an unknown provider capability.
   existing protocol encoders.
 - Applications cannot accidentally treat provider-side enforcement as a
   trusted validation boundary.
-- Retry or repair policies remain explicit future orchestration features
-  rather than hidden behavior in the decoding primitive.
+- Repair remains explicit and independently bounded rather than hidden inside
+  the provider transport or local decoding primitive.

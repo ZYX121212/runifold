@@ -66,8 +66,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`StructuredAgentError::Agent`] for execution failures and
-    /// [`StructuredAgentError::Output`] for local decoding failures.
+    /// Terminal validation and bounded repair happen inside the canonical
+    /// Agent loop before a completed checkpoint is committed. The final local
+    /// decode remains as a defensive invariant check.
     pub fn run<'a>(
         &'a self,
         input: impl Into<String> + Send + 'a,
@@ -155,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_agent_surfaces_local_decode_failure_separately() {
+    fn typed_agent_fails_the_completion_requirement_before_returning_an_outcome() {
         let model = ScriptedModel::new();
         model.enqueue(events("{\"value\":\"wrong\"}"));
         let agent = Agent::new("typed", Arc::new(model), ModelRef::new("test", "scripted"))
@@ -166,8 +167,11 @@ mod tests {
 
         assert!(matches!(
             error,
-            StructuredAgentError::Output(ref output)
-                if output.kind == StructuredOutputErrorKind::InvalidOutput
+            StructuredAgentError::Agent(crate::AgentError::StructuredOutputUnsatisfied {
+                attempts: 0,
+                kind: StructuredOutputErrorKind::InvalidOutput,
+                ..
+            })
         ));
     }
 }

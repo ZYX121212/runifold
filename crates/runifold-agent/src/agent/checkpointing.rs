@@ -11,33 +11,47 @@ pub(super) struct AgentProgress {
     pub(super) turns: u32,
     pub(super) tool_calls: u32,
     pub(super) delegations: u32,
+    pub(super) terminal_repairs: u32,
     pub(super) durable_conversation: Option<DurableConversationCheckpoint>,
 }
 
 impl From<AgentCheckpointState> for AgentProgress {
     fn from(state: AgentCheckpointState) -> Self {
+        let terminal_repairs = terminal_repair_count(&state.transcript);
         Self {
             execution_id: state.execution_id,
             transcript: state.transcript,
             turns: state.turns,
             tool_calls: state.tool_calls,
             delegations: state.delegations,
+            terminal_repairs,
             durable_conversation: state.durable_conversation,
         }
     }
 }
 
 impl AgentProgress {
-    pub(super) fn outcome(self, response: ModelResponse, usage: Usage) -> AgentOutcome {
+    pub(super) fn clone_outcome(&self, response: ModelResponse, usage: Usage) -> AgentOutcome {
         AgentOutcome {
             response,
-            transcript: self.transcript,
+            transcript: self.transcript.clone(),
             turns: self.turns,
             tool_calls: self.tool_calls,
             delegations: self.delegations,
             usage,
         }
     }
+}
+
+fn terminal_repair_count(transcript: &[Message]) -> u32 {
+    transcript
+        .iter()
+        .filter(|message| {
+            message.metadata.get("runifold.terminal_repair") == Some(&serde_json::Value::Bool(true))
+        })
+        .count()
+        .try_into()
+        .unwrap_or(u32::MAX)
 }
 
 pub(super) fn save_checkpoint(

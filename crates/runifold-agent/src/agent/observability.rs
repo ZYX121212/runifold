@@ -28,6 +28,7 @@ pub(super) fn terminal_event(
                 "turns": outcome.turns,
                 "tool_calls": outcome.tool_calls,
                 "delegations": outcome.delegations,
+                "terminal_repairs": outcome.terminal_repairs(),
                 "usage": outcome.usage,
             }),
         }),
@@ -223,6 +224,8 @@ fn agent_error_kind(error: &AgentError) -> RunErrorKind {
         AgentError::InvalidConfig(_) => RunErrorKind::InvalidInput,
         AgentError::Protocol(_)
         | AgentError::ToolRequirementUnsatisfied { .. }
+        | AgentError::EmptyTerminalResponse { .. }
+        | AgentError::StructuredOutputUnsatisfied { .. }
         | AgentError::ToolOutputNotVisible { .. } => RunErrorKind::Protocol,
         AgentError::Journal(_) => RunErrorKind::Extension("runifold.observability".into()),
         AgentError::Checkpoint(_) | AgentError::AmbiguousCheckpoint { .. } => {

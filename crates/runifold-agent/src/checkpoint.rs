@@ -8,7 +8,7 @@ use runifold_model::{Message, ModelRef, ModelResponse};
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::{ConversationId, ConversationVersion, MemoryNamespace};
-use crate::{AgentError, AgentOutcome};
+use crate::{AgentError, AgentOutcome, TerminalRequirementFailure};
 
 const CHECKPOINT_KIND: &str = "runifold.agent";
 const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
@@ -40,6 +40,14 @@ pub enum AgentCheckpointPhase {
     Completed {
         /// Final canonical model response.
         response: Box<ModelResponse>,
+    },
+    /// A terminal candidate failed its completion contract and cannot be
+    /// repaired under the configured policy.
+    TerminalRequirementFailed {
+        /// Safe failure details retained without the generated body.
+        failure: TerminalRequirementFailure,
+        /// Repair turns completed before exhaustion.
+        attempts: u32,
     },
 }
 
@@ -93,6 +101,15 @@ impl AgentCheckpointState {
                 delegations: self.delegations,
                 usage: self.usage,
             }),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn terminal_failure(&self) -> Option<AgentError> {
+        match &self.phase {
+            AgentCheckpointPhase::TerminalRequirementFailed {
+                failure, attempts, ..
+            } => Some(super::agent::completion::failure_error(failure, *attempts)),
             _ => None,
         }
     }

@@ -6,6 +6,19 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-08-12
+
+- Added `CompletionRequirement` for Agent-level bounded recovery from empty
+  provider terminal responses and locally invalid structured output, with all
+  repair turns charged to the existing turn, Token, cost, duration, deadline,
+  and cancellation budgets.
+- Moved typed structured-output validation before terminal checkpoint and
+  durable conversation commit; repair state and exhausted failures now survive
+  checkpoint recovery without replaying completed Tool effects.
+- Added safe terminal-repair events and improved Tool input-schema diagnostics
+  with the Tool name, input and schema JSON Pointers, validation keyword,
+  bounded scalar value, and allowed enum values.
+
 ## [0.5.4] - 2026-08-11
 
 - Added `Agent::min_successful_tool_calls` and the matching fluent builder API,
