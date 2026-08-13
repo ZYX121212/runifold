@@ -262,11 +262,15 @@ fn flush_message(
     if content.is_empty() {
         return Ok(());
     }
-    input.push(json!({
+    let mut message = json!({
         "type": "message",
         "role": role_name(role)?,
         "content": std::mem::take(content)
-    }));
+    });
+    if role == Role::Assistant {
+        message["status"] = Value::String("completed".into());
+    }
+    input.push(message);
     Ok(())
 }
 
@@ -612,6 +616,20 @@ mod tests {
 
         assert_eq!(encoded["input"][0]["status"], "completed");
         assert!(encoded["input"][0].get("id").is_none());
+    }
+
+    #[test]
+    fn assistant_messages_replay_with_required_completion_status() {
+        let request = ModelRequest::new(
+            ModelRef::new("openai", "model"),
+            Message::new(Role::Assistant, vec![ContentPart::text("previous answer")]).unwrap(),
+        );
+
+        let encoded = encode_request(&request).unwrap();
+
+        assert_eq!(encoded["input"][0]["type"], "message");
+        assert_eq!(encoded["input"][0]["role"], "assistant");
+        assert_eq!(encoded["input"][0]["status"], "completed");
     }
 
     #[test]

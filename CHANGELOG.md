@@ -6,6 +6,20 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-13
+
+### Fixed
+
+- Added the required `status: "completed"` field when replaying assistant
+  messages through the Responses API, preventing OpenAI-compatible endpoints
+  from rejecting repaired or continued conversations with a missing message
+  status.
+- Accepted `status: "incomplete"` message items only inside an incomplete
+  terminal Responses envelope, preserving partial text and its canonical
+  finish reason so Agent terminal repair can evaluate it instead of losing the
+  invocation to a Provider protocol error. Incomplete responses containing
+  function calls remain non-executable.
+
 ## [0.6.0] - 2026-08-12
 
 ### Fixed

@@ -634,12 +634,13 @@ pub(crate) fn decode_complete_response(
         .and_then(Value::as_array)
         .ok_or_else(|| protocol("complete OpenAI response field `output` must be an array"))?;
     let mut next_index = 0_u32;
-    let saw_tool_call = decode_complete_output(provider, output, &mut next_index, &mut events)?;
+    let incomplete = status.as_deref() == Some("incomplete");
+    let saw_tool_call =
+        decode_complete_output(provider, output, incomplete, &mut next_index, &mut events)?;
 
     reject_incomplete_tool_calls(status.as_deref(), saw_tool_call)?;
 
     let usage = decode_usage(payload.get("usage"));
-    let incomplete = payload.get("status").and_then(Value::as_str) == Some("incomplete");
     let finish_reason = if incomplete {
         incomplete_reason(payload)
     } else if saw_tool_call {
@@ -663,6 +664,7 @@ pub(crate) fn decode_complete_response(
 fn decode_complete_output(
     provider: &str,
     output: &[Value],
+    response_incomplete: bool,
     next_index: &mut u32,
     events: &mut Vec<ModelStreamEvent>,
 ) -> Result<bool, ModelError> {
@@ -670,7 +672,7 @@ fn decode_complete_output(
     for item in output {
         match item.get("type").and_then(Value::as_str) {
             Some("message") => {
-                decode_complete_message(provider, item, next_index, events)?;
+                decode_complete_message(provider, item, response_incomplete, next_index, events)?;
             }
             Some("function_call") => {
                 require_completed_item(item, "complete function call")?;
@@ -740,10 +742,11 @@ fn reject_incomplete_tool_calls(
 fn decode_complete_message(
     provider: &str,
     message: &Value,
+    response_incomplete: bool,
     next_index: &mut u32,
     events: &mut Vec<ModelStreamEvent>,
 ) -> Result<(), ModelError> {
-    require_completed_item(message, "complete message")?;
+    require_terminal_message(message, response_incomplete)?;
     let content = message
         .get("content")
         .and_then(Value::as_array)
@@ -796,6 +799,19 @@ fn decode_complete_message(
         }
     }
     Ok(())
+}
+
+fn require_terminal_message(message: &Value, response_incomplete: bool) -> Result<(), ModelError> {
+    match message.get("status").and_then(Value::as_str) {
+        Some("completed") => Ok(()),
+        Some("incomplete") if response_incomplete => Ok(()),
+        Some(status) => Err(protocol(format!(
+            "complete message has non-terminal status `{status}` inconsistent with the terminal response"
+        ))),
+        None => Err(protocol(
+            "complete message is missing required completion status",
+        )),
+    }
 }
 
 fn take_index(next_index: &mut u32) -> Result<u32, ModelError> {
@@ -1457,6 +1473,32 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("non-terminal status"));
+    }
+
+    #[test]
+    fn incomplete_response_decodes_incomplete_message_for_terminal_repair() {
+        let events = super::decode_complete_response(
+            "openai",
+            &serde_json::json!({
+                "id":"resp","model":"model","status":"incomplete",
+                "output":[{
+                    "type":"message","status":"incomplete",
+                    "content":[{"type":"output_text","text":"{\"partial\":"}]
+                }],
+                "incomplete_details":{"reason":"max_output_tokens"},
+                "usage":{}
+            }),
+            None,
+        )
+        .unwrap();
+        let mut accumulator = ModelStreamAccumulator::new();
+        let response = events
+            .into_iter()
+            .find_map(|event| accumulator.push(event).unwrap())
+            .unwrap();
+
+        assert_eq!(response.text(), "{\"partial\":");
+        assert_eq!(response.finish_reason, FinishReason::Length);
     }
 
     #[test]
