@@ -18,7 +18,7 @@ Provider integration has two responsibilities:
 1. Implement `Model`, whose canonical stream normalizes content blocks,
    reasoning, usage, warnings, provider events, completion, and typed errors.
 2. Implement `ProviderModel`, which exposes the stable provider namespace used
-   in `ModelRef`.
+   in `ModelRef` and a reviewed `ProviderRuntimeProfile`.
 
 The `ProviderModelExt` blanket implementation then supplies:
 
@@ -43,18 +43,27 @@ starting at 100 ms and capped at 2 seconds. It retries only errors explicitly
 marked retry-safe by the adapter. Unknown and unsafe failures are not retried.
 
 The default circuit breaker opens after five consecutive transport, provider,
-protocol, or stream-state failures and permits a recovery probe after 30
-seconds. Cancellation never contributes to circuit health.
+protocol, stream-state, or malformed Tool-argument failures and permits a
+recovery probe after 30 seconds. Cancellation never contributes to circuit
+health.
 
-These defaults can be replaced through the returned `ModelRouterBuilder`.
+The generic profile also owns response delivery mode, feature policy, and
+provider request defaults. A concrete adapter can therefore encode protocol-
+safe behavior without leaking a provider-specific policy type into the facade.
+`ProviderModelExt::runtime` consumes the adapter profile automatically;
+`runtime_with_profile` is the explicit application override boundary. Retry
+and circuit defaults can also be replaced through the returned
+`ModelRouterBuilder` when building custom multi-route topologies.
 
 ## Invariants
 
 - Streaming is the source of truth; non-streaming invocation uses the shared
   canonical accumulator.
 - A stream cannot silently succeed without a terminal completion event.
-- Retry and fallback cannot begin after the first canonical event commits a
-  stream.
+- Streaming retry and fallback cannot begin after the first canonical event
+  commits a stream. Complete delivery is fully accumulated and validated
+  before that commit point, so pre-commit terminal failures remain visible to
+  retry and circuit-breaker policy.
 - Provider identity in requests, responses, errors, and raw events is stable.
 - Reasoning is not mixed into visible answer text.
 - Detailed usage does not double-count reasoning or cached tokens.

@@ -15,18 +15,6 @@ pub mod model {
     pub use runifold_model::*;
 }
 
-/// Safe rich-content projection for Provider protocols with text-only gaps.
-#[cfg(any(
-    feature = "anthropic",
-    feature = "bedrock",
-    feature = "gemini",
-    feature = "ollama",
-    feature = "openai"
-))]
-pub mod content_projection {
-    pub use runifold_providers::content_projection::*;
-}
-
 /// Provider-neutral embeddings, retrieval, and reference vector indexing.
 #[cfg(feature = "runtime")]
 pub mod retrieval {
@@ -104,8 +92,8 @@ pub use runifold_core::{
     AuthorityAmplification, Budget, BudgetExceeded, BudgetReservation, BudgetReservationMismatch,
     BudgetResource, BudgetTracker, CancellationToken, CapabilitySet, Checkpoint, CheckpointError,
     CheckpointErrorKind, CheckpointId, CheckpointStore, ChildEvent, ChildRunError, DomainEvent,
-    InMemoryCheckpointStore, InMemoryJournal, Journal, JournalError, LifecycleEvent, RunContext,
-    RunEvent, RunEventKind, RunRecorder, Usage,
+    InMemoryCheckpointStore, InMemoryJournal, Journal, JournalError, LifecycleEvent, RetrySafety,
+    RunContext, RunError, RunErrorKind, RunEvent, RunEventKind, RunRecorder, Usage,
 };
 #[cfg(feature = "runtime")]
 pub use runifold_effect::{
@@ -118,23 +106,30 @@ pub use runifold_effect::{
 pub use runifold_macros::tool;
 pub use runifold_model::{
     Artifact, ArtifactError, ArtifactFuture, ArtifactPage, ArtifactRef, ArtifactResolvingModel,
-    ArtifactScope, ArtifactStore, ArtifactWrite, CircuitBreakerConfig, CircuitBreakerConfigError,
-    CircuitState, ContentPart, DEFAULT_MAX_ARTIFACT_BYTES, FeaturePolicy, GenerationOptions,
-    InMemoryArtifactStore, MAX_ARTIFACT_IDEMPOTENCY_KEY_BYTES, MAX_ARTIFACT_NAME_BYTES,
-    MAX_ARTIFACT_PAGE_SIZE, MediaSource, Message, Model, ModelCallContext, ModelEventStream,
-    ModelFallbackPolicy, ModelRef, ModelRequest, ModelResponse, ModelRetryPolicy,
-    ModelRetryPolicyError, ModelRoute, ModelRouteHealth, ModelRouter, ModelRouterBuildError,
-    ModelRouterBuilder, OutputFormat, ProviderModel, ProviderToolSpec, ResponseMode, RetryJitter,
-    RouterClock, RouterSleepFuture, RouterSleeper, StructuredOutputError,
-    StructuredOutputErrorKind, SupportLevel, SystemRouterClock, SystemRouterSleeper,
+    ArtifactScope, ArtifactStore, ArtifactWrite, BatchProfile, CapabilityAudit,
+    CapabilityAuditEntry, CircuitBreakerConfig, CircuitBreakerConfigError, CircuitState,
+    ContentPart, DEFAULT_MAX_ARTIFACT_BYTES, FeaturePolicy, GeneratedImage, GenerationOptions,
+    ImageFormat, ImageGenerationModel, ImageGenerationRequest, ImageGenerationResponse,
+    InMemoryArtifactStore, InteractiveProfile, MAX_ARTIFACT_IDEMPOTENCY_KEY_BYTES,
+    MAX_ARTIFACT_NAME_BYTES, MAX_ARTIFACT_PAGE_SIZE, MediaSource, Message, Model, ModelCallContext,
+    ModelCapabilityCatalog, ModelEventStream, ModelFallbackPolicy, ModelRef, ModelRequest,
+    ModelResponse, ModelRetryPolicy, ModelRetryPolicyError, ModelRoute, ModelRouteHealth,
+    ModelRouter, ModelRouterBuildError, ModelRouterBuilder, OutputFormat, ProductionProfile,
+    ProviderModel, ProviderRuntimeProfile, ProviderToolSpec, ResponseMode, RetryJitter,
+    RouterClock, RouterSleepFuture, RouterSleeper, RuntimeProfilePreset, SpeechFormat, SpeechModel,
+    SpeechRequest, SpeechResponse, StructuredOutputError, StructuredOutputErrorKind, SupportLevel,
+    SystemRouterClock, SystemRouterSleeper, TranscriptionModel, TranscriptionRequest,
+    TranscriptionResponse,
 };
 #[cfg(feature = "runtime")]
 pub use runifold_retrieval::{
     Document, DocumentId, Embedding, EmbeddingBatch, EmbeddingFuture, EmbeddingModel,
-    EmbeddingRequest, EmbeddingTask, InMemoryVectorIndex, IndexBuildOutcome, RetrievalContext,
-    RetrievalError, RetrievalFuture, RetrievalQuery, RetrievalResponse, RetrievedDocument,
-    Retriever, RetrieverDescriptor, VectorRecord, VectorRetriever, VectorSearchResponse,
-    VectorSearchResult, VectorStore, VectorStoreFuture, VectorUpsertOutcome,
+    EmbeddingRequest, EmbeddingTask, HybridRetriever, InMemoryVectorIndex, IndexBuildOutcome,
+    ReciprocalRankFusion, RerankRequest, RerankResponse, Reranker, RerankerDescriptor,
+    RerankingRetriever, RetrievalContext, RetrievalError, RetrievalFuture, RetrievalQuery,
+    RetrievalResponse, RetrievedDocument, Retriever, RetrieverDescriptor, VectorRecord,
+    VectorRetriever, VectorSearchResponse, VectorSearchResult, VectorStore, VectorStoreFuture,
+    VectorUpsertOutcome,
 };
 #[cfg(feature = "runtime")]
 pub use runifold_tool::{
@@ -191,11 +186,23 @@ pub trait ProviderModelExt: ProviderModel + Sized + 'static {
     /// avoiding duplicate charges for ambiguous failures. Applications can
     /// replace either policy before building.
     fn resilient(self, model: impl Into<String>) -> ModelRouterBuilder {
+        let profile = self.runtime_profile();
+        self.resilient_with_profile(model, profile)
+    }
+
+    /// Starts a single-provider router with an explicitly reviewed profile.
+    fn resilient_with_profile(
+        self,
+        model: impl Into<String>,
+        profile: ProviderRuntimeProfile,
+    ) -> ModelRouterBuilder {
         let target = self.model_ref(model);
+        let retry_policy = profile.selected_retry_policy().clone();
+        let circuit_breaker = profile.selected_circuit_breaker().clone();
         ModelRouter::builder(target.clone())
             .route("primary", std::sync::Arc::new(self), target)
-            .retry_policy(ModelRetryPolicy::default())
-            .circuit_breaker(CircuitBreakerConfig::default())
+            .retry_policy(retry_policy)
+            .circuit_breaker(circuit_breaker)
     }
 
     /// Builds the default fully composed runtime for one physical model.
@@ -204,7 +211,39 @@ pub trait ProviderModelExt: ProviderModel + Sized + 'static {
     ///
     /// Returns [`ModelRouterBuildError`] when the model identity is blank.
     fn runtime(self, model: impl Into<String>) -> Result<ProviderRuntime, ModelRouterBuildError> {
-        self.resilient(model).build().map(ProviderRuntime::new)
+        let profile = self.runtime_profile();
+        self.runtime_with_profile(model, profile)
+    }
+
+    /// Builds a runtime by layering a standard workload preset over the
+    /// adapter's protocol-safe profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelRouterBuildError`] when the model identity is blank.
+    fn runtime_with_preset(
+        self,
+        model: impl Into<String>,
+        preset: impl RuntimeProfilePreset,
+    ) -> Result<ProviderRuntime, ModelRouterBuildError> {
+        let profile = preset.apply(self.runtime_profile());
+        self.runtime_with_profile(model, profile)
+    }
+
+    /// Builds a runtime with an explicitly reviewed execution profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelRouterBuildError`] when the model identity is blank.
+    fn runtime_with_profile(
+        self,
+        model: impl Into<String>,
+        profile: ProviderRuntimeProfile,
+    ) -> Result<ProviderRuntime, ModelRouterBuildError> {
+        let router = self
+            .resilient_with_profile(model, profile.clone())
+            .build()?;
+        Ok(ProviderRuntime::new(router, profile))
     }
 }
 
@@ -228,17 +267,25 @@ pub struct ProviderRuntime {
     model: std::sync::Arc<dyn Model>,
     router: std::sync::Arc<ModelRouter>,
     model_ref: ModelRef,
+    profile: ProviderRuntimeProfile,
 }
 
 #[cfg(feature = "runtime")]
 impl ProviderRuntime {
-    fn new(router: ModelRouter) -> Self {
+    fn new(router: ModelRouter, profile: ProviderRuntimeProfile) -> Self {
         let model_ref = router.logical_model().clone();
         let router = std::sync::Arc::new(router);
+        let model = std::sync::Arc::new(RequestDefaultsModel {
+            inner: router.clone(),
+            response_mode: profile.selected_response_mode(),
+            feature_policy: profile.selected_feature_policy(),
+            provider_options: profile.provider_options().clone(),
+        });
         Self {
-            model: router.clone(),
+            model,
             router,
             model_ref,
+            profile,
         }
     }
 
@@ -247,9 +294,26 @@ impl ProviderRuntime {
         &self.model_ref
     }
 
+    /// Returns the execution profile enforced at the physical model boundary.
+    pub const fn profile(&self) -> &ProviderRuntimeProfile {
+        &self.profile
+    }
+
     /// Returns current circuit-breaker health for the physical provider route.
     pub fn route_health(&self) -> Vec<ModelRouteHealth> {
         self.router.route_health()
+    }
+
+    /// Audits the selected endpoint's declared feature support.
+    pub fn capability_audit(
+        &self,
+    ) -> runifold_model::ModelFuture<'_, Result<CapabilityAudit, runifold_model::ModelError>> {
+        Box::pin(async move {
+            self.model
+                .capabilities(&self.model_ref)
+                .await
+                .map(|capabilities| capabilities.audit())
+        })
     }
 
     /// Starts an Agent using the fully composed model runtime.
@@ -300,408 +364,208 @@ impl Model for ProviderRuntime {
     }
 }
 
-/// Native Anthropic Messages API adapter.
-#[cfg(feature = "anthropic")]
-pub mod anthropic {
-    #[cfg(feature = "runtime")]
-    pub use crate::ProviderModelExt as AnthropicAgentExt;
-    pub use runifold_providers::anthropic::{
-        AnthropicClient, AnthropicConfig, AnthropicConfigError, AnthropicEventDecoder,
-    };
+#[cfg(feature = "runtime")]
+#[derive(Clone)]
+struct RequestDefaultsModel {
+    inner: std::sync::Arc<dyn Model>,
+    response_mode: ResponseMode,
+    feature_policy: FeaturePolicy,
+    provider_options: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-/// Native Amazon Bedrock Converse Stream adapter.
-#[cfg(feature = "bedrock")]
-pub mod bedrock {
-    #[cfg(feature = "runtime")]
-    pub use crate::ProviderModelExt as BedrockAgentExt;
-    pub use runifold_providers::bedrock::{
-        AwsCredentials, AwsRegion, BedrockClient, BedrockConfigError, BedrockEventDecoder,
-        BedrockSdkConfig,
-    };
-}
-
-/// Native Gemini `GenerateContent` API adapter.
-#[cfg(feature = "gemini")]
-pub mod gemini {
-    #[cfg(feature = "runtime")]
-    pub use crate::ProviderModelExt as GeminiAgentExt;
-    pub use runifold_providers::gemini::{
-        GeminiClient, GeminiConfig, GeminiConfigError, GeminiEmbeddingModel, GeminiEventDecoder,
-    };
-}
-
-/// Native Ollama chat API adapter.
-#[cfg(feature = "ollama")]
-pub mod ollama {
-    #[cfg(feature = "runtime")]
-    pub use crate::ProviderModelExt as OllamaAgentExt;
-    pub use runifold_providers::ollama::{
-        OllamaChunkDecoder, OllamaClient, OllamaConfig, OllamaConfigError, OllamaEmbeddingModel,
-    };
-}
-
-/// `OpenAI` Responses API adapter.
-#[cfg(feature = "openai")]
-pub mod openai {
-    #[cfg(feature = "runtime")]
-    pub use crate::ProviderModelExt as OpenAiAgentExt;
-    pub use runifold_providers::openai::{
-        AzureOpenAiApiVersion, OPENAI_REALTIME_MAX_AUDIO_CHUNK_BYTES, OpenAiBatch,
-        OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus, OpenAiClient,
-        OpenAiCompatibleProfile, OpenAiConfig, OpenAiConfigError, OpenAiControlError,
-        OpenAiControlFuture, OpenAiControlPlane, OpenAiEmbeddingModel, OpenAiFile,
-        OpenAiFileDeletion, OpenAiFilePurpose, OpenAiFileStatus, OpenAiFileUpload,
-        OpenAiFileWaitPolicy, OpenAiModelInfo, OpenAiRealtimeAudioChunk, OpenAiRealtimeAudioFormat,
-        OpenAiRealtimeCall, OpenAiRealtimeCallRequest, OpenAiRealtimeClient,
-        OpenAiRealtimeClientSecret, OpenAiRealtimeClientSecretRequest, OpenAiRealtimeCommand,
-        OpenAiRealtimeConnection, OpenAiRealtimeError, OpenAiRealtimeEvent, OpenAiRealtimeModality,
-        OpenAiRealtimeReconnectAttempt, OpenAiRealtimeReconnectController,
-        OpenAiRealtimeReconnectError, OpenAiRealtimeReconnectEvent,
-        OpenAiRealtimeReconnectFailureKind, OpenAiRealtimeReconnectPolicy,
-        OpenAiRealtimeReconnectPolicyError, OpenAiRealtimeReconnectStopReason,
-        OpenAiRealtimeSdpOffer, OpenAiRealtimeSessionUpdate, OpenAiRealtimeState,
-        OpenAiWireProtocol, RealtimeReconnectDisposition,
-    };
-    #[cfg(target_arch = "wasm32")]
-    pub use runifold_providers::openai::{
-        OpenAiRealtimeIceServer, OpenAiRealtimeIceTransportPolicy, OpenAiRealtimePendingWebRtc,
-        OpenAiRealtimeWebRtcConnectionState, OpenAiRealtimeWebRtcIceState,
-        OpenAiRealtimeWebRtcOptions, OpenAiRealtimeWebRtcSession,
-    };
-}
-
-/// Azure `OpenAI` v1 Responses adapter.
-#[cfg(feature = "azure")]
-pub mod azure {
-    #[cfg(feature = "runtime")]
-    pub use crate::ProviderModelExt as AzureOpenAiAgentExt;
-    pub use runifold_providers::openai::{
-        AzureOpenAiApiVersion, OpenAiClient as AzureOpenAiClient, OpenAiConfig, OpenAiConfigError,
-        OpenAiEmbeddingModel as AzureOpenAiEmbeddingModel,
-    };
-
-    /// Creates an Azure `OpenAI` client using the resource API key.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpenAiConfigError`] for a blank key or invalid endpoint.
-    pub fn api_key_client(
-        resource_endpoint: &str,
-        api_key: impl Into<String>,
-    ) -> Result<AzureOpenAiClient, OpenAiConfigError> {
-        OpenAiConfig::azure_api_key(resource_endpoint, api_key).map(AzureOpenAiClient::new)
+#[cfg(feature = "runtime")]
+impl Model for RequestDefaultsModel {
+    fn capabilities<'a>(
+        &'a self,
+        model: &'a ModelRef,
+    ) -> runifold_model::ModelFuture<
+        'a,
+        Result<runifold_model::ModelCapabilities, runifold_model::ModelError>,
+    > {
+        self.inner.capabilities(model)
     }
 
-    /// Creates an Azure `OpenAI` client using an application-provided Entra
-    /// bearer token.
-    ///
-    /// Token acquisition and refresh remain application responsibilities.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpenAiConfigError`] for a blank token or invalid endpoint.
-    pub fn entra_client(
-        resource_endpoint: &str,
-        token: impl Into<String>,
-    ) -> Result<AzureOpenAiClient, OpenAiConfigError> {
-        OpenAiConfig::azure_bearer_token(resource_endpoint, token).map(AzureOpenAiClient::new)
-    }
-}
-
-macro_rules! compatible_provider_module {
-    (
-        $(#[$meta:meta])*
-        $feature:literal,
-        $module:ident,
-        $client:ident,
-        $agent_ext:ident,
-        $profile:ident
-    ) => {
-        $(#[$meta])*
-        #[cfg(feature = $feature)]
-        pub mod $module {
-            #[cfg(feature = "runtime")]
-            pub use crate::openai::OpenAiAgentExt as $agent_ext;
-            pub use runifold_providers::openai::{
-                OpenAiClient as $client, OpenAiConfigError, OpenAiEmbeddingModel,
-                OpenAiWireProtocol,
-            };
-
-            use runifold_providers::openai::OpenAiCompatibleProfile;
-
-            /// Creates a client using the provider's verified public endpoint.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`OpenAiConfigError`] when the API key is blank.
-            pub fn client(api_key: impl Into<String>) -> Result<$client, OpenAiConfigError> {
-                $client::from_profile(OpenAiCompatibleProfile::$profile, api_key)
+    fn stream(
+        &self,
+        mut request: ModelRequest,
+        context: ModelCallContext,
+    ) -> runifold_model::ModelFuture<'_, Result<ModelEventStream, runifold_model::ModelError>> {
+        request = request.response_mode(self.response_mode);
+        request.feature_policy = self.feature_policy;
+        for (provider, policy_options) in &self.provider_options {
+            match (request.provider_options.get_mut(provider), policy_options) {
+                (
+                    Some(serde_json::Value::Object(request_options)),
+                    serde_json::Value::Object(policy_options),
+                ) => {
+                    for (key, value) in policy_options {
+                        request_options.insert(key.clone(), value.clone());
+                    }
+                }
+                _ => {
+                    request
+                        .provider_options
+                        .insert(provider.clone(), policy_options.clone());
+                }
             }
         }
-    };
-}
-
-/// Volcengine Ark Responses API adapter.
-#[cfg(feature = "ark")]
-pub mod ark {
-    #[cfg(feature = "runtime")]
-    pub use crate::openai::OpenAiAgentExt as ArkAgentExt;
-    pub use runifold_providers::openai::{
-        ArkWebSearchTool, OpenAiClient as ArkClient, OpenAiConfigError, OpenAiEmbeddingModel,
-        OpenAiFile, OpenAiFileDeletion, OpenAiFilePurpose, OpenAiFileStatus, OpenAiFileUpload,
-        OpenAiFileWaitPolicy, OpenAiWireProtocol,
-    };
-
-    /// Creates a client using Ark's verified public Responses endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpenAiConfigError`] when the API key is blank.
-    pub fn client(api_key: impl Into<String>) -> Result<ArkClient, OpenAiConfigError> {
-        ArkClient::from_profile(
-            runifold_providers::openai::OpenAiCompatibleProfile::Ark,
-            api_key,
-        )
-    }
-}
-compatible_provider_module!(
-    /// `DeepSeek` Chat Completions API adapter.
-    "deepseek",
-    deepseek,
-    DeepSeekClient,
-    DeepSeekAgentExt,
-    DeepSeek
-);
-compatible_provider_module!(
-    /// Groq Chat Completions API adapter.
-    "groq",
-    groq,
-    GroqClient,
-    GroqAgentExt,
-    Groq
-);
-compatible_provider_module!(
-    /// Mistral Chat Completions API adapter.
-    "mistral",
-    mistral,
-    MistralClient,
-    MistralAgentExt,
-    Mistral
-);
-compatible_provider_module!(
-    /// `OpenRouter` multi-provider Chat Completions adapter.
-    "openrouter",
-    openrouter,
-    OpenRouterClient,
-    OpenRouterAgentExt,
-    OpenRouter
-);
-compatible_provider_module!(
-    /// Perplexity Sonar Chat Completions adapter.
-    "perplexity",
-    perplexity,
-    PerplexityClient,
-    PerplexityAgentExt,
-    Perplexity
-);
-compatible_provider_module!(
-    /// Together AI Chat Completions adapter.
-    "together",
-    together,
-    TogetherClient,
-    TogetherAgentExt,
-    Together
-);
-compatible_provider_module!(
-    /// `SiliconFlow` Chat Completions adapter.
-    "siliconflow",
-    siliconflow,
-    SiliconFlowClient,
-    SiliconFlowAgentExt,
-    SiliconFlow
-);
-compatible_provider_module!(
-    /// xAI Chat Completions adapter.
-    "xai",
-    xai,
-    XAiClient,
-    XAiAgentExt,
-    XAi
-);
-compatible_provider_module!(
-    /// Zhipu AI Chat Completions adapter.
-    "zhipu",
-    zhipu,
-    ZhipuClient,
-    ZhipuAgentExt,
-    Zhipu
-);
-
-/// Alibaba Model Studio OpenAI-compatible adapter.
-#[cfg(feature = "qwen")]
-pub mod qwen {
-    #[cfg(feature = "runtime")]
-    pub use crate::openai::OpenAiAgentExt as QwenAgentExt;
-    pub use runifold_providers::openai::{
-        OpenAiClient as QwenClient, OpenAiConfigError, OpenAiEmbeddingModel, OpenAiWireProtocol,
-    };
-
-    use runifold_providers::openai::OpenAiCompatibleProfile;
-
-    /// Alibaba Model Studio endpoint region.
-    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-    pub enum QwenRegion {
-        /// International endpoint hosted in Singapore.
-        #[default]
-        International,
-        /// Mainland China endpoint hosted in Beijing.
-        China,
-    }
-
-    /// Creates a client using the selected regional endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpenAiConfigError`] when the API key is blank.
-    pub fn client(
-        region: QwenRegion,
-        api_key: impl Into<String>,
-    ) -> Result<QwenClient, OpenAiConfigError> {
-        let profile = match region {
-            QwenRegion::International => OpenAiCompatibleProfile::QwenInternational,
-            QwenRegion::China => OpenAiCompatibleProfile::QwenChina,
-        };
-        QwenClient::from_profile(profile, api_key)
+        self.inner.stream(request, context)
     }
 }
 
-/// `MiniMax` OpenAI-compatible adapter.
-#[cfg(feature = "minimax")]
-pub mod minimax {
-    #[cfg(feature = "runtime")]
-    pub use crate::openai::OpenAiAgentExt as MiniMaxAgentExt;
-    pub use runifold_providers::openai::{
-        OpenAiClient as MiniMaxClient, OpenAiConfigError, OpenAiEmbeddingModel, OpenAiWireProtocol,
+#[cfg(all(test, feature = "runtime"))]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use runifold_testkit::ScriptedModel;
+
+    use crate::{
+        BatchProfile, ContentPart, FeaturePolicy, InteractiveProfile, Message, Model,
+        ModelCallContext, ModelEventStream, ModelRef, ModelRequest, ProviderModel,
+        ProviderModelExt, ProviderRuntimeProfile, ResponseMode,
+        model::{FinishReason, ModelFuture, ModelStreamEvent},
     };
 
-    use runifold_providers::openai::OpenAiCompatibleProfile;
-
-    /// `MiniMax` endpoint region.
-    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-    pub enum MiniMaxRegion {
-        /// International endpoint.
-        #[default]
-        International,
-        /// Mainland China endpoint.
-        China,
+    #[derive(Clone, Debug)]
+    struct ProfiledModel {
+        inner: ScriptedModel,
     }
 
-    /// Creates a client using the selected regional endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpenAiConfigError`] when the API key is blank.
-    pub fn client(
-        region: MiniMaxRegion,
-        api_key: impl Into<String>,
-    ) -> Result<MiniMaxClient, OpenAiConfigError> {
-        let profile = match region {
-            MiniMaxRegion::International => OpenAiCompatibleProfile::MiniMaxInternational,
-            MiniMaxRegion::China => OpenAiCompatibleProfile::MiniMaxChina,
-        };
-        MiniMaxClient::from_profile(profile, api_key)
-    }
-}
+    impl Model for ProfiledModel {
+        fn capabilities<'a>(
+            &'a self,
+            model: &'a ModelRef,
+        ) -> ModelFuture<'a, Result<crate::model::ModelCapabilities, crate::model::ModelError>>
+        {
+            self.inner.capabilities(model)
+        }
 
-#[cfg(all(test, feature = "anthropic", feature = "runtime"))]
-mod anthropic_tests {
-    use crate::anthropic::{AnthropicAgentExt, AnthropicClient};
+        fn stream(
+            &self,
+            request: ModelRequest,
+            context: ModelCallContext,
+        ) -> ModelFuture<'_, Result<ModelEventStream, crate::model::ModelError>> {
+            self.inner.stream(request, context)
+        }
+    }
+
+    impl ProviderModel for ProfiledModel {
+        fn provider(&self) -> &'static str {
+            "profiled"
+        }
+
+        fn runtime_profile(&self) -> ProviderRuntimeProfile {
+            ProviderRuntimeProfile::conservative()
+                .response_mode(ResponseMode::Complete)
+                .feature_policy(FeaturePolicy::BestEffort)
+                .provider_option(
+                    "profiled",
+                    serde_json::json!({"parallel_tool_calls": false}),
+                )
+        }
+    }
 
     #[test]
-    fn anthropic_client_builds_an_agent() {
-        let agent = AnthropicClient::from_api_key("key")
-            .unwrap()
-            .agent("researcher", "claude-test")
-            .build()
-            .unwrap();
-
-        assert_eq!(agent.model_ref().provider, "anthropic");
-        assert_eq!(agent.model_ref().name, "claude-test");
-    }
-}
-
-#[cfg(all(test, feature = "bedrock", feature = "runtime"))]
-mod bedrock_tests {
-    use crate::bedrock::{BedrockAgentExt, BedrockClient};
-
-    #[test]
-    fn bedrock_client_builds_an_agent_with_native_identity() {
-        let agent = BedrockClient::from_credentials(
-            "us-east-1",
-            "test-access-key",
-            "test-secret-key",
-            None,
-        )
-        .unwrap()
-        .agent("researcher", "us.anthropic.claude-test-v1:0")
-        .build()
+    fn provider_runtime_applies_adapter_profile_at_the_physical_boundary() {
+        let logical = ModelRef::new("profiled", "model");
+        let inner = ScriptedModel::new();
+        inner.enqueue([
+            ModelStreamEvent::ResponseStarted {
+                id: Some("response".into()),
+                model: logical.clone(),
+            },
+            ModelStreamEvent::ContentPartCompleted {
+                index: 0,
+                part: ContentPart::text("ok"),
+            },
+            ModelStreamEvent::ResponseCompleted {
+                finish_reason: FinishReason::Stop,
+                provider_metadata: BTreeMap::new(),
+            },
+        ]);
+        let runtime = ProfiledModel {
+            inner: inner.clone(),
+        }
+        .runtime("model")
         .unwrap();
 
-        assert_eq!(agent.model_ref().provider, "bedrock");
-        assert_eq!(agent.model_ref().name, "us.anthropic.claude-test-v1:0");
-    }
-}
+        let request = ModelRequest::new(logical, Message::user("hello")).provider_option(
+            "profiled",
+            serde_json::json!({
+                "parallel_tool_calls": true,
+                "deployment_option": "preserved"
+            }),
+        );
+        futures_executor::block_on(runtime.invoke(request, ModelCallContext::new())).unwrap();
 
-#[cfg(all(test, feature = "openai", feature = "runtime"))]
-mod tests {
-    use crate::openai::{OpenAiAgentExt, OpenAiClient, OpenAiConfig};
-
-    #[test]
-    fn compatible_client_builds_agent_with_its_provider_identity() {
-        let agent = OpenAiClient::new(OpenAiConfig::ark("key").unwrap())
-            .agent("writer", "doubao-model")
-            .build()
-            .unwrap();
-
-        assert_eq!(agent.model_ref().provider, "ark");
-        assert_eq!(agent.model_ref().name, "doubao-model");
-    }
-
-    #[cfg(feature = "deepseek")]
-    #[test]
-    fn dedicated_provider_module_preserves_identity() {
-        use crate::deepseek::{DeepSeekAgentExt as _, client};
-
-        let agent = client("key")
-            .unwrap()
-            .agent("reasoner", "deepseek-reasoner")
-            .build()
-            .unwrap();
-
-        assert_eq!(agent.model_ref().provider, "deepseek");
-    }
-
-    #[test]
-    fn provider_runtime_composes_resilience_and_agent_identity() {
-        let runtime = OpenAiClient::from_api_key("key")
-            .unwrap()
-            .runtime("gpt-test")
-            .unwrap();
-        let agent = runtime.agent("assistant").build().unwrap();
-
-        assert_eq!(runtime.model_ref(), agent.model_ref());
-        assert_eq!(runtime.route_health().len(), 1);
-        assert_eq!(runtime.route_health()[0].route, "primary");
+        assert_eq!(
+            runtime.profile().selected_response_mode(),
+            ResponseMode::Complete
+        );
+        let requests = inner.recorded_requests();
+        assert_eq!(requests[0].selected_response_mode(), ResponseMode::Complete);
+        assert_eq!(requests[0].feature_policy, FeaturePolicy::BestEffort);
+        assert_eq!(
+            requests[0].provider_options["profiled"]["parallel_tool_calls"],
+            false
+        );
+        assert_eq!(
+            requests[0].provider_options["profiled"]["deployment_option"],
+            "preserved"
+        );
     }
 
     #[test]
     fn provider_runtime_rejects_an_empty_model_before_execution() {
-        let error = OpenAiClient::from_api_key("key")
-            .unwrap()
-            .runtime(" ")
-            .unwrap_err();
+        let error = ProfiledModel {
+            inner: ScriptedModel::new(),
+        }
+        .runtime(" ")
+        .unwrap_err();
 
         assert_eq!(error, crate::ModelRouterBuildError::EmptyTarget);
+    }
+
+    #[test]
+    fn workload_presets_layer_over_adapter_policy() {
+        let interactive = ProfiledModel {
+            inner: ScriptedModel::new(),
+        }
+        .runtime_with_preset("model", InteractiveProfile)
+        .unwrap();
+        let batch = ProfiledModel {
+            inner: ScriptedModel::new(),
+        }
+        .runtime_with_preset("model", BatchProfile)
+        .unwrap();
+
+        assert_eq!(
+            interactive.profile().selected_response_mode(),
+            ResponseMode::Streaming
+        );
+        assert_eq!(
+            batch.profile().selected_response_mode(),
+            ResponseMode::Complete
+        );
+        assert_eq!(
+            batch.profile().provider_options()["profiled"]["parallel_tool_calls"],
+            false
+        );
+    }
+
+    #[test]
+    fn runtime_exposes_machine_readable_capability_audit() {
+        let runtime = ProfiledModel {
+            inner: ScriptedModel::new(),
+        }
+        .runtime("model")
+        .unwrap();
+
+        let audit = futures_executor::block_on(runtime.capability_audit()).unwrap();
+
+        assert!(!audit.is_fully_declared());
+        assert!(audit.features.iter().any(|entry| {
+            entry.feature == "tools" && entry.diagnostic_code == "runifold.capability.unknown"
+        }));
     }
 }

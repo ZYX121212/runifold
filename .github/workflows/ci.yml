@@ -34,6 +34,9 @@ jobs:
           - name: providers-bedrock
             package: runifold-providers
             features: bedrock
+          - name: providers-cohere
+            package: runifold-providers
+            features: cohere
           - name: providers-gemini
             package: runifold-providers
             features: gemini
@@ -43,15 +46,15 @@ jobs:
           - name: providers-openai
             package: runifold-providers
             features: openai
+          - name: providers-openai-realtime
+            package: runifold-providers
+            features: openai-realtime
           - name: facade-none
             package: runifold
             features: ""
-          - name: facade-native-providers
+          - name: facade-runtime
             package: runifold
-            features: anthropic,bedrock,gemini,ollama,openai
-          - name: facade-compatible-providers
-            package: runifold
-            features: azure,ark,deepseek,groq,minimax,mistral,openrouter,perplexity,qwen,siliconflow,together,xai,zhipu
+            features: runtime
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -110,13 +113,18 @@ jobs:
       - name: Check all targets and features
         run: cargo check --workspace --all-targets --all-features --locked
 
-      - name: Enforce lightweight Ark facade dependency boundary
+      - name: Enforce lightweight OpenAI-compatible provider dependency boundary
         shell: bash
         run: |
-          tree="$(cargo tree -p runifold --no-default-features --features ark -e normal --depth 1 --locked)"
+          tree="$(cargo tree -p runifold-providers --no-default-features --features openai -e normal --depth 1 --locked)"
           forbidden='runifold-(agent|effect|macros|retrieval|tool|workflow)'
           if grep -E -q "$forbidden" <<<"$tree"; then
-            echo "::error title=Facade dependency regression::Lightweight Ark pulled a full runtime crate."
+            echo "::error title=Provider dependency regression::OpenAI-compatible transport pulled a full runtime crate."
+            printf '%s\n' "$tree"
+            exit 1
+          fi
+          if grep -E -q 'tokio-tungstenite|web-sys' <<<"$tree"; then
+            echo "::error title=Provider dependency regression::Base OpenAI transport pulled Realtime dependencies."
             printf '%s\n' "$tree"
             exit 1
           fi
@@ -347,7 +355,7 @@ jobs:
           cargo +1.88.0 test -p runifold \
             --target wasm32-unknown-unknown \
             --no-default-features \
-            --features runtime,anthropic,gemini,ollama,openai \
+            --features runtime \
             --test wasm_browser_provider \
             --locked \
             -- --nocapture

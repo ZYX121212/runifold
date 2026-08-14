@@ -1,10 +1,9 @@
 //! Compile-checked shortest path from provider configuration to an Agent
 //! prompt.
 
-#[cfg(feature = "openai")]
-use runifold::openai::{OpenAiAgentExt, OpenAiClient};
+use runifold::ProviderModelExt;
+use runifold_providers::openai::OpenAiClient;
 
-#[cfg(feature = "openai")]
 async fn prompt() -> anyhow::Result<String> {
     let agent = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?
         .agent("assistant", "gpt-5")
@@ -16,6 +15,5 @@ async fn prompt() -> anyhow::Result<String> {
 }
 
 fn main() {
-    #[cfg(feature = "openai")]
     let _ = prompt;
 }

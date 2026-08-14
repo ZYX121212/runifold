@@ -8,7 +8,9 @@ mod context;
 mod document;
 mod embedding;
 mod error;
+mod hybrid;
 mod memory;
+mod reranker;
 mod retriever;
 mod vector_store;
 
@@ -18,7 +20,11 @@ pub use embedding::{
     Embedding, EmbeddingBatch, EmbeddingFuture, EmbeddingModel, EmbeddingRequest, EmbeddingTask,
 };
 pub use error::RetrievalError;
+pub use hybrid::{HybridRetriever, ReciprocalRankFusion};
 pub use memory::{InMemoryVectorIndex, IndexBuildOutcome};
+pub use reranker::{
+    RerankRequest, RerankResponse, Reranker, RerankerDescriptor, RerankingRetriever,
+};
 pub use retriever::{
     RetrievalFuture, RetrievalQuery, RetrievalResponse, RetrievedDocument, Retriever,
     RetrieverDescriptor,

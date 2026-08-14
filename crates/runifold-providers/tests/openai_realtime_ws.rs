@@ -1,6 +1,6 @@
 //! `OpenAI` Realtime WebSocket lifecycle, audio, deadline, and ambiguity tests.
 
-#![cfg(feature = "openai")]
+#![cfg(feature = "openai-realtime")]
 #![allow(missing_docs)]
 #![allow(clippy::result_large_err, clippy::too_many_lines)]
 

@@ -75,6 +75,8 @@ pub enum OpenAiCompatibleProfile {
     Zhipu,
     /// `SiliconFlow`'s OpenAI-compatible endpoint.
     SiliconFlow,
+    /// Hugging Face Inference Providers router.
+    HuggingFace,
 }
 
 impl OpenAiCompatibleProfile {
@@ -94,6 +96,7 @@ impl OpenAiCompatibleProfile {
             Self::MiniMaxInternational | Self::MiniMaxChina => "minimax",
             Self::Zhipu => "zhipu",
             Self::SiliconFlow => "siliconflow",
+            Self::HuggingFace => "huggingface",
         }
     }
 
@@ -115,6 +118,7 @@ impl OpenAiCompatibleProfile {
             Self::MiniMaxChina => "https://api.minimaxi.com/v1/",
             Self::Zhipu => "https://open.bigmodel.cn/api/paas/v4/",
             Self::SiliconFlow => "https://api.siliconflow.cn/v1/",
+            Self::HuggingFace => "https://router.huggingface.co/v1/",
         }
     }
 
@@ -744,6 +748,11 @@ mod tests {
                 OpenAiCompatibleProfile::SiliconFlow,
                 "siliconflow",
                 "https://api.siliconflow.cn/v1/chat/completions",
+            ),
+            (
+                OpenAiCompatibleProfile::HuggingFace,
+                "huggingface",
+                "https://router.huggingface.co/v1/chat/completions",
             ),
         ];
 

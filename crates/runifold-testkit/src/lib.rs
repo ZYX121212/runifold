@@ -3,6 +3,8 @@
 mod evaluation;
 mod evaluation_scorers;
 mod evaluation_store;
+mod fault;
+mod golden_trace;
 mod retrieval_evaluation;
 
 use std::{
@@ -31,6 +33,11 @@ pub use evaluation_scorers::{
     JsonRule, JsonRuleScorer, JudgeRubric, ModelJudgeScorer, TokenOverlapScorer, WeightedJsonRule,
 };
 pub use evaluation_store::{EvaluationRepository, EvaluationStoreError, FileEvaluationRepository};
+pub use fault::{
+    FaultController, FaultInjectingModel, FaultInjectingTool, FaultScenario, ModelFault,
+    RecoveryHarness, ScenarioAssertionError, ToolFault,
+};
+pub use golden_trace::{GoldenTrace, GoldenTraceMismatch};
 pub use retrieval_evaluation::{
     RetrievalCaseMetrics, RetrievalEvaluationCase, RetrievalEvaluationError,
     RetrievalEvaluationReport, RetrievalEvaluationRunner,

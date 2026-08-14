@@ -2,6 +2,7 @@
 
 mod batch;
 mod files;
+#[cfg(feature = "openai-realtime")]
 mod realtime;
 
 use std::{future::Future, pin::Pin};
@@ -26,7 +27,9 @@ pub use files::{
     OpenAiFile, OpenAiFileDeletion, OpenAiFilePurpose, OpenAiFileStatus, OpenAiFileUpload,
     OpenAiFileWaitPolicy,
 };
+#[cfg(feature = "openai-realtime")]
 pub(crate) use realtime::validate_realtime_instructions;
+#[cfg(feature = "openai-realtime")]
 pub use realtime::{OpenAiRealtimeClientSecret, OpenAiRealtimeClientSecretRequest};
 
 const MAX_CONTROL_RESPONSE_BYTES: usize = 4 * 1024 * 1024;

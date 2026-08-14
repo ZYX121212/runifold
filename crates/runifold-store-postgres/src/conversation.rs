@@ -131,6 +131,7 @@ mod tests {
         let schema = PostgresConversationStore::schema_sql("runifold_conversations");
 
         assert!(schema.contains("PRIMARY KEY (conversation_id, sequence)"));
+        assert!(schema.contains("UNIQUE (run_id, sequence)"));
         assert!(schema.contains("to_tsvector('simple', content)"));
         assert!(!schema.contains("CREATE TRIGGER"));
     }

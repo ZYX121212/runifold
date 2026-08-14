@@ -15,14 +15,18 @@ publish.workspace = true
 default = []
 anthropic = ["dep:eventsource-stream", "dep:httpdate"]
 bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types"]
+cohere = ["dep:runifold-retrieval"]
 gemini = ["dep:eventsource-stream", "dep:runifold-retrieval"]
 ollama = ["dep:runifold-retrieval"]
 openai = [
     "dep:eventsource-stream",
-    "dep:futures-channel",
     "dep:httpdate",
-    "dep:js-sys",
     "dep:runifold-retrieval",
+]
+openai-realtime = [
+    "openai",
+    "dep:futures-channel",
+    "dep:js-sys",
     "dep:tokio",
     "dep:tokio-tungstenite",
     "dep:wasm-bindgen",

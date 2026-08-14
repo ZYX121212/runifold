@@ -843,6 +843,19 @@ mod tests {
     }
 
     #[test]
+    fn compatible_parallel_tool_policy_is_forwarded_explicitly() {
+        let request = ModelRequest::new(ModelRef::new("openai", "model"), Message::user("hello"))
+            .provider_option(
+                "openai-compatible",
+                serde_json::json!({"parallel_tool_calls": false}),
+            );
+
+        let encoded = encode_request(&request).unwrap();
+
+        assert_eq!(encoded["parallel_tool_calls"], false);
+    }
+
+    #[test]
     fn ark_native_and_function_tools_share_one_wire_array() {
         let request = ModelRequest::new(ModelRef::new("ark", "doubao"), Message::user("research"))
             .tool(ToolSpec {

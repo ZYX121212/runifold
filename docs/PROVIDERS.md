@@ -1,9 +1,8 @@
 # Provider support
 
-Provider-only installations can select the lightweight kernel with
-`--no-default-features`. The compatible default includes `runtime` for examples
-using `ProviderModelExt::runtime`, Agent, Tool, Effect, Retrieval, or Workflow
-APIs.
+Concrete adapters are owned by `runifold-providers`; the `runifold` facade
+owns provider-neutral Agent, Tool, Effect, Retrieval, and Workflow composition.
+Applications add both crates only when they need both layers.
 
 Runifold separates provider identity from wire protocol. Native providers keep
 their native event semantics; OpenAI-compatible providers share one hardened
@@ -14,24 +13,72 @@ transport and decoder without creating one crate per endpoint.
 | Provider | Cargo feature | Wire protocol | Public constructor | Verification level |
 | --- | --- | --- | --- | --- |
 | OpenAI | `openai` | Responses | `OpenAiClient::from_api_key` | offline real HTTP cassette |
-| Azure OpenAI | `azure` | v1 Responses | `azure::api_key_client` / `azure::entra_client` | offline real HTTP cassette |
+| Azure OpenAI | `openai` | v1 Responses | `azure::api_key_client` / `azure::entra_client` | offline real HTTP cassette |
 | Amazon Bedrock | `bedrock` | Converse Stream | `BedrockClient::new` / `from_credentials` | offline real HTTP binary cassette |
+| Cohere Rerank | `cohere` | v2 Rerank | `CohereReranker::new` | offline real HTTP cassette |
 | Anthropic | `anthropic` | Messages SSE | `AnthropicClient::from_api_key` | offline real HTTP cassette |
 | Gemini | `gemini` | GenerateContent SSE | `GeminiClient::from_api_key` | offline real HTTP cassette |
 | Ollama | `ollama` | Chat NDJSON | `OllamaClient::new` | offline real HTTP cassette |
-| Volcengine Ark | `ark` | Responses | `ark::client` | offline HTTP cassette + manual live canary |
-| Alibaba Qwen | `qwen` | Chat Completions | `qwen::client` | protocol conformance |
-| DeepSeek | `deepseek` | Chat Completions | `deepseek::client` | protocol conformance |
-| OpenRouter | `openrouter` | Chat Completions | `openrouter::client` | protocol conformance |
-| xAI | `xai` | Chat Completions | `xai::client` | protocol conformance |
-| Groq | `groq` | Chat Completions | `groq::client` | protocol conformance |
-| Mistral | `mistral` | Chat Completions | `mistral::client` | protocol conformance |
-| Together AI | `together` | Chat Completions | `together::client` | protocol conformance |
-| Perplexity Sonar | `perplexity` | Chat Completions | `perplexity::client` | protocol conformance |
-| MiniMax | `minimax` | Chat Completions | `minimax::client` | protocol conformance |
-| Zhipu AI | `zhipu` | Chat Completions | `zhipu::client` | protocol conformance |
-| SiliconFlow | `siliconflow` | Chat Completions | `siliconflow::client` | protocol conformance |
+| Volcengine Ark | `openai` | Responses | `ark::client` | offline HTTP cassette + manual live canary |
+| Alibaba Qwen | `openai` | Chat Completions | `qwen::client` | protocol conformance |
+| DeepSeek | `openai` | Chat Completions | `deepseek::client` | protocol conformance |
+| OpenRouter | `openai` | Chat Completions | `openrouter::client` | protocol conformance |
+| xAI | `openai` | Chat Completions | `xai::client` | protocol conformance |
+| Groq | `openai` | Chat Completions | `groq::client` | protocol conformance |
+| Mistral | `openai` | Chat Completions | `mistral::client` | protocol conformance |
+| Together AI | `openai` | Chat Completions | `together::client` | protocol conformance |
+| Perplexity Sonar | `openai` | Chat Completions | `perplexity::client` | protocol conformance |
+| MiniMax | `openai` | Chat Completions | `minimax::client` | protocol conformance |
+| Zhipu AI | `openai` | Chat Completions | `zhipu::client` | protocol conformance |
+| SiliconFlow | `openai` | Chat Completions | `siliconflow::client` | protocol conformance |
+| Hugging Face Inference Providers | `openai` | Chat Completions | `huggingface::client` | protocol conformance |
+| vLLM | `openai` | caller-selected Responses or Chat Completions | `vllm::client` / `authenticated_client` | upstream compatibility contract |
+| llama.cpp | `openai` | caller-selected OpenAI-inspired protocol | `llama_cpp::client` / `authenticated_client` | upstream compatibility contract |
+| llamafile | `openai` | caller-selected OpenAI-inspired protocol | `llamafile::client` / `authenticated_client` | upstream compatibility contract |
 | Custom endpoint | `openai` | Responses or Chat Completions | `OpenAiConfig::custom` | caller-owned contract |
+
+Feature names follow protocol or material dependency boundaries, not brands.
+`openai-realtime` adds WebSocket/WebRTC and audio dependencies on top of
+`openai`; Ark, Qwen, DeepSeek, xAI, and the other compatible brands are named
+modules available whenever `openai` is enabled.
+
+`cohere` is separate because v2 Rerank is a native retrieval protocol, not an
+OpenAI-compatible brand alias. It implements the provider-neutral `Reranker`
+contract and validates returned indices, scores, result bounds, cancellation,
+deadlines, and response size.
+
+## Per-model capabilities and hosted tools
+
+Adapter defaults intentionally describe only verified protocol behavior.
+Applications can attach a `ModelCapabilityCatalog` to `OpenAiClient` for exact
+provider/model declarations. Lookup is exact rather than wildcard-based, so a
+new model name falls back to conservative adapter capabilities instead of
+silently inheriting stale assumptions.
+
+OpenAI Responses hosted tools have typed constructors for web search, file
+search, automatic Code Interpreter, image generation, and remote MCP through
+`OpenAiHostedTool`. The generic `ProviderToolSpec` remains available for
+forward-compatible options; the encoder still owns the wire-level `type`.
+
+## Independent media tasks
+
+`runifold-model` exposes provider-neutral `ImageGenerationModel`, `SpeechModel`,
+and `TranscriptionModel` boundaries in addition to multimodal chat content.
+The `openai` feature implements all three using `/images/generations`,
+`/audio/speech`, and multipart `/audio/transcriptions`. Inputs and outputs are
+bounded, lifecycle cancellation/deadlines are honored, and provider HTTP errors
+retain the normalized model error contract.
+Image, speech, and transcription request dialects are selected through exact
+`ModelRef` entries in `OpenAiMediaCapabilityCatalog`. Public OpenAI GPT Image,
+DALL-E, TTS, Whisper, and GPT transcription models have explicit built-in
+entries. Unknown and compatible-provider models use conservative subsets until
+the application declares their profiles.
+
+Local server constructors require the application to select the wire protocol
+and endpoint explicitly. They do not claim model capabilities, start a local
+process, read ambient credentials, or hide a second retry loop. Hugging Face
+uses its documented router Chat endpoint; provider routing remains encoded in
+the model identity selected by the application.
 
 “Offline real HTTP cassette” means the adapter is exercised through an actual
 loopback HTTP server, including streaming fragmentation and transport failure
@@ -105,7 +152,8 @@ image/document input, and hosted web search as native. Model-specific limits
 can still be narrowed with `with_capabilities`.
 
 ```rust,no_run
-use runifold::{ProviderModelExt, ResponseMode, ark};
+use runifold::{ProviderModelExt, ResponseMode};
+use runifold_providers::ark;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let runtime = ark::client(std::env::var("ARK_API_KEY")?)?
@@ -149,7 +197,8 @@ Azure uses the current `/openai/v1/responses` contract and accepts either a
 resource API key or an application-provided Microsoft Entra bearer token:
 
 ```rust,no_run
-use runifold::{ProviderModelExt, azure};
+use runifold::ProviderModelExt;
+use runifold_providers::azure;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let runtime = azure::api_key_client(
@@ -182,10 +231,8 @@ implementation. Applications retain ownership of the standard AWS credential
 chain and pass the resulting service configuration into Runifold:
 
 ```rust,ignore
-use runifold::{
-    ProviderModelExt,
-    bedrock::{BedrockClient, BedrockSdkConfig},
-};
+use runifold::ProviderModelExt;
+use runifold_providers::bedrock::{BedrockClient, BedrockSdkConfig};
 
 let shared = aws_config::defaults(aws_config::BehaviorVersion::latest())
     .load()
@@ -213,11 +260,13 @@ standard AWS chain.
 ## Compatible provider example
 
 ```rust,no_run
-use runifold::deepseek::{DeepSeekAgentExt, client};
+use runifold::ProviderModelExt;
+use runifold_providers::deepseek::client;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let agent = client(std::env::var("DEEPSEEK_API_KEY")?)?
-    .agent("reasoner", "deepseek-reasoner")
+    .runtime("deepseek-reasoner")?
+    .agent("reasoner")
     .system("Solve carefully, then give a concise answer.");
 
 let answer = agent.prompt_text("What is 37 * 41?").await?;
@@ -232,10 +281,8 @@ Every concrete adapter implements the same `Model + ProviderModel` contract.
 That unlocks one provider-neutral composition path:
 
 ```rust,no_run
-use runifold::{
-    ProviderModelExt,
-    deepseek::client,
-};
+use runifold::ProviderModelExt;
+use runifold_providers::deepseek::client;
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
 let runtime = client(std::env::var("DEEPSEEK_API_KEY")?)?
@@ -262,11 +309,13 @@ The instrumentation wraps routing and retries rather than bypassing them.
 Regional providers make endpoint location explicit:
 
 ```rust,no_run
-use runifold::qwen::{QwenAgentExt, QwenRegion, client};
+use runifold::ProviderModelExt;
+use runifold_providers::qwen::{QwenRegion, client};
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
-let agent = client(QwenRegion::China, std::env::var("DASHSCOPE_API_KEY")?)?
-    .agent("assistant", "qwen-plus");
+let runtime = client(QwenRegion::China, std::env::var("DASHSCOPE_API_KEY")?)?
+    .runtime("qwen-plus")?;
+let agent = runtime.agent("assistant");
 # let _ = agent;
 # Ok(())
 # }
@@ -275,7 +324,7 @@ let agent = client(QwenRegion::China, std::env::var("DASHSCOPE_API_KEY")?)?
 OpenRouter attribution is opt-in and validated before transport:
 
 ```rust,no_run
-use runifold::openai::{OpenAiClient, OpenAiCompatibleProfile, OpenAiConfig};
+use runifold_providers::openai::{OpenAiClient, OpenAiCompatibleProfile, OpenAiConfig};
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
 let config = OpenAiConfig::from_profile(
@@ -297,6 +346,17 @@ input, and context limits may vary by model even behind one endpoint. The
 default compatible client therefore reports those model-dependent features as
 unknown. Applications can attach verified model-specific capabilities with
 `OpenAiClient::with_capabilities`.
+
+Transport profiles and runtime policy remain separate but compose
+automatically. `OpenAiClient::runtime_profile` selects atomic Complete delivery
+for Responses or Streaming for Chat Completions, disables provider-side
+parallel Tool calls, installs bounded same-route retry and a shared circuit
+breaker, permits unknown or emulated model capabilities with visible warnings,
+and permits malformed Tool-call recovery only for the atomic Responses path.
+Known unsupported capabilities still fail before transport. Applications can
+pass a reviewed provider-neutral `ProviderRuntimeProfile` to
+`ProviderModelExt::runtime_with_profile` when a deployment needs an explicit
+override, including strict capability enforcement.
 
 Unknown provider fields remain available as canonical provider events. This
 lets Runifold add new normalization without discarding data or silently

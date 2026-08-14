@@ -10,7 +10,7 @@ const PROVIDER_TOOLS_METADATA_KEY: &str = "runifold.request.provider_tools.v1";
 const RESPONSE_MODE_METADATA_KEY: &str = "runifold.request.response_mode.v1";
 
 /// A provider-qualified model identity.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct ModelRef {
     /// Provider namespace.
     pub provider: String,

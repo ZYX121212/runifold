@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use runifold_core::CapabilitySet;
+use runifold_core::{CapabilitySet, RetrySafety, RunError, RunErrorKind};
 use runifold_effect::{EffectExecutor, EffectRecoveryPolicy};
 use runifold_model::{
     ArtifactResolvingModel, ArtifactScope, ArtifactStore, FeaturePolicy, GenerationOptions,
@@ -58,6 +58,37 @@ pub enum AgentPromptError {
     /// Canonical Agent execution failed.
     #[error("agent prompt failed: {0}")]
     Run(#[from] AgentError),
+}
+
+impl AgentPromptError {
+    /// Returns the stable run-level failure category for one-shot callers.
+    pub fn run_error_kind(&self) -> RunErrorKind {
+        match self {
+            Self::Build(_) => RunErrorKind::InvalidInput,
+            Self::Run(error) => error.run_error_kind(),
+        }
+    }
+
+    /// Returns whether retrying the complete one-shot operation is known safe.
+    pub fn retry_safety(&self) -> RetrySafety {
+        match self {
+            Self::Build(_) => RetrySafety::Safe,
+            Self::Run(error) => error.retry_safety(),
+        }
+    }
+
+    /// Normalizes build and execution failures into one public policy type.
+    pub fn to_run_error(&self) -> RunError {
+        match self {
+            Self::Build(_) => RunError {
+                kind: RunErrorKind::InvalidInput,
+                message: self.to_string(),
+                retry_safety: RetrySafety::Safe,
+                metadata: std::collections::BTreeMap::new(),
+            },
+            Self::Run(error) => error.to_run_error(),
+        }
+    }
 }
 
 /// Fluent assembly of one canonical [`Agent`].
@@ -436,7 +467,9 @@ impl std::fmt::Debug for AgentBuilder {
 mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
-    use runifold_core::{CapabilityId, CapabilitySet, EffectClass, RiskLevel};
+    use runifold_core::{
+        CapabilityId, CapabilitySet, EffectClass, RetrySafety, RiskLevel, RunErrorKind,
+    };
     use runifold_model::{
         ContentPart, FinishReason, ModelRef, ModelStreamEvent, OutputFormat, ProviderToolSpec,
         ResponseMode,
@@ -642,8 +675,11 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(
-            error,
+            &error,
             AgentPromptError::Build(AgentBuildError::EmptyName)
         ));
+        assert_eq!(error.run_error_kind(), RunErrorKind::InvalidInput);
+        assert_eq!(error.retry_safety(), RetrySafety::Safe);
+        assert_eq!(error.to_run_error().code(), "runifold.invalid_input");
     }
 }

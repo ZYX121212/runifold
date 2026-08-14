@@ -17,7 +17,8 @@ First-party providers live in the `runifold-providers` crate when their entire
 dependency graph can remain behind an independent Cargo feature and they share
 the public `Model + ProviderModel` integration contract. This includes the
 portable HTTP adapters and selected SDK-backed adapters such as Amazon
-Bedrock. Each provider remains a public module behind an independent feature:
+Bedrock. Native protocols and material dependency boundaries remain public
+modules behind independent features:
 
 - `openai`;
 - `anthropic`;
@@ -25,9 +26,16 @@ Bedrock. Each provider remains a public module behind an independent feature:
 - `ollama`;
 - `bedrock`.
 
-The `runifold` facade forwards its existing features to the matching provider
-feature and preserves application-facing paths such as `runifold::openai` and
-`runifold::anthropic`.
+OpenAI-compatible brands such as Ark, Qwen, DeepSeek, OpenRouter, and xAI are
+named modules under `openai`, not independent Cargo features. Realtime-only
+WebSocket/WebRTC and audio dependencies are isolated behind
+`openai-realtime`, which includes `openai`.
+
+The `runifold` facade does not forward concrete Provider features or expose
+brand modules. Applications depend directly on `runifold-providers` for
+adapters and add `runifold` when they need provider-neutral runtime
+composition. This keeps facade features stable as the compatible-provider list
+grows.
 
 Provider protocol code remains separated by module. Each module owns its
 configuration, client, request encoder, streaming decoder, embedding adapter,
@@ -57,12 +65,13 @@ a crate boundary.
 This is a pre-1.0 package-topology change. Direct dependencies on the former
 `runifold-provider-openai`, `runifold-provider-anthropic`,
 `runifold-provider-gemini`, and `runifold-provider-ollama` packages migrate to
-`runifold-providers` with the corresponding feature. Applications using the
-`runifold` facade keep the same module paths.
+`runifold-providers` with the corresponding feature. Applications using former
+facade Provider paths migrate imports to `runifold_providers::<provider>` and
+replace per-brand features with the corresponding protocol feature.
 
 ## Invariants
 
-1. Enabling one facade provider feature enables only its provider module.
+1. The facade owns no concrete Provider feature or brand module.
 2. Provider-specific wire types never leak into `runifold-model`.
 3. A protocol failure retains its provider-specific typed error.
 4. Common transport dependencies are declared once.
@@ -72,3 +81,5 @@ This is a pre-1.0 package-topology change. Direct dependencies on the former
    feature.
 8. SDK-backed adapters preserve the same canonical runtime contract and do not
    introduce a second hidden retry authority.
+9. Compatible Provider brands do not create Cargo features unless they add a
+   protocol or material dependency boundary.

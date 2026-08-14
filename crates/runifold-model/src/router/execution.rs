@@ -9,6 +9,8 @@ use futures_util::{
 use runifold_core::RetrySafety;
 use serde_json::{Value, json};
 
+use crate::{ModelStreamAccumulator, ResponseMode};
+
 use super::{
     BreakerPermit, CircuitBreakerConfig, ModelCallContext, ModelError, ModelErrorKind,
     ModelEventStream, ModelFallbackPolicy, ModelRef, ModelRequest, ModelRetryPolicy, ModelRoute,
@@ -239,6 +241,7 @@ async fn start_route_attempt(
     };
     let mut routed_request = request.clone();
     routed_request.model.clone_from(&route.target);
+    let response_mode = routed_request.selected_response_mode();
     let attempt = context.child_attempt();
     let attempt_id = attempt.invocation_id().to_string();
     let opened = route.model.stream(routed_request, attempt).await;
@@ -249,6 +252,9 @@ async fn start_route_attempt(
             return RouteAttempt::Failed(error);
         }
     };
+    if response_mode == ResponseMode::Complete {
+        return validate_complete_attempt(stream, permit, attempt_id).await;
+    }
     match stream.next().await {
         Some(Ok(first)) => RouteAttempt::Committed {
             first: Box::new(first),
@@ -268,6 +274,56 @@ async fn start_route_attempt(
             fail_permit(permit, &error);
             RouteAttempt::Failed(error)
         }
+    }
+}
+
+async fn validate_complete_attempt(
+    mut stream: ModelEventStream,
+    permit: Option<BreakerPermit>,
+    attempt_id: String,
+) -> RouteAttempt {
+    let mut accumulator = ModelStreamAccumulator::new();
+    let mut events = Vec::new();
+    let mut completed = false;
+    while let Some(item) = stream.next().await {
+        let event = match item {
+            Ok(event) => event,
+            Err(error) => {
+                fail_permit(permit, &error);
+                return RouteAttempt::Failed(error);
+            }
+        };
+        match accumulator.push(event.clone()) {
+            Ok(response) => completed |= response.is_some(),
+            Err(error) => {
+                fail_permit(permit, &error);
+                return RouteAttempt::Failed(error);
+            }
+        }
+        events.push(event);
+    }
+    if !completed {
+        let error = ModelError::local(
+            ModelErrorKind::Protocol,
+            "complete model stream ended before a terminal response event",
+        );
+        fail_permit(permit, &error);
+        return RouteAttempt::Failed(error);
+    }
+    let mut events = events.into_iter();
+    let Some(first) = events.next() else {
+        let error = ModelError::local(
+            ModelErrorKind::Protocol,
+            "validated complete model stream contained no events",
+        );
+        fail_permit(permit, &error);
+        return RouteAttempt::Failed(error);
+    };
+    RouteAttempt::Committed {
+        first: Box::new(first),
+        stream: Box::pin(futures_util::stream::iter(events.map(Ok))),
+        permit,
+        attempt_id,
     }
 }
 

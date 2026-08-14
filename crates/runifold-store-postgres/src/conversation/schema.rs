@@ -115,6 +115,16 @@ impl PostgresConversationStore {
             CREATE INDEX IF NOT EXISTS {table}_effects_capability_key
                 ON {table}_effects (capability_id, idempotency_key);
 
+            CREATE TABLE IF NOT EXISTS {table}_events (
+                event_id UUID PRIMARY KEY,
+                run_id UUID NOT NULL,
+                sequence BIGINT NOT NULL CHECK (sequence >= 0),
+                event_json JSONB NOT NULL,
+                UNIQUE (run_id, sequence)
+            );
+            CREATE INDEX IF NOT EXISTS {table}_events_run_sequence
+                ON {table}_events (run_id, sequence);
+
             CREATE TABLE IF NOT EXISTS {table}_artifacts (
                 scope TEXT NOT NULL,
                 artifact_id TEXT NOT NULL,

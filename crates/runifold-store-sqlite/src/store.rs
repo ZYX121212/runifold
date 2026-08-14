@@ -9,7 +9,12 @@ use runifold_core::{
     EffectId, Journal, JournalError, RunEvent, RunId,
 };
 use runifold_effect::{EffectExecutorError, EffectExecutorErrorKind, EffectRecord, EffectStore};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use runifold_ops::{
+    RunEventCursor, RunEventPage, RunEventPageSize, RunEventSource, RunEventSourceError,
+};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 use thiserror::Error;
 
 mod artifact;
@@ -110,6 +115,19 @@ impl SqliteStore {
     /// initialized.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SqliteStoreError> {
         Self::from_connection(Connection::open(path)?)
+    }
+
+    /// Opens an existing database without creating schema or permitting writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SqliteStoreError`] when the database cannot be opened.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, SqliteStoreError> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        Ok(Self {
+            connection: Arc::new(Mutex::new(connection)),
+        })
     }
 
     /// Creates a process-local `SQLite` database, primarily for tests.
@@ -392,6 +410,67 @@ impl Journal for SqliteStore {
     }
 }
 
+impl RunEventSource for SqliteStore {
+    fn event_page(
+        &self,
+        run_id: RunId,
+        after: Option<RunEventCursor>,
+        limit: RunEventPageSize,
+    ) -> Result<RunEventPage, RunEventSourceError> {
+        let after = after.map_or(-1, |cursor| {
+            i64::try_from(cursor.sequence()).unwrap_or(i64::MAX)
+        });
+        let query_limit = limit
+            .get()
+            .checked_add(1)
+            .and_then(|value| i64::try_from(value).ok())
+            .ok_or_else(|| RunEventSourceError::storage("event page limit overflow"))?;
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare(
+                "SELECT sequence, event_json
+                 FROM runifold_events
+                 WHERE run_id = ?1 AND sequence > ?2
+                 ORDER BY sequence ASC
+                 LIMIT ?3",
+            )
+            .map_err(|error| RunEventSourceError::storage(error.to_string()))?;
+        let rows = statement
+            .query_map(params![run_id.to_string(), after, query_limit], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| RunEventSourceError::storage(error.to_string()))?;
+        let mut events = rows
+            .map(|row| {
+                let (stored_sequence, json) =
+                    row.map_err(|error| RunEventSourceError::storage(error.to_string()))?;
+                let event: RunEvent = serde_json::from_str(&json)
+                    .map_err(|error| RunEventSourceError::corrupt_data(error.to_string()))?;
+                if event.meta.run_id != run_id
+                    || i64::try_from(event.meta.sequence).ok() != Some(stored_sequence)
+                {
+                    return Err(RunEventSourceError::corrupt_data(
+                        "event index does not match its canonical envelope",
+                    ));
+                }
+                Ok(event)
+            })
+            .collect::<Result<Vec<RunEvent>, RunEventSourceError>>()?;
+        let has_more = events.len() > limit.get();
+        if has_more {
+            events.truncate(limit.get());
+        }
+        let next = has_more
+            .then(|| {
+                events
+                    .last()
+                    .map(|event| RunEventCursor::after(event.meta.sequence))
+            })
+            .flatten();
+        Ok(RunEventPage { events, next })
+    }
+}
+
 fn current_revision(
     transaction: &Transaction<'_>,
     table: &str,
@@ -463,11 +542,13 @@ mod tests {
     use std::fs;
 
     use runifold_core::{
-        CapabilityId, Checkpoint, CheckpointErrorKind, CheckpointId, CheckpointStore, EffectClass,
-        EffectId, EffectKind, EffectRequest, EventFactory, InvocationId, Journal, LifecycleEvent,
-        RunEvent, RunEventKind, RunId,
+        CapabilityId, Checkpoint, CheckpointErrorKind, CheckpointId, CheckpointStore, DomainEvent,
+        EffectClass, EffectId, EffectKind, EffectRequest, EventFactory, InvocationId, Journal,
+        LifecycleEvent, RunEvent, RunEventKind, RunId,
     };
     use runifold_effect::{EffectExecutorErrorKind, EffectRecord, EffectStatus, EffectStore};
+    use runifold_ops::{RunEventCursor, RunEventPageSize, RunEventSource, RunEventSourceErrorKind};
+    use rusqlite::Connection;
     use serde_json::json;
     use uuid::Uuid;
 
@@ -557,6 +638,80 @@ mod tests {
         store.record(&second).unwrap();
 
         assert_eq!(store.events(run_id).unwrap(), vec![first, second]);
+    }
+
+    #[test]
+    fn read_only_event_source_pages_without_mutating_schema() {
+        let path = temporary_database_path();
+        let run_id = RunId::new();
+        let factory = EventFactory::new(run_id, None);
+        let first = factory.emit(RunEventKind::Lifecycle(LifecycleEvent::Started), None);
+        let second = factory.emit(
+            RunEventKind::Domain(DomainEvent {
+                namespace: "test".into(),
+                name: "middle".into(),
+                payload: json!({}),
+            }),
+            Some(first.meta.event_id),
+        );
+        let third = factory.emit(
+            RunEventKind::Lifecycle(LifecycleEvent::Completed { output: json!({}) }),
+            Some(second.meta.event_id),
+        );
+        {
+            let writable = SqliteStore::open(&path).unwrap();
+            for event in [&first, &second, &third] {
+                writable.record(event).unwrap();
+            }
+        }
+
+        let read_only = SqliteStore::open_read_only(&path).unwrap();
+        let size = RunEventPageSize::new(2).unwrap();
+        let first_page = read_only.event_page(run_id, None, size).unwrap();
+        assert_eq!(first_page.events, vec![first, second]);
+        assert_eq!(first_page.next, Some(RunEventCursor::after(1)));
+        let final_page = read_only.event_page(run_id, first_page.next, size).unwrap();
+        assert_eq!(final_page.events, vec![third]);
+        assert_eq!(final_page.next, None);
+
+        drop(read_only);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn event_source_rejects_index_envelope_mismatch() {
+        let path = temporary_database_path();
+        let run_id = RunId::new();
+        let factory = EventFactory::new(run_id, None);
+        let first = factory.emit(RunEventKind::Lifecycle(LifecycleEvent::Started), None);
+        let mismatched = factory.emit(
+            RunEventKind::Lifecycle(LifecycleEvent::Completed { output: json!({}) }),
+            Some(first.meta.event_id),
+        );
+        {
+            let store = SqliteStore::open(&path).unwrap();
+            store.record(&first).unwrap();
+        }
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE runifold_events SET event_json = ?1 WHERE event_id = ?2",
+                rusqlite::params![
+                    serde_json::to_string(&mismatched).unwrap(),
+                    first.meta.event_id.to_string()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        let read_only = SqliteStore::open_read_only(&path).unwrap();
+        let error = read_only
+            .event_page(run_id, None, RunEventPageSize::new(1).unwrap())
+            .unwrap_err();
+        assert_eq!(error.kind, RunEventSourceErrorKind::CorruptData);
+
+        drop(read_only);
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

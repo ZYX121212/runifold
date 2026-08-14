@@ -15,10 +15,8 @@ not create a security boundary.
 Browser applications should call an application-controlled gateway:
 
 ```rust,ignore
-use runifold::{
-    ProviderModelExt,
-    openai::{OpenAiClient, OpenAiConfig, OpenAiWireProtocol},
-};
+use runifold::ProviderModelExt;
+use runifold_providers::openai::{OpenAiClient, OpenAiConfig, OpenAiWireProtocol};
 
 let config = OpenAiConfig::custom(
     "application-gateway",
@@ -26,7 +24,8 @@ let config = OpenAiConfig::custom(
     OpenAiWireProtocol::Responses,
 )?;
 let agent = OpenAiClient::new(config)
-    .agent("browser-assistant", "application-selected-model")
+    .runtime("application-selected-model")?
+    .agent("browser-assistant")
     .system("Answer precisely.");
 
 let answer = agent.prompt_text("Explain capability attenuation.").await?;

@@ -11,21 +11,23 @@ use futures_util::{
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use runifold_core::{CancellationToken, Instant};
 use runifold_model::{
-    FeatureSupport, Model, ModelCallContext, ModelCapabilities, ModelError, ModelErrorKind,
-    ModelEventStream, ModelFuture, ModelRef, ModelRequest, ModelStreamEvent, ModelWarning,
-    ProviderModel, ResponseMode, SupportLevel,
+    FeatureSupport, Model, ModelCallContext, ModelCapabilities, ModelCapabilityCatalog, ModelError,
+    ModelErrorKind, ModelEventStream, ModelFuture, ModelRef, ModelRequest, ModelRetryPolicy,
+    ModelStreamEvent, ModelWarning, ProviderModel, ProviderRuntimeProfile, ResponseMode,
+    SupportLevel,
 };
 use secrecy::ExposeSecret;
 use serde_json::Value;
 
 use super::{
     ChatCompletionsDecoder, OpenAiCompatibleProfile, OpenAiConfig, OpenAiConfigError,
-    OpenAiControlPlane, OpenAiEmbeddingModel, OpenAiEventDecoder, OpenAiRealtimeClient,
-    OpenAiRealtimeError, OpenAiWireProtocol,
+    OpenAiControlPlane, OpenAiEmbeddingModel, OpenAiEventDecoder, OpenAiWireProtocol,
     chat::{ChatEvents, encode_chat_request},
     decode::decode_complete_response,
     encode::encode_request_for,
 };
+#[cfg(feature = "openai-realtime")]
+use super::{OpenAiRealtimeClient, OpenAiRealtimeError};
 
 const MAX_COMPLETE_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
@@ -35,16 +37,22 @@ pub struct OpenAiClient {
     config: OpenAiConfig,
     http: Client,
     capabilities: ModelCapabilities,
+    capability_catalog: ModelCapabilityCatalog,
+    media_capability_catalog: super::media::OpenAiMediaCapabilityCatalog,
 }
 
 impl OpenAiClient {
     /// Creates a client with a pooled Rustls HTTP transport.
     pub fn new(config: OpenAiConfig) -> Self {
         let capabilities = adapter_capabilities_for(&config);
+        let media_capability_catalog =
+            super::media::OpenAiMediaCapabilityCatalog::public_openai_defaults(&config.provider);
         Self {
             config,
             http: Client::new(),
             capabilities,
+            capability_catalog: ModelCapabilityCatalog::new(),
+            media_capability_catalog,
         }
     }
 
@@ -102,6 +110,7 @@ impl OpenAiClient {
     /// # Errors
     ///
     /// Rejects an empty, control-containing, or oversized model identity.
+    #[cfg(feature = "openai-realtime")]
     pub fn realtime(
         &self,
         model: impl Into<String>,
@@ -116,11 +125,70 @@ impl OpenAiClient {
         self
     }
 
+    /// Returns the configured OpenAI-compatible wire protocol.
+    pub const fn wire_protocol(&self) -> OpenAiWireProtocol {
+        self.config.wire_protocol
+    }
+
     /// Declares model-specific capabilities known by the application.
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: ModelCapabilities) -> Self {
         self.capabilities = capabilities;
         self
+    }
+
+    /// Adds exact per-model capability declarations.
+    ///
+    /// Unknown models retain the adapter's conservative fallback declaration.
+    #[must_use]
+    pub fn with_capability_catalog(mut self, catalog: ModelCapabilityCatalog) -> Self {
+        self.capability_catalog = catalog;
+        self
+    }
+
+    /// Replaces exact media wire declarations for image-generation models.
+    ///
+    /// Unknown models use the fail-closed conservative media profile.
+    #[must_use]
+    pub fn with_media_capability_catalog(
+        mut self,
+        catalog: super::media::OpenAiMediaCapabilityCatalog,
+    ) -> Self {
+        self.media_capability_catalog = catalog;
+        self
+    }
+
+    pub(super) fn image_wire_profile(
+        &self,
+        model: &ModelRef,
+    ) -> super::media::OpenAiImageWireProfile {
+        self.media_capability_catalog
+            .image_profile(model)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn speech_wire_profile(
+        &self,
+        model: &ModelRef,
+    ) -> super::media::OpenAiSpeechWireProfile {
+        self.media_capability_catalog
+            .speech_profile(model)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn transcription_wire_profile(
+        &self,
+        model: &ModelRef,
+    ) -> super::media::OpenAiTranscriptionWireProfile {
+        self.media_capability_catalog
+            .transcription_profile(model)
+            .unwrap_or_default()
+    }
+
+    fn capabilities_for(&self, model: &ModelRef) -> &ModelCapabilities {
+        self.capability_catalog
+            .get(model)
+            .unwrap_or(&self.capabilities)
     }
 
     fn prepare(&self, request: &ModelRequest) -> Result<(Value, Vec<ModelWarning>), ModelError> {
@@ -140,7 +208,9 @@ impl OpenAiClient {
             ));
         }
         let streaming = matches!(request.selected_response_mode(), ResponseMode::Streaming);
-        let warnings = self.capabilities.validate_request(request, streaming)?;
+        let warnings = self
+            .capabilities_for(&request.model)
+            .validate_request(request, streaming)?;
         let body = match self.config.wire_protocol {
             OpenAiWireProtocol::Responses => encode_request_for(request, &self.config.provider)?,
             OpenAiWireProtocol::ChatCompletions => {
@@ -166,12 +236,20 @@ impl OpenAiClient {
             ResponseMode::Complete => "application/json",
             _ => "text/event-stream",
         };
+        self.authenticated_post(self.config.endpoint_url(), context)
+            .header("Accept", accept)
+            .json(body)
+    }
+
+    pub(super) fn authenticated_post(
+        &self,
+        url: url::Url,
+        context: &ModelCallContext,
+    ) -> RequestBuilder {
         let mut builder = self
             .http
-            .post(self.config.endpoint_url())
-            .header("Accept", accept)
-            .header("X-Client-Request-Id", context.invocation_id().to_string())
-            .json(body);
+            .post(url)
+            .header("X-Client-Request-Id", context.invocation_id().to_string());
         if let Some(api_key) = &self.config.api_key {
             builder = builder.bearer_auth(api_key.expose_secret());
         }
@@ -195,14 +273,18 @@ impl OpenAiClient {
         }
         builder
     }
+
+    pub(super) fn endpoint_for(&self, path: &str) -> url::Url {
+        self.config.control_endpoint_url(path)
+    }
 }
 
 impl Model for OpenAiClient {
     fn capabilities<'a>(
         &'a self,
-        _model: &'a ModelRef,
+        model: &'a ModelRef,
     ) -> ModelFuture<'a, Result<ModelCapabilities, ModelError>> {
-        let capabilities = self.capabilities.clone();
+        let capabilities = self.capabilities_for(model).clone();
         Box::pin(async move { Ok(capabilities) })
     }
 
@@ -348,6 +430,24 @@ impl ProviderModel for OpenAiClient {
     fn provider(&self) -> &str {
         self.provider()
     }
+
+    fn runtime_profile(&self) -> ProviderRuntimeProfile {
+        let profile = ProviderRuntimeProfile::conservative()
+            .feature_policy(runifold_model::FeaturePolicy::BestEffort)
+            .provider_option(
+                "openai-compatible",
+                serde_json::json!({"parallel_tool_calls": false}),
+            );
+        match self.config.wire_protocol {
+            OpenAiWireProtocol::Responses => {
+                profile.response_mode(ResponseMode::Complete).retry_policy(
+                    ModelRetryPolicy::default()
+                        .allow_unknown(ModelErrorKind::MalformedToolArguments),
+                )
+            }
+            OpenAiWireProtocol::ChatCompletions => profile.response_mode(ResponseMode::Streaming),
+        }
+    }
 }
 
 struct DecoderConfig {
@@ -421,7 +521,7 @@ fn event_stream(
     })
 }
 
-async fn send_request(
+pub(super) async fn send_request(
     builder: RequestBuilder,
     cancellation: &CancellationToken,
     provider: &str,
@@ -438,7 +538,7 @@ async fn send_request(
     }
 }
 
-async fn read_error_body(
+pub(super) async fn read_error_body(
     response: Response,
     cancellation: &CancellationToken,
     provider: &str,
@@ -455,7 +555,7 @@ async fn read_error_body(
     }
 }
 
-fn request_id(response: &Response) -> Option<String> {
+pub(super) fn request_id(response: &Response) -> Option<String> {
     response
         .headers()
         .get("x-request-id")
@@ -463,7 +563,7 @@ fn request_id(response: &Response) -> Option<String> {
         .map(String::from)
 }
 
-fn retry_after(response: &Response) -> Option<std::time::Duration> {
+pub(super) fn retry_after(response: &Response) -> Option<std::time::Duration> {
     let value = response
         .headers()
         .get(reqwest::header::RETRY_AFTER)?
@@ -547,17 +647,17 @@ fn adapter_capabilities_for(config: &OpenAiConfig) -> ModelCapabilities {
     capabilities
 }
 
-fn cancelled() -> ModelError {
+pub(super) fn cancelled() -> ModelError {
     ModelError::local(ModelErrorKind::Cancelled, "OpenAI invocation was cancelled")
 }
 
-fn protocol_error(provider: &str, message: impl Into<String>) -> ModelError {
+pub(super) fn protocol_error(provider: &str, message: impl Into<String>) -> ModelError {
     let mut error = ModelError::local(ModelErrorKind::Protocol, message);
     error.provider = Some(provider.into());
     error
 }
 
-fn transport_error(
+pub(super) fn transport_error(
     error: &reqwest::Error,
     provider: &str,
     deadline: Option<Instant>,
@@ -574,7 +674,7 @@ fn transport_error(
     model_error
 }
 
-fn http_error(
+pub(super) fn http_error(
     status: StatusCode,
     request_id: Option<String>,
     body: &str,

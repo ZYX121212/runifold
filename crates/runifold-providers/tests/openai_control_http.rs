@@ -8,9 +8,14 @@ use runifold_provider_testkit::{CassetteServer, HttpExchange, ResponseChunk, Scr
 use runifold_providers::openai::{
     OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus, OpenAiClient, OpenAiConfig,
     OpenAiControlError, OpenAiFilePurpose, OpenAiFileStatus, OpenAiFileUpload,
-    OpenAiFileWaitPolicy, OpenAiRealtimeCallRequest, OpenAiRealtimeClientSecretRequest,
-    OpenAiRealtimeModality, OpenAiRealtimeSdpOffer, OpenAiWireProtocol,
+    OpenAiFileWaitPolicy, OpenAiWireProtocol,
 };
+#[cfg(feature = "openai-realtime")]
+use runifold_providers::openai::{
+    OpenAiRealtimeCallRequest, OpenAiRealtimeClientSecretRequest, OpenAiRealtimeModality,
+    OpenAiRealtimeSdpOffer,
+};
+#[cfg(feature = "openai-realtime")]
 use secrecy::ExposeSecret;
 use serde_json::json;
 
@@ -184,6 +189,7 @@ async fn model_and_batch_lifecycle_is_typed() {
 }
 
 #[tokio::test]
+#[cfg(feature = "openai-realtime")]
 async fn realtime_client_secret_is_typed_and_redacted() {
     let server = CassetteServer::start(vec![
         HttpExchange::new(
@@ -241,6 +247,7 @@ async fn realtime_client_secret_is_typed_and_redacted() {
 }
 
 #[tokio::test]
+#[cfg(feature = "openai-realtime")]
 async fn unified_realtime_call_sends_multipart_sdp_session_and_safety_identity() {
     let answer = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
     let response = ScriptedResponse::ok(vec![ResponseChunk::text(answer)])

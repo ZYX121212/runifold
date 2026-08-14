@@ -68,6 +68,49 @@ pub struct ModelCapabilities {
     pub extensions: BTreeMap<String, FeatureSupport>,
 }
 
+/// Machine-readable inventory of one model endpoint's declared capabilities.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CapabilityAudit {
+    /// Stable feature entries, sorted by feature name.
+    pub features: Vec<CapabilityAuditEntry>,
+    /// Known context-window limit, when declared by the adapter or application.
+    pub max_context_tokens: Option<u64>,
+}
+
+impl CapabilityAudit {
+    /// Returns whether every capability has an explicit native, emulated, or
+    /// unsupported declaration.
+    #[must_use]
+    pub fn is_fully_declared(&self) -> bool {
+        self.features
+            .iter()
+            .all(|entry| entry.support.level != SupportLevel::Unknown)
+    }
+
+    /// Returns entries requiring deployment review before strict use.
+    pub fn review_required(&self) -> impl Iterator<Item = &CapabilityAuditEntry> {
+        self.features.iter().filter(|entry| {
+            matches!(
+                entry.support.level,
+                SupportLevel::Unknown | SupportLevel::Emulated
+            )
+        })
+    }
+}
+
+/// One stable feature declaration and its actionable diagnostic.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CapabilityAuditEntry {
+    /// Canonical feature name or `extension.<namespace>`.
+    pub feature: String,
+    /// Adapter- or application-declared support and constraints.
+    pub support: FeatureSupport,
+    /// Stable diagnostic code for deployment tooling.
+    pub diagnostic_code: String,
+    /// Safe actionable recommendation.
+    pub recommendation: String,
+}
+
 impl Default for ModelCapabilities {
     fn default() -> Self {
         let unknown = || FeatureSupport::new(SupportLevel::Unknown);
@@ -87,6 +130,32 @@ impl Default for ModelCapabilities {
 }
 
 impl ModelCapabilities {
+    /// Produces a stable, serializable capability inventory for deployment
+    /// audits and `doctor` tooling.
+    #[must_use]
+    pub fn audit(&self) -> CapabilityAudit {
+        let mut features = vec![
+            audit_entry("streaming", &self.streaming),
+            audit_entry("tools", &self.tools),
+            audit_entry("parallel_tools", &self.parallel_tools),
+            audit_entry("structured_output", &self.structured_output),
+            audit_entry("reasoning", &self.reasoning),
+            audit_entry("image_input", &self.image_input),
+            audit_entry("audio_input", &self.audio_input),
+            audit_entry("document_input", &self.document_input),
+        ];
+        features.extend(
+            self.extensions
+                .iter()
+                .map(|(name, support)| audit_entry(&format!("extension.{name}"), support)),
+        );
+        features.sort_by(|left, right| left.feature.cmp(&right.feature));
+        CapabilityAudit {
+            features,
+            max_context_tokens: self.max_context_tokens,
+        }
+    }
+
     /// Validates the features required by a request and returns visible
     /// compatibility warnings.
     ///
@@ -168,6 +237,33 @@ impl ModelCapabilities {
             assess_feature(name, support, request.feature_policy, &mut warnings)?;
         }
         Ok(warnings)
+    }
+}
+
+fn audit_entry(feature: &str, support: &FeatureSupport) -> CapabilityAuditEntry {
+    let (diagnostic_code, recommendation) = match support.level {
+        SupportLevel::Native => (
+            "runifold.capability.native",
+            "No compatibility action is required.",
+        ),
+        SupportLevel::Emulated => (
+            "runifold.capability.emulated",
+            "Review the declared constraints and opt into emulation explicitly.",
+        ),
+        SupportLevel::Unsupported => (
+            "runifold.capability.unsupported",
+            "Do not request this feature for the selected model endpoint.",
+        ),
+        SupportLevel::Unknown => (
+            "runifold.capability.unknown",
+            "Declare verified model-specific support before using strict policy.",
+        ),
+    };
+    CapabilityAuditEntry {
+        feature: feature.into(),
+        support: support.clone(),
+        diagnostic_code: diagnostic_code.into(),
+        recommendation: recommendation.into(),
     }
 }
 
@@ -274,5 +370,28 @@ mod tests {
 
         assert_eq!(error.kind, ModelErrorKind::UnsupportedFeature);
         assert_eq!(error.metadata["feature"], "structured_output");
+    }
+
+    #[test]
+    fn capability_audit_is_stable_sorted_and_actionable() {
+        let capabilities = ModelCapabilities {
+            tools: FeatureSupport::new(SupportLevel::Native),
+            ..ModelCapabilities::default()
+        };
+
+        let audit = capabilities.audit();
+
+        assert!(!audit.is_fully_declared());
+        assert_eq!(audit.features[0].feature, "audio_input");
+        assert_eq!(
+            audit
+                .features
+                .iter()
+                .find(|entry| entry.feature == "tools")
+                .unwrap()
+                .diagnostic_code,
+            "runifold.capability.native"
+        );
+        assert!(audit.review_required().count() > 0);
     }
 }

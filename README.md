@@ -11,14 +11,16 @@ are different surfaces over the same execution space.
 Add the facade and the providers your application needs:
 
 ```console
-cargo add runifold --features openai
+cargo add runifold
+cargo add runifold-providers --features openai
 ```
 
 The ergonomic path automatically creates a root run with authority limited to
 the Tool and child-Agent capabilities explicitly registered on the Agent:
 
 ```rust,no_run
-use runifold::{ProviderModelExt, openai::OpenAiClient};
+use runifold::ProviderModelExt;
+use runifold_providers::openai::OpenAiClient;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let runtime = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?
@@ -38,6 +40,8 @@ let answer = agent
 `ProviderRuntime` is long-lived application state. Construct it once during
 startup and clone it into request handlers. Clones share retry and
 circuit-breaker state; rebuilding it for every request resets route health.
+This includes a single physical route: an open single-route circuit fails fast
+until its cooldown probe instead of silently creating a second health scope.
 
 Tools can return ordered text, images, audio, documents, resource links, and a
 separate structured value without flattening everything into a JSON string.
@@ -66,26 +70,30 @@ Applications that only need a low-level model client can omit the Agent,
 Effect, Retrieval, Tool, macro, and Workflow crates:
 
 ```console
-cargo add runifold --no-default-features --features ark
+cargo add runifold-model
+cargo add runifold-providers --features openai
 ```
 
-This lightweight configuration contains only `runifold-core`,
-`runifold-model`, and `runifold-providers`. Use `ModelRequest` plus
-`Model::invoke` directly. The default feature set retains the complete runtime
-for compatibility; disable default features to select this lightweight kernel.
+This lightweight configuration contains only the provider-neutral model
+contract and the selected protocol adapter. Use `ModelRequest` plus
+`Model::invoke` directly. Add the `runifold` facade only when Agent, Tool,
+Effect, Retrieval, or Workflow composition is required.
 
 Compatible providers have first-class modules without separate crates:
 
 ```console
-cargo add runifold --features deepseek
+cargo add runifold
+cargo add runifold-providers --features openai
 ```
 
 ```rust,no_run
-use runifold::deepseek::{DeepSeekAgentExt, client};
+use runifold::ProviderModelExt;
+use runifold_providers::deepseek::client;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let answer = client(std::env::var("DEEPSEEK_API_KEY")?)?
-    .agent("reasoner", "deepseek-reasoner")
+    .runtime("deepseek-reasoner")?
+    .agent("reasoner")
     .prompt_text("Why does idempotency matter?")
     .await?;
 # let _ = answer;
@@ -95,6 +103,15 @@ let answer = client(std::env::var("DEEPSEEK_API_KEY")?)?
 
 See the [Provider support matrix](docs/PROVIDERS.md) for native versus
 compatible protocols, regional endpoints, and verification levels.
+Independent image generation, speech synthesis, and transcription use the
+provider-neutral `ImageGenerationModel`, `SpeechModel`, and
+`TranscriptionModel` traits. OpenAI implements these under the existing
+`openai` protocol feature; no extra modality feature is required. Exact
+per-model capability declarations use `ModelCapabilityCatalog`, while unknown
+model names retain conservative adapter defaults.
+OpenAI-compatible image, speech, and transcription dialects use the separate
+exact `OpenAiMediaCapabilityCatalog`; undeclared models receive fail-closed
+portable subsets rather than model-name inference.
 Repeatable latency, throughput, reliability, and cross-framework comparison
 rules, plus the standalone release-mode Rig executor, are documented in the
 [benchmarking contract](docs/BENCHMARKING.md).
@@ -138,10 +155,8 @@ values:
 
 ```rust,ignore
 use std::sync::Arc;
-use runifold::{
-    Document, InMemoryVectorIndex, RetrievalContext,
-    openai::{OpenAiAgentExt, OpenAiClient},
-};
+use runifold::{Document, InMemoryVectorIndex, RetrievalContext};
+use runifold_providers::openai::OpenAiClient;
 
 let client = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?;
 let embedder = Arc::new(client.embedding_model("text-embedding-3-small")?);
@@ -170,16 +185,17 @@ correctly. Silent truncation is disabled by default.
 For persistent retrieval, select a replaceable vector-store adapter:
 
 ```console
-cargo add runifold --features openai,qdrant
+cargo add runifold --features qdrant
+cargo add runifold-providers --features openai
 ```
 
 ```rust,ignore
 use std::sync::Arc;
 use runifold::{
     Document, RetrievalContext, VectorRetriever,
-    openai::OpenAiClient,
     qdrant::{QdrantConfig, QdrantVectorStore},
 };
+use runifold_providers::openai::OpenAiClient;
 
 let embedder = Arc::new(
     OpenAiClient::from_api_key(api_key)?
@@ -199,6 +215,28 @@ retriever
 Use the `pgvector` feature and `PgVectorStore` for PostgreSQL. Schema creation
 and HNSW index creation are explicit setup operations; lookup and upsert never
 perform hidden migrations.
+
+Reranking composes with every Retriever through one provider-neutral boundary:
+
+```rust,ignore
+use std::sync::Arc;
+use runifold::{RerankingRetriever, Retriever};
+
+let retrieval: Arc<dyn Retriever> = Arc::new(RerankingRetriever::new(
+    "product-search",
+    vector_retriever,
+    reranker,
+    4,
+)?);
+```
+
+The first stage fetches a bounded candidate set; the second stage may only
+return unique candidates from that set, with finite scores and attributable
+usage. `HybridRetriever` concurrently fuses lexical and vector sources with a
+validated weighted reciprocal-rank policy. `runifold-retrieval-text` supplies
+bounded UTF-8, Markdown-section, and JSON Lines ingestion plus Unicode-safe
+chunks with stable source IDs and character offsets. Cohere v2 implements the
+same `Reranker` boundary behind the native `cohere` provider feature.
 
 Retrieval quality can be measured independently of the model and Agent:
 
@@ -747,17 +785,18 @@ compaction. An external human-approval service should still treat the Task ID
 as an idempotency key because no local lease can atomically commit an
 uncooperative remote side effect.
 
-Enable the first provider edge with the `openai` feature:
+Add the OpenAI protocol adapter from the provider crate:
 
 ```rust,no_run
 use runifold::{
-    Budget, BudgetTracker, RunContext,
-    openai::{OpenAiAgentExt, OpenAiClient},
+    Budget, BudgetTracker, ProviderModelExt, RunContext,
 };
+use runifold_providers::openai::OpenAiClient;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let agent = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?
-    .agent("assistant", "gpt-5")
+    .runtime("gpt-5")?
+    .agent("assistant")
     .system("Answer precisely and expose uncertainty.")
     .max_turns(8)
     .build()?;
@@ -798,14 +837,17 @@ answer can escape.
 The library does not read credentials implicitly. Applications decide how
 secrets enter their process.
 
-Anthropic uses its native Messages protocol behind the `anthropic` feature:
+Anthropic uses its native Messages protocol behind the provider crate's
+`anthropic` feature:
 
 ```rust,no_run
-use runifold::anthropic::{AnthropicAgentExt, AnthropicClient};
+use runifold::ProviderModelExt;
+use runifold_providers::anthropic::AnthropicClient;
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
 let agent = AnthropicClient::from_api_key(std::env::var("ANTHROPIC_API_KEY")?)?
-    .agent("researcher", "claude-sonnet-4-5")
+    .runtime("claude-sonnet-4-5")?
+    .agent("researcher")
     .system("Separate evidence from inference.")
     .build()?;
 # let _ = agent;
@@ -824,6 +866,12 @@ Runifold keeps error responsibilities at the correct boundary:
 
 See `crates/runifold/examples/error_context.rs` for the application-boundary
 pattern.
+
+Applications that need a stable business classification do not need to match
+every `AgentError` variant. `AgentError::run_error_kind()` returns the same
+normalized `RunErrorKind` used by lifecycle observability,
+`AgentError::retry_safety()` preserves explicit retry safety, and
+`AgentError::to_run_error()` returns the complete normalized contract.
 
 Terminal model output can be constrained and decoded as a Rust type:
 
@@ -903,7 +951,11 @@ let agent = client
 The macro generates `add_tool()`. Input is validated before the handler runs,
 output is serialized after it succeeds, and both JSON Schemas become part of
 the Tool capability contract. `FunctionTool` exposes the same mechanism
-without using the attribute macro.
+without using the attribute macro. Implement the object-safe `Tool` trait
+directly only for dynamic or non-function capabilities that cannot use this
+typed boundary; ordinary business services should use `State<T>` as shown
+below instead of hand-writing `Arc<dyn Fn>`, boxed futures, JSON erasure, and a
+`ToolDescriptor`.
 
 Functions that return images, audio, documents, resources, or mixed content
 use the explicit rich-output mode. The returned `ToolOutput` remains canonical
@@ -1017,7 +1069,7 @@ slows Agent execution instead of growing an unbounded event buffer.
 Provider identity and wire protocol are configured independently:
 
 ```rust,no_run
-use runifold::openai::{OpenAiConfig, OpenAiWireProtocol};
+use runifold_providers::openai::{OpenAiConfig, OpenAiWireProtocol};
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
 let ark = OpenAiConfig::ark(std::env::var("ARK_API_KEY")?)?;
@@ -1037,6 +1089,51 @@ let custom = OpenAiConfig::custom(
 # Ok(())
 # }
 ```
+
+Concrete adapters publish a reviewed runtime profile, so the ordinary
+provider-neutral `runtime` path is configuration-complete:
+
+```rust,no_run
+use runifold::ProviderModelExt;
+use runifold_providers::ark;
+
+# fn example() -> Result<(), Box<dyn std::error::Error>> {
+let client = ark::client(std::env::var("ARK_API_KEY")?)?;
+let runtime = client.runtime("doubao-model")?;
+let agent = runtime.agent("assistant");
+# let _ = agent;
+# Ok(())
+# }
+```
+
+For OpenAI-compatible Responses, the adapter profile uses Complete delivery as
+an atomic Router commit,
+sets `parallel_tool_calls=false`, uses `FeaturePolicy::BestEffort` so unknown or
+emulated model capabilities proceed with visible warnings, retains the bounded
+default retry/circuit policy, and explicitly permits retrying malformed Tool
+arguments. Capabilities declared unsupported still fail before transport. That
+retry may incur another provider charge, but cannot expose partial output or
+execute a Tool from the rejected attempt. Chat Completions remains streaming
+because its complete adapter is not implemented. Applications with a reviewed
+deployment-specific policy can pass a generic `ProviderRuntimeProfile` to
+`runtime_with_profile`; this makes every override explicit without coupling
+the runtime facade to an OpenAI-specific policy type.
+
+Standard workload profiles layer over those adapter-owned invariants:
+
+```rust,ignore
+use runifold::{BatchProfile, InteractiveProfile, ProviderModelExt};
+
+let interactive = client.clone().runtime_with_preset("model", InteractiveProfile)?;
+let batch = client.runtime_with_preset("model", BatchProfile)?;
+let audit = batch.capability_audit().await?;
+assert!(audit.review_required().all(|entry| !entry.recommendation.is_empty()));
+```
+
+`ProductionProfile` is the normal adapter recommendation, `InteractiveProfile`
+commits streamed canonical events promptly, and `BatchProfile` validates a
+complete response before Router commit. Capability audits are stable,
+serializable deployment evidence; they do not guess model support.
 
 Multiple physical models can sit behind one logical model identity:
 
@@ -1107,6 +1204,11 @@ gets a distinct invocation identity. The effective wait is the greater of
 local backoff and provider `Retry-After`. Runifold stops before sleeping when
 the delay would cross the invocation deadline, observes cancellation during
 the wait, and never retries after the first canonical stream event.
+Complete delivery moves that commit point after terminal validation: the
+Router buffers and validates the canonical response first, then replays its
+events. Pre-commit malformed responses can therefore be retried when policy
+explicitly authorizes their error kind. Streaming retains the original
+first-visible-event commitment rule.
 
 Child agents are exposed through an explicit gateway route. The route itself
 is an `Agent` capability, while the child receives only the configured subset
@@ -1608,6 +1710,45 @@ embedding tokens, cost, duration, cancellation, and deadlines participate in
 the caller's run. Without an embedder the same API retains deterministic
 lexical search.
 
+## Fault scenarios and operations
+
+`runifold-testkit` exposes the same failure boundaries used by the workspace:
+
+```rust,ignore
+use runifold_testkit::{FaultScenario, RecoveryHarness};
+
+let faults = FaultScenario::new()
+    .disconnect_after_tool_call()
+    .fail_tool_on_invocation("charge", 2, injected_error);
+let model = faults.model(scripted_model);
+let mut runtime = RecoveryHarness::new(runtime_factory, faults.clone());
+
+runtime.restart();
+faults.assert_tool_executed_exactly("charge", 1)?;
+```
+
+`GoldenTrace` removes generated identities and timestamps while preserving
+causal event behavior, so regressions identify the first divergent event.
+
+The separate operations CLI reads exported JSON or pages canonical journals by
+`run_id` without linking Provider credentials or executing effects. SQLite is
+opened with read-only flags; PostgreSQL queries never perform migrations:
+
+```console
+runifold run inspect --events events.json
+runifold run tail --events events.json --limit 50
+runifold run inspect --sqlite runifold.db --run-id 019...
+runifold run inspect --postgres "$RUNIFOLD_POSTGRES_URL" --run-id 019...
+runifold run replay --events events.json --output replay-evidence.json
+runifold checkpoint diff before.json after.json
+runifold budget explain budget.json usage.json
+runifold doctor --events events.json
+```
+
+Checkpoint diffs report JSON Pointers and change kinds without printing values.
+The replay command produces validated, side-effect-free evidence; actual Effect
+re-execution remains behind the runtime's explicit recovery policy.
+
 ## Design principles
 
 1. Every execution is a `Run`.
@@ -1634,15 +1775,18 @@ requirements are documented in the [testing guide](docs/TESTING.md).
 | `runifold-core` | Run, event, effect, capability, budget, and cancellation primitives |
 | `runifold-effect` | Write-ahead effects, idempotency, recovery policy, and durable result replay |
 | `runifold-eval-cli` | JSONL evaluation runner, external Candidate protocol, and CI quality gates |
+| `runifold-cli` | Read-only run inspection, replay evidence, checkpoint diff, budget explanation, and doctor commands |
 | `runifold-model` | Provider-neutral model requests, content, capabilities, and stream accumulation |
 | `runifold-macros` | Attribute macros for typed async Rust Tools |
 | `runifold-mcp` | Capability-safe MCP Tools, Resources, Templates, Prompts, Completion, Sampling, stdio, and Streamable HTTP |
 | `runifold-observability-otel` | Optional OpenTelemetry GenAI spans and metrics |
+| `runifold-ops` | Stable operational summaries, causal validation, budget explanation, and value-free checkpoint diffs |
 | `runifold-providers` | Feature-gated HTTP and SDK-backed model provider adapters |
 | `runifold-provider-testkit` | Offline real-HTTP cassettes, protocol assertions, delays, and disconnect injection |
 | `runifold-retrieval` | Provider-neutral embeddings, capability-safe retrieval, and a deterministic reference vector index |
 | `runifold-retrieval-pgvector` | Explicit PostgreSQL/pgvector persistence and cosine/HNSW retrieval |
 | `runifold-retrieval-qdrant` | Qdrant REST upsert and query adapter with stable document identity |
+| `runifold-retrieval-text` | Bounded UTF-8 loading and deterministic Unicode/provenance-aware chunking |
 | `runifold-store-postgres` | PostgreSQL conversations, semantic memory, atomic Agent checkpoints, write-ahead effects, workflow claims, fenced checkpoints, leases, heartbeats, and fencing tokens |
 | `runifold-store-sqlite` | Durable local effects, checkpoints, journals, atomic Agent conversations, fenced Workflow tasks, budgets, HITL, history, and fork/replay in SQLite |
 | `runifold-testkit` | Deterministic runtime helpers, quality datasets, async scorers, and regression gates |

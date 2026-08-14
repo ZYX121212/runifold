@@ -3,6 +3,7 @@
 mod blocking;
 mod conversation;
 mod effect;
+mod journal;
 mod workflow;
 
 pub use conversation::{PostgresConversationStore, PostgresConversationStoreError};

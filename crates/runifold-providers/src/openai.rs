@@ -7,16 +7,25 @@ mod control;
 mod decode;
 mod embedding;
 mod encode;
+mod hosted_tool;
+mod media;
+#[cfg(feature = "openai-realtime")]
 mod realtime;
+#[cfg(feature = "openai-realtime")]
 mod realtime_audio;
+#[cfg(feature = "openai-realtime")]
 mod realtime_call;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "openai-realtime", target_arch = "wasm32"))]
 mod realtime_data_channel;
+#[cfg(feature = "openai-realtime")]
 mod realtime_event;
+#[cfg(feature = "openai-realtime")]
 mod realtime_reconnect;
+#[cfg(feature = "openai-realtime")]
 mod realtime_session_transport;
+#[cfg(feature = "openai-realtime")]
 mod realtime_transport;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "openai-realtime", target_arch = "wasm32"))]
 mod realtime_webrtc;
 
 pub use chat::{ChatCompletionsDecoder, encode_chat_request};
@@ -29,20 +38,30 @@ pub use control::{
     OpenAiBatch, OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus, OpenAiControlError,
     OpenAiControlFuture, OpenAiControlPlane, OpenAiFile, OpenAiFileDeletion, OpenAiFilePurpose,
     OpenAiFileStatus, OpenAiFileUpload, OpenAiFileWaitPolicy, OpenAiModelInfo,
-    OpenAiRealtimeClientSecret, OpenAiRealtimeClientSecretRequest,
 };
+#[cfg(feature = "openai-realtime")]
+pub use control::{OpenAiRealtimeClientSecret, OpenAiRealtimeClientSecretRequest};
 pub use decode::OpenAiEventDecoder;
 pub use embedding::OpenAiEmbeddingModel;
 pub use encode::encode_request;
+pub use hosted_tool::{OpenAiHostedTool, OpenAiHostedToolError};
+pub use media::{
+    OpenAiImageWireProfile, OpenAiMediaCapabilityCatalog, OpenAiSpeechWireProfile,
+    OpenAiTranscriptionWireProfile,
+};
+#[cfg(feature = "openai-realtime")]
 pub use realtime::{
     OpenAiRealtimeClient, OpenAiRealtimeCommand, OpenAiRealtimeConnection, OpenAiRealtimeError,
     OpenAiRealtimeEvent, OpenAiRealtimeModality, OpenAiRealtimeSessionUpdate, OpenAiRealtimeState,
     RealtimeReconnectDisposition,
 };
+#[cfg(feature = "openai-realtime")]
 pub use realtime_audio::{
     OPENAI_REALTIME_MAX_AUDIO_CHUNK_BYTES, OpenAiRealtimeAudioChunk, OpenAiRealtimeAudioFormat,
 };
+#[cfg(feature = "openai-realtime")]
 pub use realtime_call::{OpenAiRealtimeCall, OpenAiRealtimeCallRequest, OpenAiRealtimeSdpOffer};
+#[cfg(feature = "openai-realtime")]
 pub use realtime_reconnect::{
     OpenAiRealtimeReconnectAttempt, OpenAiRealtimeReconnectController,
     OpenAiRealtimeReconnectError, OpenAiRealtimeReconnectEvent, OpenAiRealtimeReconnectFailureKind,
@@ -97,7 +116,7 @@ impl From<ArkWebSearchTool> for runifold_model::ProviderToolSpec {
         }
     }
 }
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(feature = "openai-realtime", target_arch = "wasm32"))]
 pub use realtime_webrtc::{
     OpenAiRealtimeIceServer, OpenAiRealtimeIceTransportPolicy, OpenAiRealtimePendingWebRtc,
     OpenAiRealtimeWebRtcConnectionState, OpenAiRealtimeWebRtcIceState, OpenAiRealtimeWebRtcOptions,

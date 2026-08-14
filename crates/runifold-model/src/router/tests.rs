@@ -11,8 +11,8 @@ use runifold_core::RetrySafety;
 use crate::{
     CircuitBreakerConfig, CircuitState, ContentPart, FeatureSupport, FinishReason, Message, Model,
     ModelCallContext, ModelCapabilities, ModelError, ModelErrorKind, ModelEventStream, ModelFuture,
-    ModelRef, ModelRequest, ModelRetryPolicy, ModelStreamEvent, RetryJitter, RouterClock,
-    RouterSleepFuture, RouterSleeper, SupportLevel,
+    ModelRef, ModelRequest, ModelRetryPolicy, ModelStreamEvent, ResponseMode, RetryJitter,
+    RouterClock, RouterSleepFuture, RouterSleeper, SupportLevel,
 };
 
 use super::{ModelFallbackPolicy, ModelRouter, ModelRouterBuildError};
@@ -195,6 +195,31 @@ fn completed(model: ModelRef, text: &str) -> Vec<Result<ModelStreamEvent, ModelE
         }),
         Ok(ModelStreamEvent::ResponseCompleted {
             finish_reason: FinishReason::Stop,
+            provider_metadata: std::collections::BTreeMap::new(),
+        }),
+    ]
+}
+
+fn malformed_tool_call(model: ModelRef) -> Vec<Result<ModelStreamEvent, ModelError>> {
+    vec![
+        Ok(ModelStreamEvent::ResponseStarted {
+            id: Some("malformed".into()),
+            model,
+        }),
+        Ok(ModelStreamEvent::ContentBlockStarted {
+            index: 0,
+            kind: crate::ContentBlockKind::ToolCall {
+                id: "call".into(),
+                name: "lookup".into(),
+            },
+        }),
+        Ok(ModelStreamEvent::ToolArgumentsDelta {
+            index: 0,
+            json: "{".into(),
+        }),
+        Ok(ModelStreamEvent::ContentBlockCompleted { index: 0 }),
+        Ok(ModelStreamEvent::ResponseCompleted {
+            finish_reason: FinishReason::ToolCalls,
             provider_metadata: std::collections::BTreeMap::new(),
         }),
     ]
@@ -600,6 +625,58 @@ fn retry_never_occurs_after_the_stream_commit_point() {
 
     assert_eq!(error.retry_safety, RetrySafety::UnsafeAfterVisibleOutput);
     assert_eq!(model.calls(), 1);
+}
+
+#[test]
+fn complete_mode_validates_before_commit_and_can_retry_malformed_tool_arguments() {
+    let model = Arc::new(SequenceModel::new([
+        Script::Events(malformed_tool_call(ModelRef::new("primary", "model"))),
+        Script::Events(completed(ModelRef::new("primary", "model"), "recovered")),
+    ]));
+    let retry = ModelRetryPolicy::exponential(2, Duration::ZERO, Duration::ZERO, 1)
+        .unwrap()
+        .allow_unknown(ModelErrorKind::MalformedToolArguments);
+    let router = ModelRouter::builder(logical())
+        .route("primary", model.clone(), ModelRef::new("primary", "model"))
+        .retry_policy(retry)
+        .build()
+        .unwrap();
+
+    let response = futures_executor::block_on(router.invoke(
+        request().response_mode(ResponseMode::Complete),
+        ModelCallContext::new(),
+    ))
+    .unwrap();
+
+    assert_eq!(model.calls(), 2);
+    assert_eq!(response.text(), "recovered");
+    assert_eq!(response.provider_events[0].value["route_attempt"], 2);
+    assert_eq!(
+        response.provider_events[0].value["prior_failures"][0]["kind"],
+        "MalformedToolArguments"
+    );
+}
+
+#[test]
+fn complete_mode_malformed_tool_arguments_open_a_single_route_circuit() {
+    let model = Arc::new(TestModel::new(Script::Events(malformed_tool_call(
+        ModelRef::new("primary", "model"),
+    ))));
+    let router = ModelRouter::builder(logical())
+        .route("primary", model.clone(), ModelRef::new("primary", "model"))
+        .circuit_breaker(CircuitBreakerConfig::new(1, Duration::from_secs(30)).unwrap())
+        .build()
+        .unwrap();
+
+    let error = futures_executor::block_on(router.invoke(
+        request().response_mode(ResponseMode::Complete),
+        ModelCallContext::new(),
+    ))
+    .unwrap_err();
+
+    assert_eq!(error.kind, ModelErrorKind::MalformedToolArguments);
+    assert_eq!(model.calls(), 1);
+    assert_eq!(router.route_health()[0].state, CircuitState::Open);
 }
 
 #[test]

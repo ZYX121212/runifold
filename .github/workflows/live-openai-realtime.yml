@@ -56,7 +56,7 @@ jobs:
       - name: Execute ignored live canary
         run: |
           cargo test -p runifold-providers \
-            --features openai \
+            --features openai-realtime \
             --test openai_realtime_live \
             --locked \
             -- --ignored

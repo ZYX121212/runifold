@@ -1,0 +1,21 @@
+[package]
+name = "runifold-retrieval-text"
+description = "Deterministic plain-text loading and chunking for Runifold retrieval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[dependencies]
+runifold-retrieval.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

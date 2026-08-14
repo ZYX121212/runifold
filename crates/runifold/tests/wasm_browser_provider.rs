@@ -9,10 +9,13 @@ use futures_timer::Delay;
 use runifold::Message;
 use runifold::{
     CancellationToken, Model, ModelCallContext, ModelRef, ModelRequest, ProviderModelExt,
-    anthropic::{AnthropicClient, AnthropicConfig},
     core::{Instant, RetrySafety},
-    gemini::{GeminiClient, GeminiConfig},
     model::{ModelErrorKind, RetryJitter},
+    retrieval::{EmbeddingModel, EmbeddingRequest, EmbeddingTask, RetrievalContext},
+};
+use runifold_providers::{
+    anthropic::{AnthropicClient, AnthropicConfig},
+    gemini::{GeminiClient, GeminiConfig},
     ollama::{OllamaClient, OllamaConfig},
     openai::{
         OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus, OpenAiClient, OpenAiConfig,
@@ -25,7 +28,6 @@ use runifold::{
         OpenAiRealtimeWebRtcIceState, OpenAiRealtimeWebRtcOptions, OpenAiRealtimeWebRtcSession,
         OpenAiWireProtocol, RealtimeReconnectDisposition,
     },
-    retrieval::{EmbeddingModel, EmbeddingRequest, EmbeddingTask, RetrievalContext},
 };
 use wasm_bindgen::{JsCast, closure::Closure};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
@@ -111,7 +113,7 @@ async fn browser_realtime_gateway_rebuild_retries_only_transient_status() {
 
     assert!(matches!(
         error,
-        runifold::openai::OpenAiRealtimeReconnectError::Permanent {
+        runifold_providers::openai::OpenAiRealtimeReconnectError::Permanent {
             source,
         } if matches!(
             *source,

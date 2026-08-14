@@ -9,7 +9,9 @@ publish_order=(
     runifold-macros
     runifold-effect
     runifold-model
+    runifold-ops
     runifold-retrieval
+    runifold-retrieval-text
     runifold-tool
     runifold-provider-testkit
     runifold-retrieval-pgvector
@@ -23,6 +25,7 @@ publish_order=(
     runifold-observability-otel
     runifold-store-postgres
     runifold-eval-cli
+    runifold-cli
     runifold
 )
 

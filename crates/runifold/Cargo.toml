@@ -21,25 +21,8 @@ runtime = [
     "dep:runifold-tool",
     "dep:runifold-workflow",
     "dep:schemars",
+    "dep:serde_json",
 ]
-anthropic = ["dep:runifold-providers", "runifold-providers/anthropic"]
-azure = ["openai"]
-bedrock = ["dep:runifold-providers", "runifold-providers/bedrock"]
-gemini = ["dep:runifold-providers", "runifold-providers/gemini"]
-ollama = ["dep:runifold-providers", "runifold-providers/ollama"]
-openai = ["dep:runifold-providers", "runifold-providers/openai"]
-ark = ["openai"]
-deepseek = ["openai"]
-groq = ["openai"]
-minimax = ["openai"]
-mistral = ["openai"]
-openrouter = ["openai"]
-perplexity = ["openai"]
-qwen = ["openai"]
-siliconflow = ["openai"]
-together = ["openai"]
-xai = ["openai"]
-zhipu = ["openai"]
 otel = ["dep:runifold-observability-otel"]
 mcp = ["runtime", "dep:runifold-mcp"]
 sqlite = ["runtime", "dep:runifold-store-sqlite"]
@@ -63,11 +46,10 @@ archive-s3 = [
 runifold-agent = { workspace = true, optional = true }
 runifold-core.workspace = true
 runifold-effect = { workspace = true, optional = true }
-runifold-mcp = { version = "0.6.1", path = "../runifold-mcp", optional = true }
+runifold-mcp = { version = "0.7.0", path = "../runifold-mcp", optional = true }
 runifold-model.workspace = true
 runifold-macros = { workspace = true, optional = true }
-runifold-observability-otel = { version = "0.6.1", path = "../runifold-observability-otel", optional = true }
-runifold-providers = { workspace = true, optional = true }
+runifold-observability-otel = { version = "0.7.0", path = "../runifold-observability-otel", optional = true }
 runifold-retrieval = { workspace = true, optional = true }
 runifold-retrieval-pgvector = { workspace = true, optional = true }
 runifold-retrieval-qdrant = { workspace = true, optional = true }
@@ -87,6 +69,8 @@ secrecy = { workspace = true, optional = true }
 [dev-dependencies]
 anyhow = "1.0.104"
 futures-executor.workspace = true
+runifold-providers = { path = "../runifold-providers", features = ["anthropic", "gemini", "ollama", "openai-realtime"] }
+runifold-testkit = { path = "../runifold-testkit" }
 serde.workspace = true
 serde_json.workspace = true
 
@@ -124,10 +108,6 @@ required-features = ["runtime"]
 [[test]]
 name = "typed_tool_macro"
 required-features = ["runtime"]
-
-[[test]]
-name = "lightweight_ark"
-required-features = ["ark"]
 
 [[test]]
 name = "wasm_browser_provider"

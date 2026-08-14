@@ -1,12 +1,11 @@
 //! Assemble a durable, capability-explicit chain of Agents.
 
-#[cfg(feature = "openai")]
 fn main() -> anyhow::Result<()> {
     use std::sync::Arc;
 
     use anyhow::Context;
-    use runifold::openai::{OpenAiAgentExt, OpenAiClient, OpenAiConfig};
-    use runifold::{CapabilitySet, Workflow};
+    use runifold::{CapabilitySet, ProviderModelExt, Workflow};
+    use runifold_providers::openai::{OpenAiClient, OpenAiConfig};
 
     let api_key = std::env::var("OPENAI_API_KEY")
         .context("OPENAI_API_KEY is required to configure the workflow")?;
@@ -41,9 +40,4 @@ fn main() -> anyhow::Result<()> {
         workflow.step_ids().len()
     );
     Ok(())
-}
-
-#[cfg(not(feature = "openai"))]
-fn main() {
-    eprintln!("run this example with `--features openai`");
 }

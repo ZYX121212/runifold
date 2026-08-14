@@ -6,6 +6,12 @@ Run the complete suite with:
 cargo test --workspace
 ```
 
+The isolated feature matrix includes the native `cohere` Rerank protocol.
+OpenAI media cassettes exercise image JSON, binary speech, and multipart
+transcription over a real loopback HTTP transport. They verify request shape,
+response bounds, typed mapping, and credential redaction without live vendor
+credentials.
+
 The ignored live OpenAI Realtime canary is selected explicitly:
 
 ```bash
@@ -188,10 +194,10 @@ cargo +1.88.0 check --workspace --all-targets --all-features
 ```
 
 CI also verifies the zero-feature contracts for `runifold` and
-`runifold-providers`, every native Provider feature in isolation, and the
-facade's native and OpenAI-compatible Provider feature groups. A test target
-that imports an optional Provider must declare the corresponding crate-level
-`cfg(feature = "...")` gate.
+`runifold-providers`, every native protocol feature in isolation, the
+OpenAI-compatible group, and the separate Realtime dependency boundary. A test
+target that imports an optional Provider must declare the corresponding
+crate-level `cfg(feature = "...")` gate.
 
 Release verification validates the internal dependency order and assembles
 every `.crate` archive with `--no-verify`. This is required for an unpublished

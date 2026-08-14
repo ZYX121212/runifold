@@ -57,14 +57,15 @@ impl Default for CircuitBreakerConfig {
                 ModelErrorKind::Provider,
                 ModelErrorKind::Protocol,
                 ModelErrorKind::StreamState,
+                ModelErrorKind::MalformedToolArguments,
             ],
         }
     }
 }
 
 impl CircuitBreakerConfig {
-    /// Creates a breaker that counts transport, provider, protocol, and stream
-    /// state failures.
+    /// Creates a breaker that counts transport, provider, protocol,
+    /// stream-state, and malformed Tool-argument failures.
     ///
     /// # Errors
     ///
@@ -88,6 +89,7 @@ impl CircuitBreakerConfig {
                 ModelErrorKind::Provider,
                 ModelErrorKind::Protocol,
                 ModelErrorKind::StreamState,
+                ModelErrorKind::MalformedToolArguments,
             ],
         })
     }

@@ -6,6 +6,55 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-14
+
+### Added
+
+- Added provider-neutral `ProviderRuntimeProfile` defaults. Concrete adapters
+  publish their reviewed delivery, feature, retry, circuit, and request-option
+  policy through `ProviderModel::runtime_profile`; `ProviderModelExt::runtime`
+  applies it automatically, while `runtime_with_profile` is the explicit
+  override boundary.
+- Consolidated concrete Provider ownership in `runifold-providers`. OpenAI-
+  compatible brands are named modules under the single `openai` protocol
+  feature instead of facade or per-brand Cargo features, and Realtime-only
+  transports are isolated behind `openai-realtime`.
+- Added Hugging Face Inference Providers and explicit application-owned vLLM,
+  llama.cpp, and llamafile constructors under the existing `openai` protocol
+  feature, without adding brand Cargo features or hidden local-process policy.
+- Exposed stable `AgentError::run_error_kind`, `retry_safety`, and
+  `to_run_error` normalization so applications can consume the same failure
+  taxonomy as Runifold observability without duplicating internal matches.
+- Added `ProductionProfile`, `InteractiveProfile`, and `BatchProfile` as
+  workload overlays that preserve Provider-owned safety settings, plus
+  serializable capability audits and stable diagnostic codes/recommendations
+  for one-shot failures.
+- Productized deterministic fault scenarios, Model disconnects, named Tool
+  failure injection, runtime reconstruction, and normalized golden traces in
+  `runifold-testkit`.
+- Added the read-only `runifold-ops` inspection model and `runifold` operations
+  CLI for exported run inspection/tailing, side-effect-free replay evidence,
+  value-free checkpoint diffs, budget explanation, and doctor checks.
+- Added the provider-neutral `Reranker` and `RerankingRetriever` boundaries,
+  plus the `runifold-retrieval-text` companion crate for bounded UTF-8 loading
+  and stable Unicode/provenance-aware chunking.
+- Added durable SQLite/PostgreSQL canonical journal paging and direct `run_id`
+  CLI inspection with strictly read-only SQLite access.
+- Added provider-neutral image generation, speech, and transcription tasks with
+  bounded OpenAI adapters and offline wire-contract tests.
+- Added exact per-model capability catalogs and typed OpenAI hosted-tool
+  constructors for web/file search, Code Interpreter, image generation, and
+  remote MCP.
+- Added concurrent weighted reciprocal-rank hybrid retrieval, Markdown/JSON
+  Lines ingestion, and a native Cohere v2 Rerank adapter behind `cohere`.
+
+### Fixed
+
+- Made `ResponseMode::Complete` validate the full canonical response before a
+  route commits. Malformed Tool arguments and other terminal protocol failures
+  can now participate in explicitly authorized retry and single-route circuit
+  breaking without exposing partial output or executing a Tool.
+
 ## [0.6.1] - 2026-08-13
 
 ### Fixed

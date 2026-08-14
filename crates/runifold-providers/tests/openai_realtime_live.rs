@@ -1,5 +1,5 @@
 //! Opt-in live verification for `OpenAI` Realtime client-secret rotation.
-#![cfg(feature = "openai")]
+#![cfg(feature = "openai-realtime")]
 
 use std::{
     env, fs,

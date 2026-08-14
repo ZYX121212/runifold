@@ -10,13 +10,46 @@ use runifold_agent::{
     ConversationVersion, ConversationWindow, MemoryNamespace, SemanticMemoryId,
     SemanticMemoryQuery, SemanticMemorySource, SemanticMemoryUpsert,
 };
+use runifold_core::{EventFactory, Journal, LifecycleEvent, RunEventKind, RunId};
 use runifold_model::{ArtifactError, ArtifactScope, ArtifactStore, ArtifactWrite, Message};
+use runifold_ops::{RunEventPageSize, RunEventSource};
 use runifold_store_postgres::PostgresConversationStore;
 use serde_json::json;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
 pub use support::PostgresTestContext;
+
+#[tokio::test]
+async fn canonical_journal_migrates_missing_table_and_round_trips_in_bounded_pages() {
+    let database = PostgresTestContext::start("RUNIFOLD_TEST_POSTGRES_URL").await;
+    let table = format!("rf_j_{}", Uuid::now_v7().simple());
+    let store = PostgresConversationStore::connect(database.connection_url(), &table)
+        .await
+        .unwrap();
+    store.ensure_schema().await.unwrap();
+    drop_event_table(database.connection_url(), &table).await;
+    store.ensure_schema().await.unwrap();
+    let run_id = RunId::new();
+    let factory = EventFactory::new(run_id, None);
+    let started = factory.emit(RunEventKind::Lifecycle(LifecycleEvent::Started), None);
+    let completed = factory.emit(
+        RunEventKind::Lifecycle(LifecycleEvent::Completed { output: json!({}) }),
+        Some(started.meta.event_id),
+    );
+    store.record(&started).unwrap();
+    store.record(&completed).unwrap();
+
+    let page = store
+        .event_page(run_id, None, RunEventPageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(page.events, vec![started]);
+    let tail = store
+        .event_page(run_id, page.next, RunEventPageSize::new(1).unwrap())
+        .unwrap();
+    assert_eq!(tail.events, vec![completed]);
+    assert_eq!(tail.next, None);
+}
 
 #[tokio::test]
 async fn transcript_summary_memory_and_concurrent_cas_survive_reconnect() {
@@ -322,10 +355,23 @@ async fn drop_tables(connection_url: &str, table: &str) {
     });
     client
         .batch_execute(&format!(
-            "DROP TABLE {table}_artifact_idempotency, {table}_artifacts, \
+            "DROP TABLE {table}_artifact_idempotency, {table}_artifacts, {table}_events, \
              {table}_effects, {table}_checkpoints, \
              {table}_memory, {table}_transcript, {table}"
         ))
+        .await
+        .unwrap();
+}
+
+async fn drop_event_table(connection_url: &str, table: &str) {
+    let (client, connection) = tokio_postgres::connect(connection_url, NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+        .batch_execute(&format!("DROP TABLE {table}_events"))
         .await
         .unwrap();
 }

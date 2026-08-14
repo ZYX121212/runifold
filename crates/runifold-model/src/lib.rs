@@ -2,18 +2,24 @@
 
 mod artifact;
 mod capability;
+mod capability_catalog;
 mod circuit;
 mod content;
 mod error;
 mod invocation;
+mod media;
 mod request;
 mod response;
 mod retry;
 mod router;
+mod runtime_profile;
 mod stream;
 mod structured;
 
-pub use capability::{FeatureSupport, ModelCapabilities, SupportLevel};
+pub use capability::{
+    CapabilityAudit, CapabilityAuditEntry, FeatureSupport, ModelCapabilities, SupportLevel,
+};
+pub use capability_catalog::ModelCapabilityCatalog;
 pub use circuit::{
     CircuitBreakerConfig, CircuitBreakerConfigError, CircuitState, ModelRouteHealth, RouterClock,
     SystemRouterClock,
@@ -24,6 +30,11 @@ pub use content::{
 };
 pub use error::{ModelError, ModelErrorKind};
 pub use invocation::{Model, ModelCallContext, ModelEventStream, ModelFuture, ProviderModel};
+pub use media::{
+    GeneratedImage, ImageFormat, ImageGenerationModel, ImageGenerationRequest,
+    ImageGenerationResponse, SpeechFormat, SpeechModel, SpeechRequest, SpeechResponse,
+    TranscriptionModel, TranscriptionRequest, TranscriptionResponse,
+};
 pub use request::{
     FeaturePolicy, GenerationOptions, ModelRef, ModelRequest, OutputFormat, ProviderToolSpec,
     ResponseMode, ToolChoice, ToolSpec,
@@ -35,6 +46,10 @@ pub use retry::{
 };
 pub use router::{
     ModelFallbackPolicy, ModelRoute, ModelRouter, ModelRouterBuildError, ModelRouterBuilder,
+};
+pub use runtime_profile::{
+    BatchProfile, InteractiveProfile, ProductionProfile, ProviderRuntimeProfile,
+    RuntimeProfilePreset,
 };
 pub use stream::{ContentBlockKind, ModelStreamAccumulator, ModelStreamEvent, ProviderEvent};
 pub use structured::{StructuredOutputError, StructuredOutputErrorKind};

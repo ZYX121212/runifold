@@ -8,6 +8,15 @@
 
 pub mod content_projection;
 
+#[cfg(feature = "openai")]
+mod compatible;
+
+#[cfg(feature = "openai")]
+pub use compatible::{
+    ark, azure, deepseek, groq, huggingface, llama_cpp, llamafile, minimax, mistral, openrouter,
+    perplexity, qwen, siliconflow, together, vllm, xai, zhipu,
+};
+
 #[cfg(any(
     feature = "anthropic",
     feature = "gemini",
@@ -20,6 +29,8 @@ mod reliability;
 pub mod anthropic;
 #[cfg(feature = "bedrock")]
 pub mod bedrock;
+#[cfg(feature = "cohere")]
+pub mod cohere;
 #[cfg(feature = "gemini")]
 pub mod gemini;
 #[cfg(feature = "ollama")]

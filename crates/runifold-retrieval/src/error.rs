@@ -64,6 +64,21 @@ pub enum RetrievalError {
     /// A document identity appeared more than once.
     #[error("duplicate document id `{0}`")]
     DuplicateDocument(DocumentId),
+    /// A reranker candidate multiplier was zero or overflowed the query limit.
+    #[error("reranker candidate multiplier must produce between 1 and 1000 candidates")]
+    InvalidRerankCandidateLimit,
+    /// A reranker returned invalid, duplicate, or foreign documents.
+    #[error("reranker returned an invalid result: {message}")]
+    InvalidRerankOutput {
+        /// Safe validation diagnostic.
+        message: String,
+    },
+    /// Hybrid retrieval configuration cannot produce a stable bounded fusion.
+    #[error("hybrid retrieval weights and rank constant must be finite and positive")]
+    InvalidHybridConfiguration,
+    /// A hybrid retriever returned duplicate documents within one source.
+    #[error("hybrid source returned duplicate document id `{0}`")]
+    DuplicateHybridResult(DocumentId),
     /// A run did not grant the retriever capability.
     #[error("retriever capability `{name}` is not granted")]
     CapabilityDenied {

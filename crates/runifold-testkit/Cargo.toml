@@ -17,6 +17,7 @@ futures-util.workspace = true
 runifold-core.workspace = true
 runifold-model.workspace = true
 runifold-retrieval.workspace = true
+runifold-tool.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

@@ -218,6 +218,14 @@ pub trait ProviderModel: Model {
     /// Returns the canonical provider namespace used by this adapter.
     fn provider(&self) -> &str;
 
+    /// Returns this adapter's recommended fully composed runtime policy.
+    ///
+    /// Providers override this when their verified wire protocol requires
+    /// policy beyond the provider-neutral fail-closed baseline.
+    fn runtime_profile(&self) -> crate::ProviderRuntimeProfile {
+        crate::ProviderRuntimeProfile::conservative()
+    }
+
     /// Qualifies one model name with this adapter's provider identity.
     fn model_ref(&self, model: impl Into<String>) -> ModelRef
     where
@@ -233,6 +241,10 @@ where
 {
     fn provider(&self) -> &str {
         (**self).provider()
+    }
+
+    fn runtime_profile(&self) -> crate::ProviderRuntimeProfile {
+        (**self).runtime_profile()
     }
 }
 
