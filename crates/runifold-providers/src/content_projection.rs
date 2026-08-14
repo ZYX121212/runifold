@@ -13,6 +13,7 @@ pub const TOOL_RESULT_ENVELOPE_KIND: &str = "runifold.tool_result.v1";
 pub const MAX_CONTENT_ENVELOPE_BYTES: usize = 256 * 1024;
 const MAX_MEDIA_TYPE_BYTES: usize = 255;
 const MAX_MEDIA_URL_BYTES: usize = 8 * 1024;
+const MAX_INLINE_MEDIA_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -149,9 +150,59 @@ pub(crate) fn validate_inline_media(media_type: &str, data: &str) -> Result<(), 
     if data.trim().is_empty() {
         return Err(invalid("inline media requires base64 data"));
     }
-    base64::engine::general_purpose::STANDARD
+    if data.len() > MAX_INLINE_MEDIA_BYTES.saturating_mul(4).div_ceil(3) + 4 {
+        return Err(invalid("inline media exceeds the 32 MiB decoded limit"));
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
         .decode(data)
         .map_err(|_| invalid("inline media is not valid base64"))?;
+    if decoded.is_empty() {
+        return Err(invalid("inline media decoded to an empty payload"));
+    }
+    if decoded.len() > MAX_INLINE_MEDIA_BYTES {
+        return Err(invalid("inline media exceeds the 32 MiB decoded limit"));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "openai")]
+pub(crate) fn validate_inline_image(media_type: &str, data: &str) -> Result<(), ModelError> {
+    validate_image_media_type(Some(media_type))?;
+    validate_inline_media(media_type, data)?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| invalid("inline image is not valid base64"))?;
+    let signature_matches = match media_type {
+        "image/png" => decoded.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => decoded.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/gif" => decoded.starts_with(b"GIF87a") || decoded.starts_with(b"GIF89a"),
+        "image/webp" => {
+            decoded.starts_with(b"RIFF") && decoded.get(8..12) == Some(b"WEBP".as_slice())
+        }
+        _ => false,
+    };
+    if !signature_matches {
+        return Err(invalid(
+            "inline image bytes do not match the declared supported MIME type",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "openai")]
+pub(crate) fn validate_image_media_type(media_type: Option<&str>) -> Result<(), ModelError> {
+    let Some(media_type) = media_type else {
+        return Ok(());
+    };
+    validate_media_type(media_type)?;
+    if !matches!(
+        media_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    ) {
+        return Err(invalid(
+            "image MIME type must be image/png, image/jpeg, image/gif, or image/webp",
+        ));
+    }
     Ok(())
 }
 

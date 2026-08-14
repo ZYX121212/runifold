@@ -14,7 +14,9 @@ use runifold_model::{
 use runifold_provider_testkit::{
     CassetteServer, HttpExchange, ResponseChunk, ScriptedResponse, SuccessContract, verify_success,
 };
-use runifold_providers::openai::{OpenAiClient, OpenAiCompatibleProfile, OpenAiConfig};
+use runifold_providers::openai::{
+    OpenAiClient, OpenAiCompatibleProfile, OpenAiConfig, OpenAiWireProtocol,
+};
 
 fn request() -> ModelRequest {
     ModelRequest::new(ModelRef::new("openai", "gpt-test"), Message::user("stress"))
@@ -31,7 +33,7 @@ fn client(server: &CassetteServer) -> OpenAiClient {
 fn response(delay: Duration) -> ScriptedResponse {
     ScriptedResponse::ok(vec![
         ResponseChunk::text(
-            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp\",\"model\":\"gpt-test\"}}\n\ndata: {\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\"}}\n\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp\",\"model\":\"gpt-test\"}}\n\ndata: {\"type\":\"response.content_part.added\",\"sequence_number\":1,\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\"}}\n\ndata: {\"type\":\"response.output_text.delta\",\"sequence_number\":2,\"output_index\":0,\"content_index\":0,\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.content_part.done\",\"sequence_number\":3,\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\"}}\n\ndata: {\"type\":\"response.completed\",\"sequence_number\":4,\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
         )
         .after(delay),
     ])
@@ -72,6 +74,144 @@ async fn delayed_sse_body_is_deadline_exceeded() {
         .unwrap_err();
 
     assert_eq!(error.kind, ModelErrorKind::DeadlineExceeded);
+}
+
+#[tokio::test]
+async fn oversized_error_body_fails_before_unbounded_buffering() {
+    let mut response = ScriptedResponse::ok(vec![ResponseChunk::text("x".repeat(1024 * 1024 + 1))]);
+    response.status = 500;
+    let server =
+        CassetteServer::start(vec![HttpExchange::new("POST", "/v1/responses", response)]).unwrap();
+
+    let error = client(&server)
+        .invoke(request(), ModelCallContext::new())
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind, ModelErrorKind::Provider);
+    assert_eq!(error.metadata["http.status"], 500);
+    assert_eq!(error.metadata["http.error_body_truncated"], true);
+}
+
+#[tokio::test]
+async fn public_openai_chat_dialect_reaches_the_http_request() {
+    let response = ScriptedResponse::ok(vec![ResponseChunk::text(concat!(
+        "data: {\"id\":\"chat_1\",\"model\":\"chat-model\",",
+        "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},",
+        "\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"id\":\"chat_1\",\"model\":\"chat-model\",",
+        "\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
+        "data: [DONE]\n\n"
+    ))])
+    .with_header("content-type", "text/event-stream");
+    let server = CassetteServer::start(vec![HttpExchange::new(
+        "POST",
+        "/v1/chat/completions",
+        response,
+    )])
+    .unwrap();
+    let config = OpenAiConfig::new("secret")
+        .unwrap()
+        .with_base_url(&format!("{}v1/", server.base_url()))
+        .unwrap()
+        .with_wire_protocol(OpenAiWireProtocol::ChatCompletions);
+    let client = OpenAiClient::new(config);
+    let mut request = ModelRequest::new(
+        ModelRef::new("openai", "chat-model"),
+        Message::user("hello"),
+    );
+    request.generation.max_output_tokens = Some(64);
+
+    let result = client
+        .invoke(request, ModelCallContext::new())
+        .await
+        .unwrap();
+
+    assert_eq!(result.text(), "ok");
+    assert_eq!(result.usage.output_tokens, 1);
+    let body: serde_json::Value =
+        serde_json::from_slice(&server.observed_requests()[0].body).unwrap();
+    assert_eq!(body["max_completion_tokens"], 64);
+    assert!(body.get("max_tokens").is_none());
+    assert_eq!(body["stream_options"]["include_usage"], true);
+}
+
+#[tokio::test]
+async fn complete_chat_response_uses_the_chat_decoder() {
+    let response = ScriptedResponse::ok(vec![ResponseChunk::text(
+        serde_json::json!({
+            "id":"chat-complete",
+            "object":"chat.completion",
+            "model":"chat-model",
+            "choices":[{
+                "index":0,
+                "message":{"role":"assistant","content":"complete ok"},
+                "finish_reason":"stop"
+            }],
+            "usage":{"prompt_tokens":2,"completion_tokens":2}
+        })
+        .to_string(),
+    )])
+    .with_header("content-type", "application/json");
+    let server = CassetteServer::start(vec![HttpExchange::new(
+        "POST",
+        "/v1/chat/completions",
+        response,
+    )])
+    .unwrap();
+    let config = OpenAiConfig::new("secret")
+        .unwrap()
+        .with_base_url(&format!("{}v1/", server.base_url()))
+        .unwrap()
+        .with_wire_protocol(OpenAiWireProtocol::ChatCompletions);
+    let client = OpenAiClient::new(config);
+    let request = ModelRequest::new(
+        ModelRef::new("openai", "chat-model"),
+        Message::user("hello"),
+    )
+    .response_mode(ResponseMode::Complete);
+
+    let result = client
+        .invoke(request, ModelCallContext::new())
+        .await
+        .unwrap();
+
+    assert_eq!(result.text(), "complete ok");
+    assert_eq!(result.usage.output_tokens, 2);
+    let body: serde_json::Value =
+        serde_json::from_slice(&server.observed_requests()[0].body).unwrap();
+    assert_eq!(body["stream"], false);
+}
+
+#[tokio::test]
+async fn official_streamed_image_item_reaches_canonical_media() {
+    let response = ScriptedResponse::ok(vec![ResponseChunk::text(concat!(
+        "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_image\",\"model\":\"gpt-test\"}}\n\n",
+        "data: {\"type\":\"response.image_generation_call.completed\",\"sequence_number\":1,\"output_index\":0,\"item_id\":\"image_1\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"sequence_number\":2,\"output_index\":0,\"item\":{\"id\":\"image_1\",\"type\":\"image_generation_call\",\"status\":\"completed\",\"result\":\"UklGRiQAAABXRUJQ\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"sequence_number\":3,\"response\":{\"status\":\"completed\",\"usage\":{}}}\n\n"
+    ))])
+    .with_header("content-type", "text/event-stream");
+    let server =
+        CassetteServer::start(vec![HttpExchange::new("POST", "/v1/responses", response)]).unwrap();
+
+    let result = client(&server)
+        .invoke(request(), ModelCallContext::new())
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        &result.content[0],
+        ContentPart::Image {
+            source: runifold_model::MediaSource::Base64 { media_type, data }
+        } if media_type == "image/webp" && data == "UklGRiQAAABXRUJQ"
+    ));
+    assert!(
+        result
+            .provider_events
+            .iter()
+            .all(|event| !event.value.to_string().contains("UklGRiQAAABXRUJQ"))
+    );
 }
 
 #[tokio::test]
@@ -193,11 +333,11 @@ async fn complete_function_call_round_trip_replays_required_status() {
 #[tokio::test]
 async fn streaming_function_call_round_trip_replays_required_status() {
     let first = ScriptedResponse::ok(vec![ResponseChunk::text(concat!(
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_tool\",\"model\":\"gpt-test\"}}\n\n",
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_stream\",\"call_id\":\"call_stream\",\"name\":\"lookup\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n",
-        "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_stream\",\"output_index\":0,\"arguments\":\"{\\\"value\\\":8}\"}\n\n",
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_stream\",\"call_id\":\"call_stream\",\"name\":\"lookup\",\"arguments\":\"{\\\"value\\\":8}\",\"status\":\"completed\"}}\n\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{}}}\n\n"
+        "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_tool\",\"model\":\"gpt-test\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"sequence_number\":1,\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_stream\",\"call_id\":\"call_stream\",\"name\":\"lookup\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n",
+        "data: {\"type\":\"response.function_call_arguments.done\",\"sequence_number\":2,\"item_id\":\"fc_stream\",\"output_index\":0,\"arguments\":\"{\\\"value\\\":8}\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"sequence_number\":3,\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_stream\",\"call_id\":\"call_stream\",\"name\":\"lookup\",\"arguments\":\"{\\\"value\\\":8}\",\"status\":\"completed\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"sequence_number\":4,\"response\":{\"status\":\"completed\",\"usage\":{}}}\n\n"
     ))])
     .with_header("content-type", "text/event-stream");
     let second = ScriptedResponse::json(

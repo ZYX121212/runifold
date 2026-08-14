@@ -40,10 +40,17 @@ impl Agent {
                 self.execute_local_tool_call(&call, &mut progress.tool_calls, &context)
                     .await?
             };
+            let correlation_metadata = call
+                .metadata
+                .iter()
+                .filter(|(key, _)| key.ends_with(".caller"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
             progress.transcript.push(tool_result_message(
                 call.id,
                 call.name,
                 result,
+                correlation_metadata,
                 &progress.execution_id,
             )?);
         }
@@ -493,6 +500,7 @@ fn tool_result_message(
     call_id: String,
     name: String,
     result: Result<ToolOutput, String>,
+    correlation_metadata: BTreeMap<String, serde_json::Value>,
     execution_id: &str,
 ) -> Result<Message, AgentError> {
     let (content, structured_content, metadata, is_error) = match result {
@@ -509,6 +517,8 @@ fn tool_result_message(
             true,
         ),
     };
+    let mut metadata = metadata;
+    metadata.extend(correlation_metadata);
     let mut message = Message::new(
         Role::Tool,
         vec![ContentPart::ToolResult(ToolResult {
@@ -544,9 +554,15 @@ mod rich_result_tests {
             },
         }])
         .with_structured_content(json!({"width":1}));
-        let message =
-            tool_result_message("call-1".into(), "render".into(), Ok(output), "execution-1")
-                .unwrap();
+        let caller = json!({"type":"program","caller_id":"program-call"});
+        let message = tool_result_message(
+            "call-1".into(),
+            "render".into(),
+            Ok(output),
+            BTreeMap::from([("openai.caller".into(), caller.clone())]),
+            "execution-1",
+        )
+        .unwrap();
 
         let ContentPart::ToolResult(ToolResult {
             content,
@@ -558,5 +574,9 @@ mod rich_result_tests {
         };
         assert!(matches!(content[0], ContentPart::Image { .. }));
         assert_eq!(structured_content, &Some(json!({"width":1})));
+        let ContentPart::ToolResult(result) = &message.content[0] else {
+            unreachable!("checked above")
+        };
+        assert_eq!(result.metadata["openai.caller"], caller);
     }
 }

@@ -353,10 +353,55 @@ for Responses or Streaming for Chat Completions, disables provider-side
 parallel Tool calls, installs bounded same-route retry and a shared circuit
 breaker, permits unknown or emulated model capabilities with visible warnings,
 and permits malformed Tool-call recovery only for the atomic Responses path.
-Known unsupported capabilities still fail before transport. Applications can
-pass a reviewed provider-neutral `ProviderRuntimeProfile` to
+Chat Completions also supports explicit Complete delivery when an application
+needs atomic validation; malformed Tool-call recovery remains disabled for
+Chat because its compatibility surface is less uniform. Known unsupported
+capabilities fail before transport. Applications can pass a reviewed
+provider-neutral `ProviderRuntimeProfile` to
 `ProviderModelExt::runtime_with_profile` when a deployment needs an explicit
 override, including strict capability enforcement.
+
+Chat request fields also follow an explicit endpoint dialect. Verified public
+OpenAI configurations use `max_completion_tokens` and request the final
+streaming usage chunk. Generic compatible and custom configurations retain the
+widely implemented `max_tokens` dialect unless the application explicitly
+selects `OpenAiChatDialect::OpenAi`. The OpenAI dialect also encodes canonical
+system instructions with the current `developer` role and preserves typed
+assistant refusals; the compatible dialect keeps the legacy `system` role.
+
+Responses lifecycle validation has a separate dialect. Public OpenAI
+configurations select `OpenAiResponsesDialect::OpenAi`, which requires sequence
+numbers on every SSE event and an explicit terminal response status. Generic
+compatible and custom configurations default to
+`OpenAiResponsesDialect::Compatible`: present sequence numbers and statuses are
+still validated, but omissions tolerated by third-party implementations do not
+make an otherwise complete response fail. Applications should opt a custom
+endpoint into the OpenAI dialect only after verifying its wire contract.
+
+Function tools default to `strict: false`; Runifold still validates Tool input
+locally before execution. A reviewed Tool can opt into provider strict mode by
+setting boolean metadata `openai.strict` (or
+`openai-compatible.strict`). Runifold rejects that opt-in before transport
+unless the schema satisfies the strict object invariants.
+Strict function and structured-output schemas share the same recursive
+preflight: supported keywords and formats, keyword value types, object
+required/additional-property closure, array items, local references, nesting,
+property, enum, and string-budget limits are rejected locally before any HTTP
+request.
+
+Programmatic Tool Calling correlation is preserved end to end. A Responses
+`caller` object is retained on the canonical Tool call, copied across local
+Tool execution, and replayed on both `function_call` and
+`function_call_output` items.
+
+Complete response bodies, HTTP error bodies, and individual SSE events have
+independent hard size limits. Oversized HTTP error bodies retain the HTTP
+status-derived failure classification and carry a truncation marker rather
+than being reclassified as a protocol failure. Native image inputs accept only
+PNG, JPEG, GIF, and WebP, require the declared media type to match the decoded
+signature, and enforce the decoded media limit before transport. These checks
+keep an untrusted compatible endpoint or input from turning parsing into an
+unbounded allocation path.
 
 Unknown provider fields remain available as canonical provider events. This
 lets Runifold add new normalization without discarding data or silently

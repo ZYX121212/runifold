@@ -419,7 +419,9 @@ async fn send_media_request(
         context.deadline(),
     )
     .await?;
-    Err(http_error(status, id, &body, client.provider(), after))
+    let mut error = http_error(status, id, body.as_str(), client.provider(), after);
+    body.annotate(&mut error);
+    Err(error)
 }
 
 async fn read_bounded(

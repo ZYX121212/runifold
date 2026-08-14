@@ -1069,7 +1069,9 @@ slows Agent execution instead of growing an unbounded event buffer.
 Provider identity and wire protocol are configured independently:
 
 ```rust,no_run
-use runifold_providers::openai::{OpenAiConfig, OpenAiWireProtocol};
+use runifold_providers::openai::{
+    OpenAiChatDialect, OpenAiConfig, OpenAiResponsesDialect, OpenAiWireProtocol,
+};
 
 # fn example() -> Result<(), Box<dyn std::error::Error>> {
 let ark = OpenAiConfig::ark(std::env::var("ARK_API_KEY")?)?;
@@ -1085,7 +1087,19 @@ let custom = OpenAiConfig::custom(
     "https://llm.example.com/v1",
     OpenAiWireProtocol::ChatCompletions,
 )?;
-# let _ = (ark, qwen, custom);
+let openai_style_gateway = OpenAiConfig::custom(
+    "openai-style-gateway",
+    "https://gateway.example.com/v1",
+    OpenAiWireProtocol::ChatCompletions,
+)?
+.with_chat_dialect(OpenAiChatDialect::OpenAi);
+let openai_responses_gateway = OpenAiConfig::custom(
+    "openai-responses-gateway",
+    "https://responses.example.com/v1",
+    OpenAiWireProtocol::Responses,
+)?
+.with_responses_dialect(OpenAiResponsesDialect::OpenAi);
+# let _ = (ark, qwen, custom, openai_style_gateway, openai_responses_gateway);
 # Ok(())
 # }
 ```
@@ -1113,11 +1127,14 @@ emulated model capabilities proceed with visible warnings, retains the bounded
 default retry/circuit policy, and explicitly permits retrying malformed Tool
 arguments. Capabilities declared unsupported still fail before transport. That
 retry may incur another provider charge, but cannot expose partial output or
-execute a Tool from the rejected attempt. Chat Completions remains streaming
-because its complete adapter is not implemented. Applications with a reviewed
-deployment-specific policy can pass a generic `ProviderRuntimeProfile` to
-`runtime_with_profile`; this makes every override explicit without coupling
-the runtime facade to an OpenAI-specific policy type.
+execute a Tool from the rejected attempt. Chat Completions defaults to
+streaming and also supports explicit Complete delivery for atomic validation;
+malformed Tool-call retry remains restricted to Responses. Public OpenAI and
+generic compatible endpoints use separate explicit lifecycle and request-field
+dialects, so strict OpenAI invariants are not guessed for custom servers.
+Applications with a reviewed deployment-specific policy can pass a generic
+`ProviderRuntimeProfile` to `runtime_with_profile`; this makes every override
+explicit without coupling the runtime facade to an OpenAI-specific policy type.
 
 Standard workload profiles layer over those adapter-owned invariants:
 

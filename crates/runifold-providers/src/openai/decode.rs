@@ -8,10 +8,13 @@ use runifold_model::{
 };
 use serde_json::Value;
 
+use super::OpenAiResponsesDialect;
+
 /// Stateful translator from `OpenAI` Responses SSE payloads to canonical events.
 #[derive(Debug)]
 pub struct OpenAiEventDecoder {
     provider: String,
+    dialect: OpenAiResponsesDialect,
     started: bool,
     completed: bool,
     next_index: u32,
@@ -35,6 +38,7 @@ impl OpenAiEventDecoder {
     pub fn for_provider(provider: impl Into<String>) -> Self {
         Self {
             provider: provider.into(),
+            dialect: OpenAiResponsesDialect::Compatible,
             started: false,
             completed: false,
             next_index: 0,
@@ -47,6 +51,13 @@ impl OpenAiEventDecoder {
             response_id: None,
             response_model: None,
         }
+    }
+
+    /// Selects strict public-OpenAI or compatibility event validation.
+    #[must_use]
+    pub const fn with_dialect(mut self, dialect: OpenAiResponsesDialect) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     /// Attaches the HTTP request ID to the canonical provider-event stream.
@@ -131,13 +142,9 @@ impl OpenAiEventDecoder {
             "response.output_item.done" => self.output_item_completed(&payload),
             "response.function_call_arguments.delta" => self.tool_arguments_delta(&payload),
             "response.function_call_arguments.done" => self.tool_call_completed(&payload),
-            "response.image_generation_call.completed"
-            | "response.output_image_generation_call.completed" => {
-                self.image_generation_completed(&payload)
-            }
             "response.completed" => self.response_completed(&payload, false),
             "response.incomplete" => self.response_completed(&payload, true),
-            "response.failed" | "error" => Err(provider_failure(&payload)),
+            "response.failed" | "error" => Err(provider_failure(&self.provider, &payload)),
             _ => Ok(vec![provider_event(
                 &event_type,
                 redact_generated_media(payload),
@@ -285,10 +292,19 @@ impl OpenAiEventDecoder {
                 )]);
             }
             if item_type == "image_generation_call" {
-                return Ok(vec![provider_event(
-                    "response.output_item.done",
-                    payload.clone(),
-                )]);
+                require_completed_item(item, "streamed image generation call")?;
+                let index =
+                    self.allocate(format!("image:{}", integer(payload, "output_index")?))?;
+                return Ok(vec![
+                    ModelStreamEvent::ContentPartCompleted {
+                        index,
+                        part: generated_image(string(item, "result")?)?,
+                    },
+                    provider_event(
+                        "response.output_item.done",
+                        redact_generated_media(payload.clone()),
+                    ),
+                ]);
             }
             let identity = optional_string(item, "id").unwrap_or_else(|| {
                 integer(payload, "output_index")
@@ -357,28 +373,6 @@ impl OpenAiEventDecoder {
         Ok(events)
     }
 
-    fn image_generation_completed(
-        &mut self,
-        payload: &Value,
-    ) -> Result<Vec<ModelStreamEvent>, ModelError> {
-        let output_index = integer(payload, "output_index")?;
-        let data = payload
-            .get("result")
-            .or_else(|| payload.get("image_base64"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| protocol("OpenAI image generation completion omitted base64 data"))?;
-        let index = self.allocate(format!("image:{output_index}"))?;
-        Ok(vec![ModelStreamEvent::ContentPartCompleted {
-            index,
-            part: ContentPart::Image {
-                source: MediaSource::Base64 {
-                    media_type: "image/png".into(),
-                    data: data.into(),
-                },
-            },
-        }])
-    }
-
     fn response_completed(
         &mut self,
         payload: &Value,
@@ -406,7 +400,7 @@ impl OpenAiEventDecoder {
         }
         let response = payload.get("response").unwrap_or(&Value::Null);
         self.validate_terminal_identity(response)?;
-        validate_terminal_status(response, incomplete)?;
+        validate_terminal_status(response, incomplete, self.dialect)?;
         let usage = decode_usage(response.get("usage"));
         let finish_reason = if incomplete {
             incomplete_reason(response)
@@ -450,6 +444,11 @@ impl OpenAiEventDecoder {
 
     fn validate_sequence_number(&mut self, payload: &Value) -> Result<(), ModelError> {
         let Some(sequence) = payload.get("sequence_number") else {
+            if self.dialect == OpenAiResponsesDialect::OpenAi {
+                return Err(protocol(
+                    "OpenAI event is missing required `sequence_number`",
+                ));
+            }
             return Ok(());
         };
         let sequence = sequence
@@ -527,18 +526,30 @@ impl OpenAiEventDecoder {
     }
 }
 
-fn validate_terminal_status(response: &Value, incomplete: bool) -> Result<(), ModelError> {
+fn validate_terminal_status(
+    response: &Value,
+    incomplete: bool,
+    dialect: OpenAiResponsesDialect,
+) -> Result<(), ModelError> {
     let expected = if incomplete {
         "incomplete"
     } else {
         "completed"
     };
-    if let Some(status) = response.get("status").and_then(Value::as_str)
-        && status != expected
-    {
-        return Err(protocol(format!(
-            "OpenAI terminal event expected response status `{expected}`, received `{status}`"
-        )));
+    match response.get("status") {
+        Some(Value::String(status)) if status == expected => {}
+        Some(Value::String(status)) => {
+            return Err(protocol(format!(
+                "OpenAI terminal event expected response status `{expected}`, received `{status}`"
+            )));
+        }
+        Some(_) => return Err(protocol("OpenAI terminal response status must be a string")),
+        None if dialect == OpenAiResponsesDialect::OpenAi => {
+            return Err(protocol(
+                "OpenAI terminal response is missing required `status`",
+            ));
+        }
+        None => {}
     }
     Ok(())
 }
@@ -592,17 +603,32 @@ impl Default for OpenAiEventDecoder {
 ///
 /// Returns [`ModelError`] when required response fields are malformed or the
 /// Provider reports a failed response.
+#[cfg(test)]
 pub(crate) fn decode_complete_response(
     provider: &str,
     payload: &Value,
     request_id: Option<String>,
+) -> Result<Vec<ModelStreamEvent>, ModelError> {
+    decode_complete_response_for(
+        provider,
+        payload,
+        request_id,
+        OpenAiResponsesDialect::Compatible,
+    )
+}
+
+pub(crate) fn decode_complete_response_for(
+    provider: &str,
+    payload: &Value,
+    request_id: Option<String>,
+    dialect: OpenAiResponsesDialect,
 ) -> Result<Vec<ModelStreamEvent>, ModelError> {
     let status = optional_string(payload, "status");
     if payload.get("error").is_some_and(|error| !error.is_null())
         || status.as_deref() == Some("failed")
     {
         let envelope = serde_json::json!({"error": payload.get("error")});
-        let mut error = provider_failure(&envelope);
+        let mut error = provider_failure(provider, &envelope);
         error.provider = Some(provider.into());
         return Err(error);
     }
@@ -614,6 +640,11 @@ pub(crate) fn decode_complete_response(
             "complete OpenAI response is not terminal: status `{}`",
             status.as_deref().unwrap_or("unknown")
         )));
+    }
+    if status.is_none() && dialect == OpenAiResponsesDialect::OpenAi {
+        return Err(protocol(
+            "complete OpenAI response is missing required terminal `status`",
+        ));
     }
 
     let model = string(payload, "model")?;
@@ -702,12 +733,7 @@ fn decode_complete_output(
                 let data = string(item, "result")?.to_owned();
                 events.push(ModelStreamEvent::ContentPartCompleted {
                     index,
-                    part: ContentPart::Image {
-                        source: MediaSource::Base64 {
-                            media_type: "image/png".into(),
-                            data,
-                        },
-                    },
+                    part: generated_image(&data)?,
                 });
             }
             Some(_) => {
@@ -896,7 +922,7 @@ fn response_metadata(response: &Value) -> BTreeMap<String, Value> {
 
 fn function_call_metadata(provider: &str, item: &Value) -> BTreeMap<String, Value> {
     let mut metadata = BTreeMap::new();
-    for name in ["id", "status"] {
+    for name in ["id", "status", "caller"] {
         if let Some(value) = item.get(name).filter(|value| !value.is_null()) {
             metadata.insert(format!("{provider}.{name}"), value.clone());
         }
@@ -944,20 +970,46 @@ fn warning_event(code: &str, message: String) -> ModelStreamEvent {
     }
 }
 
-fn provider_failure(payload: &Value) -> ModelError {
-    let error = payload.get("error").unwrap_or(payload);
+fn provider_failure(provider: &str, payload: &Value) -> ModelError {
+    let error = payload
+        .get("response")
+        .and_then(|response| response.get("error"))
+        .or_else(|| payload.get("error"))
+        .unwrap_or(payload);
     let message = error
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or("OpenAI response failed");
     let mut model_error = ModelError::local(ModelErrorKind::Provider, message);
-    model_error.provider = Some("openai".into());
-    if let Some(code) = error.get("code") {
-        model_error
-            .metadata
-            .insert("openai.code".into(), code.clone());
+    model_error.provider = Some(provider.into());
+    for name in ["type", "code", "param"] {
+        if let Some(value) = error.get(name).filter(|value| !value.is_null()) {
+            model_error
+                .metadata
+                .insert(format!("{provider}.error.{name}"), value.clone());
+        }
     }
     model_error
+}
+
+fn generated_image(data: &str) -> Result<ContentPart, ModelError> {
+    let media_type = if data.starts_with("iVBORw0KGgo") {
+        "image/png"
+    } else if data.starts_with("/9j/") {
+        "image/jpeg"
+    } else if data.starts_with("UklGR") {
+        "image/webp"
+    } else {
+        return Err(protocol(
+            "OpenAI image generation returned an unrecognized image encoding",
+        ));
+    };
+    Ok(ContentPart::Image {
+        source: MediaSource::Base64 {
+            media_type: media_type.into(),
+            data: data.into(),
+        },
+    })
 }
 
 fn object<'a>(value: &'a Value, name: &str) -> Result<&'a Value, ModelError> {
@@ -1233,6 +1285,7 @@ mod tests {
                 "call_id": "call_complete",
                 "name": "lookup",
                 "arguments": "{\"value\":7}",
+                "caller": {"type":"program","caller_id":"call_program"},
                 "status": "completed"
             }],
             "usage": {}
@@ -1254,9 +1307,59 @@ mod tests {
                 metadata: std::collections::BTreeMap::from([
                     ("ark.id".into(), serde_json::json!("item_complete")),
                     ("ark.status".into(), serde_json::json!("completed")),
+                    (
+                        "ark.caller".into(),
+                        serde_json::json!({"type":"program","caller_id":"call_program"}),
+                    ),
                 ]),
             })]
         );
+    }
+
+    #[test]
+    fn official_responses_dialect_requires_sequence_and_terminal_status() {
+        let mut decoder =
+            OpenAiEventDecoder::new().with_dialect(super::OpenAiResponsesDialect::OpenAi);
+        let error = decoder
+            .decode(serde_json::json!({
+                "type":"response.created",
+                "response":{"id":"resp","model":"model"}
+            }))
+            .unwrap_err();
+        assert!(error.message.contains("sequence_number"));
+
+        let payload = serde_json::json!({
+            "id":"resp",
+            "model":"model",
+            "output":[],
+            "usage":{}
+        });
+        let error = super::decode_complete_response_for(
+            "openai",
+            &payload,
+            None,
+            super::OpenAiResponsesDialect::OpenAi,
+        )
+        .unwrap_err();
+        assert!(error.message.contains("status"));
+    }
+
+    #[test]
+    fn compatible_responses_dialect_allows_omitted_sequence_and_status() {
+        let mut decoder = OpenAiEventDecoder::for_provider("gateway");
+        decoder
+            .decode(serde_json::json!({
+                "type":"response.created",
+                "response":{"id":"resp","model":"model"}
+            }))
+            .unwrap();
+        decoder
+            .decode(serde_json::json!({
+                "type":"response.completed",
+                "response":{"usage":{}}
+            }))
+            .unwrap();
+        decoder.finish().unwrap();
     }
 
     #[test]
@@ -1635,7 +1738,17 @@ mod tests {
             serde_json::json!({
                 "type":"response.image_generation_call.completed",
                 "output_index":0,
-                "result":"aW1hZ2U="
+                "item_id":"image_1"
+            }),
+            serde_json::json!({
+                "type":"response.output_item.done",
+                "output_index":0,
+                "item":{
+                    "id":"image_1",
+                    "type":"image_generation_call",
+                    "status":"completed",
+                    "result":"iVBORw0KGgoAAA=="
+                }
             }),
             serde_json::json!({
                 "type":"response.completed",
@@ -1647,13 +1760,13 @@ mod tests {
             &response.content[0],
             ContentPart::Image {
                 source: runifold_model::MediaSource::Base64 { media_type, data }
-            } if media_type == "image/png" && data == "aW1hZ2U="
+            } if media_type == "image/png" && data == "iVBORw0KGgoAAA=="
         ));
         assert!(
             response
                 .provider_events
                 .iter()
-                .all(|event| !event.value.to_string().contains("aW1hZ2U="))
+                .all(|event| !event.value.to_string().contains("iVBORw0KGgoAAA=="))
         );
     }
 
@@ -1679,23 +1792,54 @@ mod tests {
             "id":"resp_complete_image",
             "model":"image-model",
             "status":"completed",
-            "output":[{"type":"image_generation_call","result":"aW1hZ2U="}],
+            "output":[{
+                "type":"image_generation_call",
+                "status":"completed",
+                "result":"UklGRiQAAABXRUJQ"
+            }],
             "usage":{}
         });
         let events = super::decode_complete_response("openai", &payload, None).unwrap();
         assert!(events.iter().all(|event| match event {
             ModelStreamEvent::Provider { event } => {
-                !event.payload.to_string().contains("aW1hZ2U=")
+                !event.payload.to_string().contains("UklGRiQAAABXRUJQ")
             }
             _ => true,
         }));
         assert!(events.iter().any(|event| matches!(
             event,
             ModelStreamEvent::ContentPartCompleted {
-                part: ContentPart::Image { .. },
+                part: ContentPart::Image {
+                    source: runifold_model::MediaSource::Base64 { media_type, .. }
+                },
                 ..
-            }
+            } if media_type == "image/webp"
         )));
+    }
+
+    #[test]
+    fn failed_response_extracts_nested_provider_error() {
+        let mut decoder = OpenAiEventDecoder::for_provider("custom-openai");
+        let error = decoder
+            .decode(serde_json::json!({
+                "type":"response.failed",
+                "response":{
+                    "status":"failed",
+                    "error":{
+                        "type":"provider_error",
+                        "code":"server_error",
+                        "message":"generation failed",
+                        "param":"tools[0]"
+                    }
+                }
+            }))
+            .unwrap_err();
+
+        assert_eq!(error.provider.as_deref(), Some("custom-openai"));
+        assert_eq!(error.message, "generation failed");
+        assert_eq!(error.metadata["custom-openai.error.type"], "provider_error");
+        assert_eq!(error.metadata["custom-openai.error.code"], "server_error");
+        assert_eq!(error.metadata["custom-openai.error.param"], "tools[0]");
     }
 
     fn decode_response(

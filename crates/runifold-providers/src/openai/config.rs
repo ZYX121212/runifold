@@ -17,6 +17,29 @@ pub enum OpenAiWireProtocol {
     ChatCompletions,
 }
 
+/// Request-field dialect used by a Chat Completions endpoint.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OpenAiChatDialect {
+    /// Broad legacy-compatible fields implemented by most third-party servers.
+    #[default]
+    Compatible,
+    /// Current public `OpenAI` Chat Completions fields.
+    OpenAi,
+}
+
+/// Response-event validation dialect used by a Responses endpoint.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OpenAiResponsesDialect {
+    /// Allows compatibility servers to omit fields that the public `OpenAI` API
+    /// requires, while still validating those fields when present.
+    #[default]
+    Compatible,
+    /// Enforces the current public `OpenAI` Responses event contract.
+    OpenAi,
+}
+
 /// Azure `OpenAI` v1 API version selector.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
@@ -151,21 +174,32 @@ pub enum OpenAiConfigError {
     /// The canonical provider identity was empty.
     #[error("provider identity cannot be empty")]
     EmptyProvider,
+    /// The canonical provider identity was unsafe or ambiguous.
+    #[error("provider identity must have no surrounding whitespace or control characters")]
+    InvalidProvider,
     /// An embedding model identity was empty.
     #[error("OpenAI embedding model cannot be empty")]
     EmptyEmbeddingModel,
     /// The base URL could not be parsed.
     #[error("invalid OpenAI base URL: {0}")]
     InvalidBaseUrl(#[from] url::ParseError),
-    /// The base URL cannot be used as a hierarchical HTTP endpoint.
-    #[error("OpenAI base URL must be an HTTP(S) base URL")]
+    /// The base URL cannot be used as a safe hierarchical HTTP endpoint.
+    #[error("OpenAI base URL must be an HTTP(S) base URL without credentials, query, or fragment")]
     InvalidBaseUrlShape,
-    /// `OpenRouter` attribution requires an HTTP(S) application URL.
-    #[error("OpenRouter attribution URL must be an HTTP(S) URL")]
+    /// `OpenRouter` attribution requires a public HTTP(S) application URL.
+    #[error(
+        "OpenRouter attribution URL must be an HTTP(S) URL without credentials, query, or fragment"
+    )]
     InvalidAttributionUrl,
     /// `OpenRouter` attribution title was empty or unsafe for an HTTP header.
     #[error("OpenRouter application title must be non-empty and contain no control characters")]
     InvalidApplicationTitle,
+    /// The organization identifier was empty or unsafe for an HTTP header.
+    #[error("OpenAI organization must be non-empty and contain no control characters")]
+    InvalidOrganization,
+    /// The project identifier was empty or unsafe for an HTTP header.
+    #[error("OpenAI project must be non-empty and contain no control characters")]
+    InvalidProject,
 }
 
 /// Explicit, secret-safe configuration for an OpenAI-compatible endpoint.
@@ -177,6 +211,8 @@ pub struct OpenAiConfig {
     pub(crate) base_url: Url,
     pub(crate) provider: String,
     pub(crate) wire_protocol: OpenAiWireProtocol,
+    pub(crate) chat_dialect: OpenAiChatDialect,
+    pub(crate) responses_dialect: OpenAiResponsesDialect,
     endpoint_path_override: Option<String>,
     pub(crate) organization: Option<String>,
     pub(crate) project: Option<String>,
@@ -203,6 +239,8 @@ impl OpenAiConfig {
             base_url,
             provider: "openai".into(),
             wire_protocol: OpenAiWireProtocol::Responses,
+            chat_dialect: OpenAiChatDialect::OpenAi,
+            responses_dialect: OpenAiResponsesDialect::OpenAi,
             endpoint_path_override: None,
             organization: None,
             project: None,
@@ -226,11 +264,16 @@ impl OpenAiConfig {
         if provider.trim().is_empty() {
             return Err(OpenAiConfigError::EmptyProvider);
         }
-        Self::new(api_key)?.with_base_url(base_url).map(|config| {
-            config
-                .with_provider(provider)
-                .with_wire_protocol(wire_protocol)
-        })
+        validate_provider(&provider)?;
+        Self::new(api_key)?
+            .with_base_url(base_url)
+            .map(|mut config| {
+                config.provider = provider;
+                config.wire_protocol = wire_protocol;
+                config.chat_dialect = OpenAiChatDialect::Compatible;
+                config.responses_dialect = OpenAiResponsesDialect::Compatible;
+                config
+            })
     }
 
     /// Creates configuration from a verified built-in provider profile.
@@ -251,6 +294,16 @@ impl OpenAiConfig {
         )
         .map(|mut config| {
             config.endpoint_path_override = profile.endpoint_path().map(String::from);
+            config.chat_dialect = if profile == OpenAiCompatibleProfile::OpenAi {
+                OpenAiChatDialect::OpenAi
+            } else {
+                OpenAiChatDialect::Compatible
+            };
+            config.responses_dialect = if profile == OpenAiCompatibleProfile::OpenAi {
+                OpenAiResponsesDialect::OpenAi
+            } else {
+                OpenAiResponsesDialect::Compatible
+            };
             config
         })
     }
@@ -266,9 +319,7 @@ impl OpenAiConfig {
         wire_protocol: OpenAiWireProtocol,
     ) -> Result<Self, OpenAiConfigError> {
         let provider = provider.into();
-        if provider.trim().is_empty() {
-            return Err(OpenAiConfigError::EmptyProvider);
-        }
+        validate_provider(&provider)?;
         let default_base_url = Url::parse("http://localhost/")?;
         Self {
             api_key: None,
@@ -277,6 +328,8 @@ impl OpenAiConfig {
             base_url: default_base_url,
             provider,
             wire_protocol,
+            chat_dialect: OpenAiChatDialect::Compatible,
+            responses_dialect: OpenAiResponsesDialect::Compatible,
             endpoint_path_override: None,
             organization: None,
             project: None,
@@ -371,7 +424,7 @@ impl OpenAiConfig {
     /// Returns an error for invalid, non-HTTP(S), or non-base URLs.
     pub fn with_base_url(mut self, base_url: &str) -> Result<Self, OpenAiConfigError> {
         let mut parsed = Url::parse(base_url)?;
-        if !matches!(parsed.scheme(), "http" | "https") || parsed.cannot_be_a_base() {
+        if !is_safe_public_http_url(&parsed, true) {
             return Err(OpenAiConfigError::InvalidBaseUrlShape);
         }
         if !parsed.path().ends_with('/') {
@@ -382,17 +435,34 @@ impl OpenAiConfig {
     }
 
     /// Selects an `OpenAI` organization.
-    #[must_use]
-    pub fn with_organization(mut self, organization: impl Into<String>) -> Self {
-        self.organization = Some(organization.into());
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value cannot safely become an HTTP header.
+    pub fn with_organization(
+        mut self,
+        organization: impl Into<String>,
+    ) -> Result<Self, OpenAiConfigError> {
+        let organization = organization.into();
+        if !is_safe_header_value(&organization) {
+            return Err(OpenAiConfigError::InvalidOrganization);
+        }
+        self.organization = Some(organization);
+        Ok(self)
     }
 
     /// Selects an `OpenAI` project.
-    #[must_use]
-    pub fn with_project(mut self, project: impl Into<String>) -> Self {
-        self.project = Some(project.into());
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value cannot safely become an HTTP header.
+    pub fn with_project(mut self, project: impl Into<String>) -> Result<Self, OpenAiConfigError> {
+        let project = project.into();
+        if !is_safe_header_value(&project) {
+            return Err(OpenAiConfigError::InvalidProject);
+        }
+        self.project = Some(project);
+        Ok(self)
     }
 
     /// Adds the optional application attribution recommended by `OpenRouter`.
@@ -411,7 +481,7 @@ impl OpenAiConfig {
     ) -> Result<Self, OpenAiConfigError> {
         let application_url =
             Url::parse(application_url).map_err(|_| OpenAiConfigError::InvalidAttributionUrl)?;
-        if !matches!(application_url.scheme(), "http" | "https") {
+        if !is_safe_public_http_url(&application_url, false) {
             return Err(OpenAiConfigError::InvalidAttributionUrl);
         }
         let application_title = application_title.into();
@@ -424,16 +494,39 @@ impl OpenAiConfig {
     }
 
     /// Overrides the canonical provider identity.
-    #[must_use]
-    pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
-        self.provider = provider.into();
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a blank, whitespace-padded, or control-bearing
+    /// identity.
+    pub fn with_provider(mut self, provider: impl Into<String>) -> Result<Self, OpenAiConfigError> {
+        let provider = provider.into();
+        validate_provider(&provider)?;
+        self.provider = provider;
+        Ok(self)
     }
 
     /// Selects the endpoint wire protocol.
     #[must_use]
     pub const fn with_wire_protocol(mut self, wire_protocol: OpenAiWireProtocol) -> Self {
         self.wire_protocol = wire_protocol;
+        self
+    }
+
+    /// Selects the Chat Completions request-field dialect explicitly.
+    #[must_use]
+    pub const fn with_chat_dialect(mut self, chat_dialect: OpenAiChatDialect) -> Self {
+        self.chat_dialect = chat_dialect;
+        self
+    }
+
+    /// Selects the Responses event-validation dialect explicitly.
+    #[must_use]
+    pub const fn with_responses_dialect(
+        mut self,
+        responses_dialect: OpenAiResponsesDialect,
+    ) -> Self {
+        self.responses_dialect = responses_dialect;
         self
     }
 
@@ -482,7 +575,7 @@ impl OpenAiConfig {
 
 fn azure_base_url(resource_endpoint: &str) -> Result<Url, OpenAiConfigError> {
     let mut endpoint = Url::parse(resource_endpoint)?;
-    if !matches!(endpoint.scheme(), "http" | "https") || endpoint.cannot_be_a_base() {
+    if !is_safe_public_http_url(&endpoint, true) {
         return Err(OpenAiConfigError::InvalidBaseUrlShape);
     }
     if !endpoint.path().ends_with('/') {
@@ -491,6 +584,39 @@ fn azure_base_url(resource_endpoint: &str) -> Result<Url, OpenAiConfigError> {
     endpoint
         .join("openai/v1/")
         .map_err(OpenAiConfigError::InvalidBaseUrl)
+}
+
+fn validate_provider(provider: &str) -> Result<(), OpenAiConfigError> {
+    if provider.trim().is_empty() {
+        return Err(OpenAiConfigError::EmptyProvider);
+    }
+    if provider.trim() != provider || provider.chars().any(char::is_control) {
+        return Err(OpenAiConfigError::InvalidProvider);
+    }
+    Ok(())
+}
+
+fn is_safe_header_value(value: &str) -> bool {
+    !value.trim().is_empty() && !value.chars().any(char::is_control)
+}
+
+fn is_safe_public_http_url(url: &Url, base_url: bool) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some()
+        && (!base_url || !url.cannot_be_a_base())
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+fn debug_url(url: &Url) -> String {
+    let mut sanitized = url.clone();
+    let _ = sanitized.set_username("");
+    let _ = sanitized.set_password(None);
+    sanitized.set_query(None);
+    sanitized.set_fragment(None);
+    sanitized.to_string()
 }
 
 impl fmt::Debug for OpenAiConfig {
@@ -503,13 +629,18 @@ impl fmt::Debug for OpenAiConfig {
                 &self.azure_api_key.as_ref().map(|_| "[REDACTED]"),
             )
             .field("azure_api_version", &self.azure_api_version)
-            .field("base_url", &self.base_url)
+            .field("base_url", &debug_url(&self.base_url))
             .field("provider", &self.provider)
             .field("wire_protocol", &self.wire_protocol)
+            .field("chat_dialect", &self.chat_dialect)
+            .field("responses_dialect", &self.responses_dialect)
             .field("endpoint_path_override", &self.endpoint_path_override)
             .field("organization", &self.organization)
             .field("project", &self.project)
-            .field("application_url", &self.application_url)
+            .field(
+                "application_url",
+                &self.application_url.as_ref().map(debug_url),
+            )
             .field("application_title", &self.application_title)
             .finish()
     }
@@ -518,8 +649,8 @@ impl fmt::Debug for OpenAiConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        AzureOpenAiApiVersion, OpenAiCompatibleProfile, OpenAiConfig, OpenAiConfigError,
-        OpenAiWireProtocol,
+        AzureOpenAiApiVersion, OpenAiChatDialect, OpenAiCompatibleProfile, OpenAiConfig,
+        OpenAiConfigError, OpenAiResponsesDialect, OpenAiWireProtocol,
     };
 
     #[test]
@@ -542,6 +673,75 @@ mod tests {
             config.endpoint_url().as_str(),
             "http://localhost:8080/v1/responses"
         );
+    }
+
+    #[test]
+    fn chat_dialect_follows_verified_endpoint_ownership() {
+        let official = OpenAiConfig::from_profile(OpenAiCompatibleProfile::OpenAi, "key").unwrap();
+        assert_eq!(official.chat_dialect, OpenAiChatDialect::OpenAi);
+        assert_eq!(official.responses_dialect, OpenAiResponsesDialect::OpenAi);
+
+        let compatible = OpenAiConfig::compatible(
+            "gateway",
+            "key",
+            "https://example.test/v1",
+            OpenAiWireProtocol::ChatCompletions,
+        )
+        .unwrap();
+        assert_eq!(compatible.chat_dialect, OpenAiChatDialect::Compatible);
+        assert_eq!(
+            compatible.responses_dialect,
+            OpenAiResponsesDialect::Compatible
+        );
+    }
+
+    #[test]
+    fn unsafe_urls_and_header_values_are_rejected_before_transport() {
+        for base_url in [
+            "https://user:secret@example.test/v1",
+            "https://example.test/v1?token=secret",
+            "https://example.test/v1#fragment",
+        ] {
+            assert_eq!(
+                OpenAiConfig::new("key")
+                    .unwrap()
+                    .with_base_url(base_url)
+                    .unwrap_err(),
+                OpenAiConfigError::InvalidBaseUrlShape
+            );
+        }
+
+        assert_eq!(
+            OpenAiConfig::new("key")
+                .unwrap()
+                .with_organization("org\nunsafe")
+                .unwrap_err(),
+            OpenAiConfigError::InvalidOrganization
+        );
+        assert_eq!(
+            OpenAiConfig::new("key")
+                .unwrap()
+                .with_project(" ")
+                .unwrap_err(),
+            OpenAiConfigError::InvalidProject
+        );
+        assert_eq!(
+            OpenAiConfig::new("key")
+                .unwrap()
+                .with_provider(" openai")
+                .unwrap_err(),
+            OpenAiConfigError::InvalidProvider
+        );
+    }
+
+    #[test]
+    fn debug_url_defensively_removes_credentials_and_query() {
+        let unsafe_url =
+            url::Url::parse("https://user:secret@example.test/v1?token=secret").unwrap();
+        let safe = super::debug_url(&unsafe_url);
+
+        assert_eq!(safe, "https://example.test/v1");
+        assert!(!safe.contains("secret"));
     }
 
     #[test]
@@ -666,6 +866,13 @@ mod tests {
             OpenAiConfig::from_profile(OpenAiCompatibleProfile::OpenRouter, "key")
                 .unwrap()
                 .with_openrouter_attribution("file:///tmp/app", "app")
+                .unwrap_err(),
+            OpenAiConfigError::InvalidAttributionUrl
+        );
+        assert_eq!(
+            OpenAiConfig::from_profile(OpenAiCompatibleProfile::OpenRouter, "key")
+                .unwrap()
+                .with_openrouter_attribution("https://user:secret@example.com/app", "app")
                 .unwrap_err(),
             OpenAiConfigError::InvalidAttributionUrl
         );

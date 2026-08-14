@@ -31,8 +31,8 @@ mod realtime_webrtc;
 pub use chat::{ChatCompletionsDecoder, encode_chat_request};
 pub use client::OpenAiClient;
 pub use config::{
-    AzureOpenAiApiVersion, OpenAiCompatibleProfile, OpenAiConfig, OpenAiConfigError,
-    OpenAiWireProtocol,
+    AzureOpenAiApiVersion, OpenAiChatDialect, OpenAiCompatibleProfile, OpenAiConfig,
+    OpenAiConfigError, OpenAiResponsesDialect, OpenAiWireProtocol,
 };
 pub use control::{
     OpenAiBatch, OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus, OpenAiControlError,

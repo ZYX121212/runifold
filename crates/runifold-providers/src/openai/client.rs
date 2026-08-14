@@ -22,14 +22,16 @@ use serde_json::Value;
 use super::{
     ChatCompletionsDecoder, OpenAiCompatibleProfile, OpenAiConfig, OpenAiConfigError,
     OpenAiControlPlane, OpenAiEmbeddingModel, OpenAiEventDecoder, OpenAiWireProtocol,
-    chat::{ChatEvents, encode_chat_request},
-    decode::decode_complete_response,
+    chat::{ChatEvents, decode_complete_chat_response, encode_chat_request_for},
+    decode::decode_complete_response_for,
     encode::encode_request_for,
 };
 #[cfg(feature = "openai-realtime")]
 use super::{OpenAiRealtimeClient, OpenAiRealtimeError};
 
 const MAX_COMPLETE_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_SSE_EVENT_BYTES: usize = 8 * 1024 * 1024;
 
 /// `OpenAI` Responses API implementation of Runifold's [`Model`] boundary.
 #[derive(Clone, Debug)]
@@ -214,13 +216,7 @@ impl OpenAiClient {
         let body = match self.config.wire_protocol {
             OpenAiWireProtocol::Responses => encode_request_for(request, &self.config.provider)?,
             OpenAiWireProtocol::ChatCompletions => {
-                if !streaming {
-                    return Err(ModelError::local(
-                        ModelErrorKind::UnsupportedFeature,
-                        "complete response mode is not yet supported by the Chat Completions adapter",
-                    ));
-                }
-                encode_chat_request(request, &self.config.provider)?
+                encode_chat_request_for(request, &self.config.provider, self.config.chat_dialect)?
             }
         };
         Ok((body, warnings))
@@ -321,19 +317,22 @@ impl Model for OpenAiClient {
                 let payload =
                     read_error_body(response, &cancellation, &self.config.provider, deadline)
                         .await?;
-                return Err(http_error(
+                let mut error = http_error(
                     status,
                     request_id,
-                    &payload,
+                    payload.as_str(),
                     &self.config.provider,
                     retry_after,
-                ));
+                );
+                payload.annotate(&mut error);
+                return Err(error);
             }
             let decoder_config = DecoderConfig {
                 protocol: self.config.wire_protocol,
                 provider: self.config.provider.clone(),
                 request_id,
                 deadline,
+                responses_dialect: self.config.responses_dialect,
             };
             match response_mode {
                 ResponseMode::Complete => {
@@ -344,11 +343,19 @@ impl Model for OpenAiClient {
                         deadline,
                     )
                     .await?;
-                    let events = decode_complete_response(
-                        &decoder_config.provider,
-                        &payload,
-                        decoder_config.request_id,
-                    )?;
+                    let events = match decoder_config.protocol {
+                        OpenAiWireProtocol::Responses => decode_complete_response_for(
+                            &decoder_config.provider,
+                            &payload,
+                            decoder_config.request_id,
+                            decoder_config.responses_dialect,
+                        )?,
+                        OpenAiWireProtocol::ChatCompletions => decode_complete_chat_response(
+                            &decoder_config.provider,
+                            &payload,
+                            decoder_config.request_id,
+                        )?,
+                    };
                     Ok(complete_event_stream(events, warnings))
                 }
                 _ => Ok(event_stream(
@@ -455,6 +462,7 @@ struct DecoderConfig {
     provider: String,
     request_id: Option<String>,
     deadline: Option<Instant>,
+    responses_dialect: super::OpenAiResponsesDialect,
 }
 
 fn event_stream(
@@ -463,17 +471,38 @@ fn event_stream(
     cancellation: CancellationToken,
     mut warnings: Vec<ModelWarning>,
 ) -> ModelEventStream {
-    let mut source = response.bytes_stream().eventsource();
-    let provider = config.provider.clone();
-    let mut decoder = match config.protocol {
-        OpenAiWireProtocol::Responses => WireDecoder::Responses(
-            OpenAiEventDecoder::for_provider(&config.provider).with_request_id(config.request_id),
-        ),
-        OpenAiWireProtocol::ChatCompletions => {
-            WireDecoder::Chat(ChatCompletionsDecoder::new(&config.provider))
-        }
-    };
     Box::pin(async_stream::try_stream! {
+        let provider = config.provider.clone();
+        let stream_provider = provider.clone();
+        let deadline = config.deadline;
+        let bounded = async_stream::try_stream! {
+            let mut stream = response.bytes_stream();
+            let mut guard = SseSizeGuard::default();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|error| {
+                    transport_error(&error, &stream_provider, deadline)
+                })?;
+                guard.observe(&chunk).map_err(|()| {
+                    protocol_error(
+                        &stream_provider,
+                        format!("SSE event exceeds {MAX_SSE_EVENT_BYTES} bytes"),
+                    )
+                })?;
+                yield chunk;
+            }
+        };
+        let source = bounded.eventsource();
+        pin_mut!(source);
+        let mut decoder = match config.protocol {
+            OpenAiWireProtocol::Responses => WireDecoder::Responses(
+                OpenAiEventDecoder::for_provider(&config.provider)
+                    .with_dialect(config.responses_dialect)
+                    .with_request_id(config.request_id),
+            ),
+            OpenAiWireProtocol::ChatCompletions => {
+                WireDecoder::Chat(ChatCompletionsDecoder::new(&config.provider))
+            }
+        };
         let cancellation_wait = cancellation.cancelled().fuse();
         pin_mut!(cancellation_wait);
         loop {
@@ -491,9 +520,7 @@ fn event_stream(
                 break;
             };
             let event = event.map_err(|error| match error {
-                EventStreamError::Transport(error) => {
-                    transport_error(&error, &provider, config.deadline)
-                }
+                EventStreamError::Transport(error) => error,
                 error => protocol_error(&provider, format!("invalid SSE frame: {error}")),
             })?;
             if event.data == "[DONE]" {
@@ -538,20 +565,111 @@ pub(super) async fn send_request(
     }
 }
 
+pub(super) struct ErrorResponseBody {
+    text: String,
+    truncated: bool,
+}
+
+impl ErrorResponseBody {
+    pub(super) fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    pub(super) fn annotate(&self, error: &mut ModelError) {
+        if self.truncated {
+            error
+                .metadata
+                .insert("http.error_body_truncated".into(), Value::Bool(true));
+        }
+    }
+}
+
 pub(super) async fn read_error_body(
     response: Response,
     cancellation: &CancellationToken,
     provider: &str,
     deadline: Option<Instant>,
-) -> Result<String, ModelError> {
-    let cancellation_wait = cancellation.cancelled();
-    let body = response.text();
-    pin_mut!(cancellation_wait, body);
-    match select(cancellation_wait, body).await {
-        Either::Left(_) => Err(cancelled()),
-        Either::Right((result, _)) => {
-            result.map_err(|error| transport_error(&error, provider, deadline))
+) -> Result<ErrorResponseBody, ModelError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_ERROR_RESPONSE_BYTES as u64)
+    {
+        return Ok(ErrorResponseBody {
+            text: String::new(),
+            truncated: true,
+        });
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    loop {
+        let cancellation_wait = cancellation.cancelled().fuse();
+        let next = stream.next().fuse();
+        pin_mut!(cancellation_wait, next);
+        let chunk = futures_util::select_biased! {
+            () = cancellation_wait => return Err(cancelled()),
+            chunk = next => chunk,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        let chunk = chunk.map_err(|error| transport_error(&error, provider, deadline))?;
+        if body.len().saturating_add(chunk.len()) > MAX_ERROR_RESPONSE_BYTES {
+            let remaining = MAX_ERROR_RESPONSE_BYTES.saturating_sub(body.len());
+            body.extend_from_slice(&chunk[..remaining]);
+            return Ok(ErrorResponseBody {
+                text: String::from_utf8_lossy(&body).into_owned(),
+                truncated: true,
+            });
         }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(ErrorResponseBody {
+        text: String::from_utf8_lossy(&body).into_owned(),
+        truncated: false,
+    })
+}
+
+#[derive(Debug, Default)]
+struct SseSizeGuard {
+    event_bytes: usize,
+    line_bytes: usize,
+    last_was_cr: bool,
+}
+
+impl SseSizeGuard {
+    fn observe(&mut self, chunk: &[u8]) -> Result<(), ()> {
+        for byte in chunk {
+            self.event_bytes = self.event_bytes.saturating_add(1);
+            if self.event_bytes > MAX_SSE_EVENT_BYTES {
+                return Err(());
+            }
+            match *byte {
+                b'\r' => {
+                    if self.line_bytes == 0 {
+                        self.event_bytes = 0;
+                    }
+                    self.line_bytes = 0;
+                    self.last_was_cr = true;
+                }
+                b'\n' if self.last_was_cr => {
+                    if self.event_bytes == 1 {
+                        self.event_bytes = 0;
+                    }
+                    self.last_was_cr = false;
+                }
+                b'\n' => {
+                    if self.line_bytes == 0 {
+                        self.event_bytes = 0;
+                    }
+                    self.line_bytes = 0;
+                }
+                _ => {
+                    self.line_bytes = self.line_bytes.saturating_add(1);
+                    self.last_was_cr = false;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -720,7 +838,10 @@ pub(super) fn http_error(
 #[cfg(test)]
 mod tests {
     use super::super::OpenAiConfig;
-    use super::{OpenAiClient, adapter_capabilities, adapter_capabilities_for, http_error};
+    use super::{
+        MAX_SSE_EVENT_BYTES, OpenAiClient, SseSizeGuard, adapter_capabilities,
+        adapter_capabilities_for, http_error,
+    };
     use reqwest::StatusCode;
     use runifold_model::{ModelErrorKind, SupportLevel};
 
@@ -787,5 +908,22 @@ mod tests {
         assert_eq!(capabilities.structured_output.level, SupportLevel::Native);
         assert_eq!(capabilities.image_input.level, SupportLevel::Native);
         assert_eq!(capabilities.document_input.level, SupportLevel::Native);
+    }
+
+    #[test]
+    fn sse_guard_is_bounded_across_chunks_and_resets_at_event_boundaries() {
+        let mut guard = SseSizeGuard {
+            event_bytes: MAX_SSE_EVENT_BYTES - 1,
+            ..SseSizeGuard::default()
+        };
+        assert!(guard.observe(b"x").is_ok());
+        assert!(guard.observe(b"y").is_err());
+
+        let mut split = SseSizeGuard::default();
+        assert!(split.observe(b"data: {}\r\n").is_ok());
+        assert!(split.observe(b"\r\n").is_ok());
+        assert_eq!(split.event_bytes, 0);
+        assert!(split.observe(b"data: next\n\n").is_ok());
+        assert_eq!(split.event_bytes, 0);
     }
 }

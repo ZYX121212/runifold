@@ -16,8 +16,8 @@ workspace = true
 
 [dependencies]
 futures-util.workspace = true
-runifold-core = { version = "0.7.1", path = "../runifold-core" }
-runifold-model = { version = "0.7.1", path = "../runifold-model" }
+runifold-core = { version = "0.7.2", path = "../runifold-core" }
+runifold-model = { version = "0.7.2", path = "../runifold-model" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

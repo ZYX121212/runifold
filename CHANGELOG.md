@@ -6,6 +6,42 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-08-14
+
+### Added
+
+- Added an explicit OpenAI-versus-compatible Chat Completions dialect so the
+  public OpenAI endpoint uses `max_completion_tokens` and requests streaming
+  usage without imposing those fields on third-party compatible servers.
+- Added an independent Responses lifecycle dialect: public OpenAI requires
+  sequence numbers and explicit terminal statuses, while compatible endpoints
+  validate those fields when present without guessing unsupported guarantees.
+- Added atomic Chat Completions Complete decoding with the same canonical
+  lifecycle, usage, refusal, reasoning, Tool-call, and finish validation as the
+  streaming adapter.
+
+### Fixed
+
+- Corrected Responses image-tool streaming to read generated media from the
+  completed output item, detect PNG/JPEG/WebP media types, and redact raw image
+  payloads from provider events.
+- Preserved nested `response.failed` diagnostics, normalized Chat refusal
+  deltas, bounded SSE events and HTTP error bodies, and made function-tool
+  strict mode an explicit locally validated contract instead of forcing it on
+  arbitrary JSON Schemas.
+- Preserved Responses Programmatic Tool Calling `caller` correlation across
+  decoding, local Tool execution, and request replay.
+- Hardened configuration URLs, headers, provider identity, and redacted debug
+  output; retained status-derived failure classification for truncated HTTP
+  error bodies; and made configured-provider metadata namespaces stable.
+- Validated strict function and structured-output schemas recursively before
+  transport, including supported keywords and formats, value types, closed
+  objects, arrays, local references, nesting, and aggregate limits.
+- Validated inline image base64, decoded size, supported media type, and file
+  signature before sending native OpenAI image input.
+- Encoded current public OpenAI Chat instructions with the `developer` role,
+  preserved typed refusals, and rejected ambiguous multi-choice responses.
+
 ## [0.7.1] - 2026-08-14
 
 ### Fixed

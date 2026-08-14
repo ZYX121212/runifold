@@ -3,8 +3,8 @@
 use serde_json::{Map, Value, json};
 
 use crate::content_projection::{
-    encode_content_envelope, validate_inline_media, validate_media_url,
-    validate_optional_media_type,
+    encode_content_envelope, validate_image_media_type, validate_inline_image,
+    validate_inline_media, validate_media_url, validate_optional_media_type,
 };
 
 use runifold_model::{
@@ -73,16 +73,17 @@ pub(crate) fn encode_request_for(
         let mut tools = request
             .tools
             .iter()
-            .map(|tool| {
-                json!({
+            .map(|tool| -> Result<Value, ModelError> {
+                let strict = function_tool_strict(tool, provider)?;
+                Ok(json!({
                     "type": "function",
                     "name": tool.name,
                     "description": tool.description,
                     "parameters": tool.input_schema,
-                    "strict": true
-                })
+                    "strict": strict
+                }))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
         tools.extend(provider_tools);
         body.insert("tools".into(), Value::Array(tools));
     }
@@ -230,7 +231,40 @@ fn encode_function_call(
             call.id
         )));
     }
+    if let Some(caller) = provider_caller(&call.metadata, provider)? {
+        item.insert("caller".into(), caller);
+    }
     Ok(Value::Object(item))
+}
+
+fn provider_caller(
+    metadata: &runifold_model::ExtensionMap,
+    provider: &str,
+) -> Result<Option<Value>, ModelError> {
+    let compatible_key = "openai-compatible.caller";
+    let provider_key = format!("{provider}.caller");
+    let Some(caller) = metadata
+        .get(&provider_key)
+        .or_else(|| metadata.get(compatible_key))
+    else {
+        return Ok(None);
+    };
+    let caller_object = caller.as_object().ok_or_else(|| {
+        invalid(format!(
+            "tool correlation metadata `{provider_key}` must be an object"
+        ))
+    })?;
+    if caller_object.get("type").and_then(Value::as_str) != Some("program")
+        || caller_object
+            .get("caller_id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        return Err(invalid(format!(
+            "tool correlation metadata `{provider_key}` must identify a program caller"
+        )));
+    }
+    Ok(Some(caller.clone()))
 }
 
 fn provider_metadata_string(
@@ -286,11 +320,11 @@ fn encode_image(source: &MediaSource, provider: &str) -> Result<Value, ModelErro
     let image_url = match source {
         MediaSource::Url { url, media_type } => {
             validate_media_url(url, &["http", "https"])?;
-            validate_optional_media_type(media_type.as_deref())?;
+            validate_image_media_type(media_type.as_deref())?;
             url.clone()
         }
         MediaSource::Base64 { media_type, data } => {
-            validate_inline_media(media_type, data)?;
+            validate_inline_image(media_type, data)?;
             format!("data:{media_type};base64,{data}")
         }
         MediaSource::Artifact { .. } => {
@@ -421,11 +455,15 @@ fn encode_tool_result(result: &ToolResult, provider: &str) -> Result<Value, Mode
         content.extend(rich);
         Value::Array(content)
     };
-    Ok(json!({
+    let mut item = json!({
         "type": "function_call_output",
         "call_id": result.call_id,
         "output": output
-    }))
+    });
+    if let Some(caller) = provider_caller(&result.metadata, provider)? {
+        item["caller"] = caller;
+    }
+    Ok(item)
 }
 
 fn encode_tool_choice(choice: &ToolChoice) -> Result<Value, ModelError> {
@@ -448,12 +486,17 @@ fn encode_output_format(format: &OutputFormat) -> Result<Value, ModelError> {
             name,
             schema,
             strict,
-        } => json!({
-            "type": "json_schema",
-            "name": name,
-            "schema": schema,
-            "strict": strict
-        }),
+        } => {
+            if *strict {
+                validate_strict_schema(schema)?;
+            }
+            json!({
+                "type": "json_schema",
+                "name": name,
+                "schema": schema,
+                "strict": strict
+            })
+        }
         _ => {
             return Err(unsupported(
                 "output format is newer than this OpenAI adapter",
@@ -463,12 +506,409 @@ fn encode_output_format(format: &OutputFormat) -> Result<Value, ModelError> {
     Ok(json!({"format": format}))
 }
 
+pub(crate) fn function_tool_strict(
+    tool: &runifold_model::ToolSpec,
+    provider: &str,
+) -> Result<bool, ModelError> {
+    let provider_key = format!("{provider}.strict");
+    let strict = tool
+        .metadata
+        .get(&provider_key)
+        .or_else(|| tool.metadata.get("openai-compatible.strict"));
+    let Some(strict) = strict else {
+        return Ok(false);
+    };
+    let strict = strict
+        .as_bool()
+        .ok_or_else(|| invalid(format!("tool metadata `{provider_key}` must be a boolean")))?;
+    if strict {
+        validate_strict_schema(&tool.input_schema).map_err(|error| {
+            invalid(format!(
+                "tool `{}` requested OpenAI strict mode with an incompatible JSON Schema: {}",
+                tool.name, error.message
+            ))
+        })?;
+    }
+    Ok(strict)
+}
+
+#[derive(Default)]
+struct StrictSchemaStats {
+    properties: usize,
+    enum_values: usize,
+    string_chars: usize,
+}
+
+pub(crate) fn validate_strict_schema(schema: &Value) -> Result<(), ModelError> {
+    if schema.get("type").and_then(Value::as_str) != Some("object") || schema.get("anyOf").is_some()
+    {
+        return Err(invalid(
+            "strict schema root must be an object and cannot use anyOf",
+        ));
+    }
+    let mut stats = StrictSchemaStats::default();
+    validate_strict_schema_node(schema, 1, &mut stats)?;
+    if stats.properties > 5_000 {
+        return Err(invalid("strict schema exceeds 5000 object properties"));
+    }
+    if stats.enum_values > 1_000 {
+        return Err(invalid("strict schema exceeds 1000 enum values"));
+    }
+    if stats.string_chars > 120_000 {
+        return Err(invalid("strict schema exceeds the 120000 character limit"));
+    }
+    Ok(())
+}
+
+const STRICT_SCHEMA_KEYWORDS: &[&str] = &[
+    "$defs",
+    "$ref",
+    "additionalProperties",
+    "anyOf",
+    "const",
+    "description",
+    "enum",
+    "exclusiveMaximum",
+    "exclusiveMinimum",
+    "format",
+    "items",
+    "maxItems",
+    "maximum",
+    "minItems",
+    "minimum",
+    "multipleOf",
+    "pattern",
+    "properties",
+    "required",
+    "title",
+    "type",
+];
+
+fn validate_strict_schema_node(
+    schema: &Value,
+    object_depth: usize,
+    stats: &mut StrictSchemaStats,
+) -> Result<(), ModelError> {
+    let Some(object) = schema.as_object() else {
+        return Err(invalid("strict schema nodes must be objects"));
+    };
+    validate_schema_header(object)?;
+    validate_schema_constraints(object)?;
+    validate_schema_subschemas(object, object_depth, stats)?;
+    let is_object = schema_has_type(schema, "object");
+    let is_array = schema_has_type(schema, "array");
+    validate_keyword_placements(schema, object)?;
+    if is_object {
+        validate_object_schema(object, object_depth, stats)?;
+    }
+    if is_array {
+        validate_array_schema(object, object_depth, stats)?;
+    }
+    accumulate_schema_values(object, stats)
+}
+
+fn validate_schema_header(object: &Map<String, Value>) -> Result<(), ModelError> {
+    if let Some(keyword) = object
+        .keys()
+        .find(|keyword| !STRICT_SCHEMA_KEYWORDS.contains(&keyword.as_str()))
+    {
+        return Err(invalid(format!(
+            "strict schema keyword `{keyword}` is not supported"
+        )));
+    }
+    let Some(types) = object.get("type") else {
+        if ["$ref", "anyOf", "enum", "const"]
+            .iter()
+            .any(|keyword| object.contains_key(*keyword))
+        {
+            return Ok(());
+        }
+        return Err(invalid(
+            "strict schema node must declare type, $ref, anyOf, enum, or const",
+        ));
+    };
+    let valid = match types {
+        Value::String(kind) => strict_schema_type(kind),
+        Value::Array(kinds) => {
+            !kinds.is_empty()
+                && kinds
+                    .iter()
+                    .all(|kind| kind.as_str().is_some_and(strict_schema_type))
+                && kinds
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == kinds.len()
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid("strict schema contains an unsupported `type`"))
+    }
+}
+
+fn validate_schema_constraints(object: &Map<String, Value>) -> Result<(), ModelError> {
+    for keyword in ["description", "title", "pattern"] {
+        if object.get(keyword).is_some_and(|value| !value.is_string()) {
+            return Err(invalid(format!(
+                "strict schema `{keyword}` must be a string"
+            )));
+        }
+    }
+    if let Some(reference) = object.get("$ref") {
+        let reference = reference
+            .as_str()
+            .ok_or_else(|| invalid("strict schema `$ref` must be a string"))?;
+        if reference != "#" && !reference.starts_with("#/") {
+            return Err(invalid("strict schema `$ref` must be a local reference"));
+        }
+    }
+    validate_schema_format(object)?;
+    for keyword in [
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "maximum",
+        "minimum",
+        "multipleOf",
+    ] {
+        if object.get(keyword).is_some_and(|value| !value.is_number()) {
+            return Err(invalid(format!(
+                "strict schema `{keyword}` must be a number"
+            )));
+        }
+    }
+    for keyword in ["maxItems", "minItems"] {
+        if object
+            .get(keyword)
+            .is_some_and(|value| value.as_u64().is_none())
+        {
+            return Err(invalid(format!(
+                "strict schema `{keyword}` must be a non-negative integer"
+            )));
+        }
+    }
+    if object
+        .get("multipleOf")
+        .and_then(Value::as_f64)
+        .is_some_and(|value| value <= 0.0)
+    {
+        return Err(invalid("strict schema `multipleOf` must be positive"));
+    }
+    if let (Some(minimum), Some(maximum)) = (
+        object.get("minItems").and_then(Value::as_u64),
+        object.get("maxItems").and_then(Value::as_u64),
+    ) && minimum > maximum
+    {
+        return Err(invalid("strict schema `minItems` cannot exceed `maxItems`"));
+    }
+    Ok(())
+}
+
+fn validate_schema_format(object: &Map<String, Value>) -> Result<(), ModelError> {
+    let Some(format) = object.get("format") else {
+        return Ok(());
+    };
+    let supported = format.as_str().is_some_and(|format| {
+        matches!(
+            format,
+            "date-time"
+                | "time"
+                | "date"
+                | "duration"
+                | "email"
+                | "hostname"
+                | "ipv4"
+                | "ipv6"
+                | "uuid"
+        )
+    });
+    if supported {
+        Ok(())
+    } else {
+        Err(invalid("strict schema contains an unsupported `format`"))
+    }
+}
+
+fn validate_schema_subschemas(
+    object: &Map<String, Value>,
+    object_depth: usize,
+    stats: &mut StrictSchemaStats,
+) -> Result<(), ModelError> {
+    if let Some(definitions) = object.get("$defs") {
+        let definitions = definitions
+            .as_object()
+            .ok_or_else(|| invalid("strict schema `$defs` must be an object"))?;
+        for (name, value) in definitions {
+            stats.string_chars = stats.string_chars.saturating_add(name.chars().count());
+            validate_strict_schema_node(value, object_depth, stats)?;
+        }
+    }
+    if let Some(branches) = object.get("anyOf") {
+        let branches = branches
+            .as_array()
+            .filter(|branches| !branches.is_empty())
+            .ok_or_else(|| invalid("strict schema `anyOf` must be a non-empty array"))?;
+        for branch in branches {
+            validate_strict_schema_node(branch, object_depth, stats)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_keyword_placements(
+    schema: &Value,
+    object: &Map<String, Value>,
+) -> Result<(), ModelError> {
+    let placements = [
+        (
+            schema_has_type(schema, "object"),
+            &["additionalProperties", "properties", "required"][..],
+            "object",
+        ),
+        (
+            schema_has_type(schema, "array"),
+            &["items", "maxItems", "minItems"][..],
+            "array",
+        ),
+        (
+            schema_has_type(schema, "string"),
+            &["format", "pattern"][..],
+            "string",
+        ),
+        (
+            schema_has_type(schema, "number") || schema_has_type(schema, "integer"),
+            &[
+                "exclusiveMaximum",
+                "exclusiveMinimum",
+                "maximum",
+                "minimum",
+                "multipleOf",
+            ][..],
+            "numeric",
+        ),
+    ];
+    for (valid_type, keywords, kind) in placements {
+        if !valid_type && keywords.iter().any(|keyword| object.contains_key(*keyword)) {
+            return Err(invalid(format!(
+                "strict schema {kind} keywords require a compatible type"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_object_schema(
+    object: &Map<String, Value>,
+    object_depth: usize,
+    stats: &mut StrictSchemaStats,
+) -> Result<(), ModelError> {
+    if object_depth > 10 {
+        return Err(invalid("strict schema exceeds 10 object nesting levels"));
+    }
+    if object.get("additionalProperties") != Some(&Value::Bool(false)) {
+        return Err(invalid(
+            "strict schema objects require `additionalProperties: false`",
+        ));
+    }
+    let properties = object
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("strict schema objects require `properties`"))?;
+    let required = object
+        .get("required")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("strict schema objects require `required`"))?;
+    let required_count = required.len();
+    let required = required
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| invalid("strict schema required names must be strings"))
+        })
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    if required.len() != required_count
+        || required.len() != properties.len()
+        || properties
+            .keys()
+            .any(|name| !required.contains(name.as_str()))
+    {
+        return Err(invalid("strict schema requires every object property"));
+    }
+    stats.properties = stats.properties.saturating_add(properties.len());
+    for (name, value) in properties {
+        stats.string_chars = stats.string_chars.saturating_add(name.chars().count());
+        validate_strict_schema_node(value, object_depth + 1, stats)?;
+    }
+    Ok(())
+}
+
+fn validate_array_schema(
+    object: &Map<String, Value>,
+    object_depth: usize,
+    stats: &mut StrictSchemaStats,
+) -> Result<(), ModelError> {
+    let items = object
+        .get("items")
+        .ok_or_else(|| invalid("strict schema arrays require `items`"))?;
+    validate_strict_schema_node(items, object_depth, stats)
+}
+
+fn accumulate_schema_values(
+    object: &Map<String, Value>,
+    stats: &mut StrictSchemaStats,
+) -> Result<(), ModelError> {
+    if let Some(values) = object.get("enum") {
+        let values = values
+            .as_array()
+            .filter(|values| !values.is_empty())
+            .ok_or_else(|| invalid("strict schema `enum` must be a non-empty array"))?;
+        stats.enum_values = stats.enum_values.saturating_add(values.len());
+        let enum_string_chars = values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|value| value.chars().count())
+            .sum::<usize>();
+        if values.len() > 250 && enum_string_chars > 15_000 {
+            return Err(invalid(
+                "strict schema enum exceeds the 15000 character limit",
+            ));
+        }
+        stats.string_chars = stats.string_chars.saturating_add(enum_string_chars);
+    }
+    if let Some(value) = object.get("const").and_then(Value::as_str) {
+        stats.string_chars = stats.string_chars.saturating_add(value.chars().count());
+    }
+    Ok(())
+}
+
+fn strict_schema_type(kind: &str) -> bool {
+    matches!(
+        kind,
+        "string" | "number" | "integer" | "boolean" | "object" | "array" | "null"
+    )
+}
+
+fn schema_has_type(schema: &Value, expected: &str) -> bool {
+    schema.get("type").is_some_and(|kind| {
+        kind.as_str() == Some(expected)
+            || kind
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some(expected)))
+    })
+}
+
 fn merge_provider_options(
     body: &mut Map<String, Value>,
     request: &ModelRequest,
     provider: &str,
 ) -> Result<(), ModelError> {
-    for namespace in ["openai-compatible", provider] {
+    for namespace in std::iter::once("openai-compatible")
+        .chain((provider != "openai-compatible").then_some(provider))
+    {
         let Some(options) = request.provider_options.get(namespace) else {
             continue;
         };
@@ -558,7 +998,12 @@ mod tests {
         })
         .output_format(OutputFormat::JsonSchema {
             name: "answer".into(),
-            schema: serde_json::json!({"type": "object"}),
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            }),
             strict: true,
         });
 
@@ -567,8 +1012,175 @@ mod tests {
         assert_eq!(encoded["model"], "test-model");
         assert_eq!(encoded["stream"], true);
         assert_eq!(encoded["tools"][0]["name"], "weather");
+        assert_eq!(encoded["tools"][0]["strict"], false);
         assert_eq!(encoded["text"]["format"]["type"], "json_schema");
         assert_eq!(encoded["input"][0]["content"][0]["type"], "input_text");
+    }
+
+    #[test]
+    fn function_strictness_is_explicit_and_validated_locally() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": false
+        });
+        let strict_tool = ToolSpec {
+            name: "weather".into(),
+            description: "Get weather".into(),
+            input_schema: schema.clone(),
+            output_schema: None,
+            metadata: BTreeMap::from([("openai.strict".into(), serde_json::json!(true))]),
+        };
+        let request =
+            ModelRequest::new(ModelRef::new("openai", "model"), Message::user("weather?"))
+                .tool(strict_tool);
+        assert_eq!(
+            encode_request(&request).unwrap()["tools"][0]["strict"],
+            true
+        );
+
+        let invalid_tool = ToolSpec {
+            name: "weather".into(),
+            description: "Get weather".into(),
+            input_schema: serde_json::json!({
+                "type":"object",
+                "properties":{"city":{"type":"string"}}
+            }),
+            output_schema: None,
+            metadata: BTreeMap::from([("openai.strict".into(), serde_json::json!(true))]),
+        };
+        let invalid =
+            ModelRequest::new(ModelRef::new("openai", "model"), Message::user("weather?"))
+                .tool(invalid_tool);
+        assert_eq!(
+            encode_request(&invalid).unwrap_err().kind,
+            ModelErrorKind::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn strict_schema_rejects_unsupported_keywords_and_nested_optional_fields() {
+        for schema in [
+            serde_json::json!({
+                "type":"object",
+                "properties":{"value":{"type":"string"}},
+                "required":["value"],
+                "additionalProperties":false,
+                "allOf":[]
+            }),
+            serde_json::json!({
+                "type":"object",
+                "properties":{
+                    "nested":{
+                        "type":"object",
+                        "properties":{"value":{"type":"string"}},
+                        "required":[],
+                        "additionalProperties":false
+                    }
+                },
+                "required":["nested"],
+                "additionalProperties":false
+            }),
+        ] {
+            let tool = ToolSpec {
+                name: "strict_tool".into(),
+                description: "strict".into(),
+                input_schema: schema,
+                output_schema: None,
+                metadata: BTreeMap::from([("openai.strict".into(), serde_json::json!(true))]),
+            };
+            let request = ModelRequest::new(ModelRef::new("openai", "model"), Message::user("run"))
+                .tool(tool);
+            assert_eq!(
+                encode_request(&request).unwrap_err().kind,
+                ModelErrorKind::InvalidRequest
+            );
+        }
+    }
+
+    #[test]
+    fn strict_schema_rejects_invalid_keyword_values_and_placements() {
+        for property_schema in [
+            serde_json::json!({"type":"string","format":"uri"}),
+            serde_json::json!({"type":"string","minimum":0}),
+            serde_json::json!({"type":"array","items":{"type":"string"},"minItems":2,"maxItems":1}),
+            serde_json::json!({"type":"number","multipleOf":0}),
+            serde_json::json!({"$ref":"https://example.com/schema.json"}),
+        ] {
+            let request =
+                ModelRequest::new(ModelRef::new("openai", "model"), Message::user("answer"))
+                    .output_format(OutputFormat::JsonSchema {
+                        name: "answer".into(),
+                        schema: serde_json::json!({
+                            "type":"object",
+                            "properties":{"value":property_schema},
+                            "required":["value"],
+                            "additionalProperties":false
+                        }),
+                        strict: true,
+                    });
+
+            assert_eq!(
+                encode_request(&request).unwrap_err().kind,
+                ModelErrorKind::InvalidRequest
+            );
+        }
+    }
+
+    #[test]
+    fn strict_schema_rejects_duplicate_required_names() {
+        let request = ModelRequest::new(ModelRef::new("openai", "model"), Message::user("answer"))
+            .output_format(OutputFormat::JsonSchema {
+                name: "answer".into(),
+                schema: serde_json::json!({
+                    "type":"object",
+                    "properties":{"value":{"type":"string"}},
+                    "required":["value", "value"],
+                    "additionalProperties":false
+                }),
+                strict: true,
+            });
+
+        assert_eq!(
+            encode_request(&request).unwrap_err().kind,
+            ModelErrorKind::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn strict_schema_accepts_root_recursion() {
+        let request = ModelRequest::new(ModelRef::new("openai", "model"), Message::user("answer"))
+            .output_format(OutputFormat::JsonSchema {
+                name: "answer".into(),
+                schema: serde_json::json!({
+                    "type":"object",
+                    "properties":{
+                        "value":{"type":"string"},
+                        "next":{"anyOf":[{"$ref":"#"},{"type":"null"}]}
+                    },
+                    "required":["value", "next"],
+                    "additionalProperties":false
+                }),
+                strict: true,
+            });
+
+        assert!(encode_request(&request).is_ok());
+    }
+
+    #[test]
+    fn strict_output_schema_is_validated_before_transport() {
+        let request = ModelRequest::new(ModelRef::new("openai", "model"), Message::user("answer"))
+            .output_format(OutputFormat::JsonSchema {
+                name: "answer".into(),
+                schema: serde_json::json!({"anyOf":[{"type":"string"}]}),
+                strict: true,
+            });
+
+        assert_eq!(
+            encode_request(&request).unwrap_err().kind,
+            ModelErrorKind::InvalidRequest
+        );
     }
 
     #[test]
@@ -583,6 +1195,13 @@ mod tests {
                 metadata: BTreeMap::from([
                     ("openai.id".into(), serde_json::json!("fc_7")),
                     ("openai.status".into(), serde_json::json!("completed")),
+                    (
+                        "openai.caller".into(),
+                        serde_json::json!({
+                            "type":"program",
+                            "caller_id":"program-call"
+                        }),
+                    ),
                 ]),
             })],
         )
@@ -595,6 +1214,10 @@ mod tests {
         assert_eq!(encoded["input"][0]["id"], "fc_7");
         assert_eq!(encoded["input"][0]["status"], "completed");
         assert_eq!(encoded["input"][0]["arguments"], "{ \"value\": 7 }");
+        assert_eq!(
+            encoded["input"][0]["caller"],
+            serde_json::json!({"type":"program","caller_id":"program-call"})
+        );
     }
 
     #[test]
@@ -663,7 +1286,7 @@ mod tests {
                     ContentPart::Image {
                         source: MediaSource::Base64 {
                             media_type: "image/png".into(),
-                            data: "cG5n".into(),
+                            data: "iVBORw0KGgo=".into(),
                         },
                     },
                     ContentPart::Document {
@@ -676,7 +1299,13 @@ mod tests {
                 ],
                 structured_content: Some(serde_json::json!({"count":2})),
                 is_error: false,
-                metadata: BTreeMap::new(),
+                metadata: BTreeMap::from([(
+                    "openai.caller".into(),
+                    serde_json::json!({
+                        "type":"program",
+                        "caller_id":"program-call"
+                    }),
+                )]),
             })],
         )
         .unwrap();
@@ -690,6 +1319,10 @@ mod tests {
         assert_eq!(body["input"][0]["output"][0]["type"], "input_text");
         assert_eq!(body["input"][0]["output"][1]["type"], "input_image");
         assert_eq!(body["input"][0]["output"][2]["type"], "input_file");
+        assert_eq!(
+            body["input"][0]["caller"],
+            serde_json::json!({"type":"program","caller_id":"program-call"})
+        );
     }
 
     #[test]
@@ -767,6 +1400,28 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
+    }
+
+    #[test]
+    fn native_image_input_rejects_mime_and_signature_mismatches() {
+        for source in [
+            MediaSource::Base64 {
+                media_type: "text/plain".into(),
+                data: "iVBORw0KGgo=".into(),
+            },
+            MediaSource::Base64 {
+                media_type: "image/png".into(),
+                data: "bm90IGEgcG5n".into(),
+            },
+        ] {
+            let message = Message::new(Role::User, vec![ContentPart::Image { source }]).unwrap();
+            let error = encode_request(&ModelRequest::new(
+                ModelRef::new("openai", "vision"),
+                message,
+            ))
+            .unwrap_err();
+            assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
+        }
     }
 
     #[test]
@@ -851,6 +1506,22 @@ mod tests {
             );
 
         let encoded = encode_request(&request).unwrap();
+
+        assert_eq!(encoded["parallel_tool_calls"], false);
+    }
+
+    #[test]
+    fn canonical_compatible_namespace_is_merged_once() {
+        let request = ModelRequest::new(
+            ModelRef::new("openai-compatible", "model"),
+            Message::user("hello"),
+        )
+        .provider_option(
+            "openai-compatible",
+            serde_json::json!({"parallel_tool_calls":false}),
+        );
+
+        let encoded = super::encode_request_for(&request, "openai-compatible").unwrap();
 
         assert_eq!(encoded["parallel_tool_calls"], false);
     }

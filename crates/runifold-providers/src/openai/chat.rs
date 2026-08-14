@@ -10,9 +10,13 @@ use runifold_model::{
 use serde_json::{Map, Value, json};
 use smallvec::SmallVec;
 
+use super::{
+    OpenAiChatDialect,
+    encode::{function_tool_strict, validate_strict_schema},
+};
 use crate::content_projection::{
-    encode_content_envelope, encode_tool_result_envelope, validate_inline_media,
-    validate_media_url, validate_optional_media_type,
+    encode_content_envelope, encode_tool_result_envelope, validate_image_media_type,
+    validate_inline_image, validate_media_url,
 };
 
 /// Inline canonical events produced by one Chat Completions chunk.
@@ -25,6 +29,14 @@ pub(crate) type ChatEvents = SmallVec<[ModelStreamEvent; 4]>;
 ///
 /// Returns [`ModelError`] when content cannot be represented losslessly.
 pub fn encode_chat_request(request: &ModelRequest, provider: &str) -> Result<Value, ModelError> {
+    encode_chat_request_for(request, provider, OpenAiChatDialect::Compatible)
+}
+
+pub(crate) fn encode_chat_request_for(
+    request: &ModelRequest,
+    provider: &str,
+    dialect: OpenAiChatDialect,
+) -> Result<Value, ModelError> {
     if request.messages.is_empty() {
         return Err(invalid("a model request must contain at least one message"));
     }
@@ -32,7 +44,7 @@ pub fn encode_chat_request(request: &ModelRequest, provider: &str) -> Result<Val
     body.insert("model".into(), Value::String(request.model.name.clone()));
     body.insert(
         "messages".into(),
-        Value::Array(encode_chat_messages(request, provider)?),
+        Value::Array(encode_chat_messages(request, provider, dialect)?),
     );
     if !request.provider_tools().is_empty() {
         return Err(unsupported(
@@ -56,11 +68,20 @@ pub fn encode_chat_request(request: &ModelRequest, provider: &str) -> Result<Val
         "top_p",
         request.generation.top_p.map(Value::from),
     );
+    let token_limit_field = match dialect {
+        OpenAiChatDialect::OpenAi => "max_completion_tokens",
+        OpenAiChatDialect::Compatible => "max_tokens",
+    };
     insert_optional(
         &mut body,
-        "max_tokens",
+        token_limit_field,
         request.generation.max_output_tokens.map(Value::from),
     );
+    if dialect == OpenAiChatDialect::OpenAi
+        && matches!(request.selected_response_mode(), ResponseMode::Streaming)
+    {
+        body.insert("stream_options".into(), json!({"include_usage": true}));
+    }
     insert_optional(&mut body, "seed", request.generation.seed.map(Value::from));
     if !request.generation.stop.is_empty() {
         body.insert(
@@ -76,18 +97,19 @@ pub fn encode_chat_request(request: &ModelRequest, provider: &str) -> Result<Val
                 request
                     .tools
                     .iter()
-                    .map(|tool| {
-                        json!({
+                    .map(|tool| -> Result<Value, ModelError> {
+                        let strict = function_tool_strict(tool, provider)?;
+                        Ok(json!({
                             "type": "function",
                             "function": {
                                 "name": tool.name,
                                 "description": tool.description,
                                 "parameters": tool.input_schema,
-                                "strict": true
+                                "strict": strict
                             }
-                        })
+                        }))
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, _>>()?,
             ),
         );
     }
@@ -107,12 +129,16 @@ pub fn encode_chat_request(request: &ModelRequest, provider: &str) -> Result<Val
     Ok(Value::Object(body))
 }
 
-fn encode_chat_messages(request: &ModelRequest, provider: &str) -> Result<Vec<Value>, ModelError> {
+fn encode_chat_messages(
+    request: &ModelRequest,
+    provider: &str,
+    dialect: OpenAiChatDialect,
+) -> Result<Vec<Value>, ModelError> {
     let mut messages = Vec::with_capacity(request.messages.len());
     for message in &request.messages {
         if let [ContentPart::Text { text }] = message.content.as_slice() {
             messages.push(json!({
-                "role": chat_role(message.role)?,
+                "role": chat_role(message.role, dialect)?,
                 "content": text,
             }));
             continue;
@@ -152,12 +178,21 @@ fn encode_chat_messages(request: &ModelRequest, provider: &str) -> Result<Vec<Va
                     tool_calls.push(encoded);
                 }
                 ContentPart::ToolResult(result) => {
-                    flush_chat_message(&mut messages, message.role, &mut content, &mut tool_calls)?;
+                    flush_chat_message(
+                        &mut messages,
+                        message.role,
+                        &mut content,
+                        &mut tool_calls,
+                        dialect,
+                    )?;
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": result.call_id,
                         "content": encode_tool_result_envelope(result)?
                     }));
+                }
+                ContentPart::Refusal { text } if message.role == Role::Assistant => {
+                    content.push(json!({"type":"refusal","refusal":text}));
                 }
                 _ => {
                     return Err(unsupported(
@@ -166,7 +201,13 @@ fn encode_chat_messages(request: &ModelRequest, provider: &str) -> Result<Vec<Va
                 }
             }
         }
-        flush_chat_message(&mut messages, message.role, &mut content, &mut tool_calls)?;
+        flush_chat_message(
+            &mut messages,
+            message.role,
+            &mut content,
+            &mut tool_calls,
+            dialect,
+        )?;
     }
     Ok(messages)
 }
@@ -176,6 +217,7 @@ fn flush_chat_message(
     role: Role,
     content: &mut Vec<Value>,
     tool_calls: &mut Vec<Value>,
+    dialect: OpenAiChatDialect,
 ) -> Result<(), ModelError> {
     if content.is_empty() && tool_calls.is_empty() {
         return Ok(());
@@ -193,7 +235,10 @@ fn flush_chat_message(
         Value::Array(std::mem::take(content))
     };
     let mut message = Map::new();
-    message.insert("role".into(), Value::String(chat_role(role)?.into()));
+    message.insert(
+        "role".into(),
+        Value::String(chat_role(role, dialect)?.into()),
+    );
     message.insert("content".into(), content_value);
     if !tool_calls.is_empty() {
         message.insert(
@@ -214,11 +259,11 @@ fn chat_image(source: &MediaSource) -> Result<Value, ModelError> {
     let url = match source {
         MediaSource::Url { url, media_type } => {
             validate_media_url(url, &["http", "https"])?;
-            validate_optional_media_type(media_type.as_deref())?;
+            validate_image_media_type(media_type.as_deref())?;
             url.clone()
         }
         MediaSource::Base64 { media_type, data } => {
-            validate_inline_media(media_type, data)?;
+            validate_inline_image(media_type, data)?;
             format!("data:{media_type};base64,{data}")
         }
         MediaSource::Artifact { .. } => {
@@ -251,10 +296,15 @@ fn encode_chat_output_format(format: &OutputFormat) -> Result<Value, ModelError>
             name,
             schema,
             strict,
-        } => json!({
-            "type": "json_schema",
-            "json_schema": {"name": name, "schema": schema, "strict": strict}
-        }),
+        } => {
+            if *strict {
+                validate_strict_schema(schema)?;
+            }
+            json!({
+                "type": "json_schema",
+                "json_schema": {"name": name, "schema": schema, "strict": strict}
+            })
+        }
         _ => return Err(unsupported("output format is newer than this adapter")),
     })
 }
@@ -264,7 +314,9 @@ fn merge_options(
     request: &ModelRequest,
     provider: &str,
 ) -> Result<(), ModelError> {
-    for namespace in ["openai-compatible", provider] {
+    for namespace in std::iter::once("openai-compatible")
+        .chain((provider != "openai-compatible").then_some(provider))
+    {
         let Some(options) = request.provider_options.get(namespace) else {
             continue;
         };
@@ -283,8 +335,9 @@ fn merge_options(
     Ok(())
 }
 
-fn chat_role(role: Role) -> Result<&'static str, ModelError> {
+fn chat_role(role: Role, dialect: OpenAiChatDialect) -> Result<&'static str, ModelError> {
     match role {
+        Role::System if dialect == OpenAiChatDialect::OpenAi => Ok("developer"),
         Role::System => Ok("system"),
         Role::User => Ok("user"),
         Role::Assistant => Ok("assistant"),
@@ -308,6 +361,7 @@ pub struct ChatCompletionsDecoder {
     model: Option<String>,
     reasoning_index: Option<u32>,
     text_index: Option<u32>,
+    refusal_index: Option<u32>,
     tool_indices: BTreeMap<u64, u32>,
     tool_identities: BTreeMap<u64, (String, String)>,
     open: BTreeSet<u32>,
@@ -326,6 +380,7 @@ impl ChatCompletionsDecoder {
             model: None,
             reasoning_index: None,
             text_index: None,
+            refusal_index: None,
             tool_indices: BTreeMap::new(),
             tool_identities: BTreeMap::new(),
             open: BTreeSet::new(),
@@ -378,11 +433,14 @@ impl ChatCompletionsDecoder {
             self.usage = chat_usage(usage);
             events.push(ModelStreamEvent::UsageUpdated { usage: self.usage });
         }
+        if choices.len() > 1 {
+            return Err(protocol(
+                "multiple Chat Completions choices are not supported",
+            ));
+        }
         for choice in choices {
-            if choice.get("index").and_then(Value::as_u64).unwrap_or(0) != 0 {
-                return Err(protocol(
-                    "multiple Chat Completions choices are not supported",
-                ));
+            if choice.get("index").and_then(Value::as_u64) != Some(0) {
+                return Err(protocol("chat choice must explicitly identify index zero"));
             }
             let delta = choice.get("delta").unwrap_or(&Value::Null);
             if let Some(reasoning) = reasoning_delta(delta) {
@@ -401,17 +459,28 @@ impl ChatCompletionsDecoder {
                     text: text.into(),
                 });
             }
+            if let Some(refusal) = delta
+                .get("refusal")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+            {
+                let index = self.ensure_refusal(&mut events)?;
+                events.push(ModelStreamEvent::RefusalDelta {
+                    index,
+                    text: refusal.into(),
+                });
+            }
             if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
                 for call in tool_calls {
                     self.decode_tool_delta(call, &mut events)?;
                 }
             }
+            if let Some(error) = choice.get("error").filter(|error| !error.is_null()) {
+                return Err(chat_stream_error(&self.provider, error));
+            }
             if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
-                if reason == "error" || choice.get("error").is_some_and(|error| !error.is_null()) {
-                    return Err(chat_stream_error(
-                        &self.provider,
-                        choice.get("error").unwrap_or(choice),
-                    ));
+                if reason == "error" {
+                    return Err(chat_stream_error(&self.provider, choice));
                 }
                 if self.finish_reason.is_some() {
                     return Err(protocol("chat stream emitted more than one finish reason"));
@@ -514,6 +583,20 @@ impl ChatCompletionsDecoder {
         Ok(index)
     }
 
+    fn ensure_refusal(&mut self, events: &mut ChatEvents) -> Result<u32, ModelError> {
+        if let Some(index) = self.refusal_index {
+            return Ok(index);
+        }
+        let index = self.allocate()?;
+        self.refusal_index = Some(index);
+        self.open.insert(index);
+        events.push(ModelStreamEvent::ContentBlockStarted {
+            index,
+            kind: ContentBlockKind::Refusal,
+        });
+        Ok(index)
+    }
+
     fn decode_tool_delta(
         &mut self,
         call: &Value,
@@ -598,6 +681,183 @@ impl ChatCompletionsDecoder {
     }
 }
 
+/// Normalizes one non-streaming Chat Completions response.
+pub(crate) fn decode_complete_chat_response(
+    provider: &str,
+    payload: &Value,
+    request_id: Option<String>,
+) -> Result<Vec<ModelStreamEvent>, ModelError> {
+    if let Some(error) = payload.get("error").filter(|value| !value.is_null()) {
+        return Err(chat_stream_error(provider, error));
+    }
+    let choices = payload
+        .get("choices")
+        .and_then(Value::as_array)
+        .ok_or_else(|| protocol("chat completion field `choices` must be an array"))?;
+    if choices.len() != 1 {
+        return Err(protocol(
+            "complete Chat Completions response must contain exactly one choice",
+        ));
+    }
+    let choice = &choices[0];
+    if choice.get("index").and_then(Value::as_u64) != Some(0) {
+        return Err(protocol(
+            "complete chat choice must explicitly identify index zero",
+        ));
+    }
+    if let Some(error) = choice.get("error").filter(|error| !error.is_null()) {
+        return Err(chat_stream_error(provider, error));
+    }
+    if choice.get("finish_reason").and_then(Value::as_str) == Some("error") {
+        return Err(chat_stream_error(provider, choice));
+    }
+    let message = choice
+        .get("message")
+        .and_then(Value::as_object)
+        .ok_or_else(|| protocol("complete chat choice is missing `message`"))?;
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Err(protocol(
+            "complete chat choice message must have assistant role",
+        ));
+    }
+    let finish_reason = choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .ok_or_else(|| protocol("complete chat choice is missing `finish_reason`"))?;
+
+    let mut delta = Map::new();
+    for field in ["reasoning_content", "reasoning", "thinking", "refusal"] {
+        if let Some(value) = message.get(field).filter(|value| !value.is_null()) {
+            delta.insert(field.into(), value.clone());
+        }
+    }
+    normalize_complete_chat_content(message.get("content"), &mut delta)?;
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        let normalized = tool_calls
+            .iter()
+            .enumerate()
+            .map(|(index, call)| {
+                let mut call = call
+                    .as_object()
+                    .cloned()
+                    .ok_or_else(|| protocol("complete chat tool call must be an object"))?;
+                call.insert("index".into(), Value::from(index));
+                Ok(Value::Object(call))
+            })
+            .collect::<Result<Vec<_>, ModelError>>()?;
+        delta.insert("tool_calls".into(), Value::Array(normalized));
+    }
+
+    let mut synthetic = Map::new();
+    if let Some(id) = payload.get("id") {
+        synthetic.insert("id".into(), id.clone());
+    }
+    synthetic.insert(
+        "model".into(),
+        Value::String(required_string(payload, "model")?.into()),
+    );
+    if let Some(usage) = payload.get("usage") {
+        synthetic.insert("usage".into(), usage.clone());
+    }
+    synthetic.insert(
+        "choices".into(),
+        Value::Array(vec![json!({
+            "index":0,
+            "delta":Value::Object(delta),
+            "finish_reason":finish_reason
+        })]),
+    );
+
+    let mut decoder = ChatCompletionsDecoder::new(provider);
+    let mut events = decoder.decode(Value::Object(synthetic))?;
+    normalize_complete_provider_event(&mut events, payload);
+    if let Some(request_id) = request_id {
+        insert_complete_request_id(&mut events, provider, &request_id);
+    }
+    events.extend(decoder.finish()?);
+    Ok(events)
+}
+
+fn normalize_complete_provider_event(events: &mut [ModelStreamEvent], payload: &Value) {
+    for event in events {
+        if let ModelStreamEvent::Provider { event } = event {
+            event.name = "chat.completion".into();
+            event.payload = payload.clone();
+        }
+    }
+}
+
+fn insert_complete_request_id(
+    events: &mut Vec<ModelStreamEvent>,
+    provider: &str,
+    request_id: &str,
+) {
+    let position = events
+        .iter()
+        .position(|event| matches!(event, ModelStreamEvent::ResponseStarted { .. }))
+        .map_or(0, |position| position + 1);
+    events.insert(
+        position,
+        ModelStreamEvent::Provider {
+            event: ProviderEvent {
+                provider: provider.into(),
+                name: "http.request_id".into(),
+                payload: json!({"request_id":request_id}),
+            },
+        },
+    );
+}
+
+fn normalize_complete_chat_content(
+    content: Option<&Value>,
+    delta: &mut Map<String, Value>,
+) -> Result<(), ModelError> {
+    match content {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(text)) => {
+            delta.insert("content".into(), Value::String(text.clone()));
+            Ok(())
+        }
+        Some(Value::Array(parts)) => {
+            let mut text = String::new();
+            let mut refusal = None;
+            for part in parts {
+                match part.get("type").and_then(Value::as_str) {
+                    Some("text") => text.push_str(required_string(part, "text")?),
+                    Some("refusal") => {
+                        let value = required_string(part, "refusal")?;
+                        if refusal.replace(value.to_owned()).is_some() {
+                            return Err(protocol(
+                                "complete chat message contains multiple refusal parts",
+                            ));
+                        }
+                    }
+                    Some(kind) => {
+                        return Err(protocol(format!(
+                            "unsupported complete chat content part `{kind}`"
+                        )));
+                    }
+                    None => {
+                        return Err(protocol(
+                            "complete chat content part is missing a string `type`",
+                        ));
+                    }
+                }
+            }
+            if !text.is_empty() {
+                delta.insert("content".into(), Value::String(text));
+            }
+            if let Some(refusal) = refusal {
+                delta.insert("refusal".into(), Value::String(refusal));
+            }
+            Ok(())
+        }
+        Some(_) => Err(protocol(
+            "complete chat message content must be a string, array, or null",
+        )),
+    }
+}
+
 fn chat_usage(usage: &Value) -> ModelUsage {
     ModelUsage {
         input_tokens: usage
@@ -659,14 +919,19 @@ fn chat_stream_error(provider: &str, value: &Value) -> ModelError {
         .unwrap_or("compatible Chat Completions stream failed");
     let mut error = ModelError::local(ModelErrorKind::Provider, message);
     error.provider = Some(provider.into());
-    if let Some(code) = value.get("code") {
-        error
-            .metadata
-            .insert(format!("{provider}.error.code"), code.clone());
+    for field in ["type", "code", "param"] {
+        if let Some(field_value) = value.get(field).filter(|value| !value.is_null()) {
+            error
+                .metadata
+                .insert(format!("{provider}.error.{field}"), field_value.clone());
+        }
     }
-    if let Some(error_type) = value
-        .get("metadata")
-        .and_then(|metadata| metadata.get("error_type"))
+    if !error
+        .metadata
+        .contains_key(&format!("{provider}.error.type"))
+        && let Some(error_type) = value
+            .get("metadata")
+            .and_then(|metadata| metadata.get("error_type"))
     {
         error
             .metadata
@@ -707,7 +972,10 @@ mod tests {
     use crate::content_projection::decode_content_envelope;
     use crate::content_projection::decode_tool_result_envelope;
 
-    use super::{ChatCompletionsDecoder, encode_chat_request};
+    use super::{
+        ChatCompletionsDecoder, OpenAiChatDialect, decode_complete_chat_response,
+        encode_chat_request, encode_chat_request_for,
+    };
 
     #[test]
     fn encodes_standard_chat_messages() {
@@ -723,6 +991,152 @@ mod tests {
     }
 
     #[test]
+    fn canonical_compatible_namespace_is_merged_once_for_chat() {
+        let request = ModelRequest::new(
+            ModelRef::new("openai-compatible", "model"),
+            Message::user("hello"),
+        )
+        .provider_option("openai-compatible", json!({"parallel_tool_calls":false}));
+
+        let body = encode_chat_request(&request, "openai-compatible").unwrap();
+
+        assert_eq!(body["parallel_tool_calls"], false);
+    }
+
+    #[test]
+    fn openai_chat_dialect_uses_current_token_and_usage_fields() {
+        let mut request = ModelRequest::new(
+            ModelRef::new("openai", "chat-model"),
+            Message::user("hello"),
+        );
+        request.generation.max_output_tokens = Some(128);
+
+        let body = encode_chat_request_for(&request, "openai", OpenAiChatDialect::OpenAi).unwrap();
+
+        assert_eq!(body["max_completion_tokens"], 128);
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn chat_dialect_owns_system_role_mapping() {
+        let request = ModelRequest::new(
+            ModelRef::new("openai", "chat-model"),
+            Message::system("be precise"),
+        );
+
+        let official =
+            encode_chat_request_for(&request, "openai", OpenAiChatDialect::OpenAi).unwrap();
+        let compatible =
+            encode_chat_request_for(&request, "gateway", OpenAiChatDialect::Compatible).unwrap();
+
+        assert_eq!(official["messages"][0]["role"], "developer");
+        assert_eq!(compatible["messages"][0]["role"], "system");
+    }
+
+    #[test]
+    fn assistant_refusal_replays_as_a_typed_content_part() {
+        let message = Message::new(
+            Role::Assistant,
+            vec![ContentPart::Refusal {
+                text: "cannot help".into(),
+            }],
+        )
+        .unwrap();
+        let request = ModelRequest::new(ModelRef::new("openai", "chat-model"), message);
+
+        let body = encode_chat_request_for(&request, "openai", OpenAiChatDialect::OpenAi).unwrap();
+
+        assert_eq!(body["messages"][0]["role"], "assistant");
+        assert_eq!(body["messages"][0]["content"][0]["type"], "refusal");
+        assert_eq!(body["messages"][0]["content"][0]["refusal"], "cannot help");
+    }
+
+    #[test]
+    fn complete_chat_response_normalizes_refusal_and_usage() {
+        let events = decode_complete_chat_response(
+            "openai",
+            &json!({
+                "id":"chat-complete",
+                "model":"chat-model",
+                "choices":[{
+                    "index":0,
+                    "message":{
+                        "role":"assistant",
+                        "content":[{"type":"refusal","refusal":"cannot help"}]
+                    },
+                    "finish_reason":"stop"
+                }],
+                "usage":{"prompt_tokens":4,"completion_tokens":2}
+            }),
+            Some("req-1".into()),
+        )
+        .unwrap();
+        let mut accumulator = ModelStreamAccumulator::new();
+        let response = events
+            .into_iter()
+            .find_map(|event| accumulator.push(event).unwrap())
+            .unwrap();
+
+        assert_eq!(
+            response.content,
+            vec![ContentPart::Refusal {
+                text: "cannot help".into()
+            }]
+        );
+        assert_eq!(response.usage.input_tokens, 4);
+        assert_eq!(response.usage.output_tokens, 2);
+    }
+
+    #[test]
+    fn chat_decoder_rejects_duplicate_or_implicit_choice_zero() {
+        let mut decoder = ChatCompletionsDecoder::new("gateway");
+        let duplicate = decoder
+            .decode(json!({
+                "model":"model",
+                "choices":[
+                    {"index":0,"delta":{"content":"a"},"finish_reason":null},
+                    {"index":0,"delta":{"content":"b"},"finish_reason":"stop"}
+                ]
+            }))
+            .unwrap_err();
+        assert!(duplicate.message.contains("multiple"));
+
+        let mut decoder = ChatCompletionsDecoder::new("gateway");
+        let implicit = decoder
+            .decode(json!({
+                "model":"model",
+                "choices":[{"delta":{"content":"a"},"finish_reason":"stop"}]
+            }))
+            .unwrap_err();
+        assert!(implicit.message.contains("index zero"));
+    }
+
+    #[test]
+    fn chat_choice_errors_fail_before_message_decoding() {
+        let error_payload = json!({
+            "index":0,
+            "error":{"message":"upstream failed","type":"server_error","code":"failed"},
+            "finish_reason":null
+        });
+        let mut decoder = ChatCompletionsDecoder::new("gateway");
+        let streaming = decoder
+            .decode(json!({"model":"model","choices":[error_payload.clone()]}))
+            .unwrap_err();
+        assert_eq!(streaming.kind, runifold_model::ModelErrorKind::Provider);
+        assert_eq!(streaming.metadata["gateway.error.code"], "failed");
+
+        let complete = decode_complete_chat_response(
+            "gateway",
+            &json!({"model":"model","choices":[error_payload]}),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(complete.kind, runifold_model::ModelErrorKind::Provider);
+        assert_eq!(complete.metadata["gateway.error.type"], "server_error");
+    }
+
+    #[test]
     fn tool_results_bridge_every_rich_content_kind() {
         let result = ToolResult {
             call_id: "call-rich".into(),
@@ -731,7 +1145,7 @@ mod tests {
                 ContentPart::Image {
                     source: MediaSource::Base64 {
                         media_type: "image/png".into(),
-                        data: "aW1hZ2U=".into(),
+                        data: "iVBORw0KGgo=".into(),
                     },
                 },
                 ContentPart::Audio {
@@ -995,6 +1409,29 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_streamed_refusal() {
+        let chunks = [
+            json!({
+                "id":"chat_refusal","model":"model",
+                "choices":[{"index":0,"delta":{"refusal":"cannot "},"finish_reason":null}]
+            }),
+            json!({
+                "id":"chat_refusal","model":"model",
+                "choices":[{"index":0,"delta":{"refusal":"help"},"finish_reason":"stop"}]
+            }),
+        ];
+
+        let response = decode_chunks_for("openai", chunks);
+
+        assert_eq!(
+            response.content,
+            vec![ContentPart::Refusal {
+                text: "cannot help".into()
+            }]
+        );
+    }
+
+    #[test]
     fn accepts_top_level_compatible_usage_details() {
         let chunks = [json!({
             "id": "chat_usage",
@@ -1072,8 +1509,10 @@ mod tests {
         let error = decoder
             .decode(json!({
                 "error": {
+                    "type":"upstream_error",
                     "code": 502,
                     "message": "upstream disconnected",
+                    "param":"tools[0]",
                     "metadata": {"error_type":"provider_unavailable"}
                 }
             }))
@@ -1081,10 +1520,8 @@ mod tests {
 
         assert_eq!(error.kind, runifold_model::ModelErrorKind::Provider);
         assert_eq!(error.provider.as_deref(), Some("openrouter"));
-        assert_eq!(
-            error.metadata["openrouter.error.type"],
-            "provider_unavailable"
-        );
+        assert_eq!(error.metadata["openrouter.error.type"], "upstream_error");
+        assert_eq!(error.metadata["openrouter.error.param"], "tools[0]");
     }
 
     fn decode_chunks(chunks: impl IntoIterator<Item = Value>) -> runifold_model::ModelResponse {
