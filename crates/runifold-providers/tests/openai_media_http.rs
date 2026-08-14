@@ -282,27 +282,34 @@ async fn media_body_observes_cancellation_and_deadline() {
             "POST",
             "/v1/audio/speech",
             ScriptedResponse::ok(vec![
-                ResponseChunk::text("audio").after(Duration::from_millis(200)),
+                ResponseChunk::text("audio").after(Duration::from_secs(2)),
             ]),
         )
     };
     let cancellation_server = CassetteServer::start(vec![delayed()]).unwrap();
     let cancellation = CancellationToken::new();
     let context = ModelCallContext::new().with_cancellation(&cancellation);
-    let canceller = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        cancellation.cancel();
+    let cancellation_client = client(&cancellation_server);
+    let invocation = tokio::spawn(async move {
+        cancellation_client
+            .synthesize_speech(speech_request(), context)
+            .await
     });
-    let error = client(&cancellation_server)
-        .synthesize_speech(speech_request(), context)
-        .await
-        .unwrap_err();
-    canceller.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while cancellation_server.observed_requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    cancellation.cancel();
+    let error = invocation.await.unwrap().unwrap_err();
     assert_eq!(error.kind, runifold_model::ModelErrorKind::Cancelled);
     cancellation_server.assert_finished().unwrap();
 
     let deadline_server = CassetteServer::start(vec![delayed()]).unwrap();
-    let context = ModelCallContext::new().with_deadline(Instant::now() + Duration::from_millis(20));
+    let context =
+        ModelCallContext::new().with_deadline(Instant::now() + Duration::from_millis(500));
     let error = client(&deadline_server)
         .synthesize_speech(speech_request(), context)
         .await

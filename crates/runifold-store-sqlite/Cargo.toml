@@ -21,7 +21,7 @@ runifold-agent.workspace = true
 runifold-core.workspace = true
 runifold-effect.workspace = true
 runifold-model.workspace = true
-runifold-ops = { version = "0.7.0", path = "../runifold-ops" }
+runifold-ops = { version = "0.7.1", path = "../runifold-ops" }
 runifold-workflow.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true

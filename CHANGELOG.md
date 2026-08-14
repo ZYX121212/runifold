@@ -6,6 +6,14 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-14
+
+### Fixed
+
+- Stabilized the OpenAI media cancellation/deadline wire test by cancelling
+  only after the cassette has observed the complete request and by reserving
+  connection-establishment time separately from the delayed response body.
+
 ## [0.7.0] - 2026-08-14
 
 ### Added
