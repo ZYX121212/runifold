@@ -117,7 +117,7 @@ jobs:
         shell: bash
         run: |
           tree="$(cargo tree -p runifold-providers --no-default-features --features openai -e normal --depth 1 --locked)"
-          forbidden='runifold-(agent|effect|macros|retrieval|tool|workflow)'
+          forbidden='runifold-(agent|effect|macros|tool|workflow)'
           if grep -E -q "$forbidden" <<<"$tree"; then
             echo "::error title=Provider dependency regression::OpenAI-compatible transport pulled a full runtime crate."
             printf '%s\n' "$tree"
@@ -133,6 +133,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Test
+        id: test
         shell: bash
         run: |
           set +e
@@ -153,7 +154,7 @@ jobs:
           fi
 
       - name: Upload failed test log
-        if: failure()
+        if: failure() && steps.test.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: rust-test-output

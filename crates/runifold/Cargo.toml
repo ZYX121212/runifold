@@ -70,11 +70,11 @@ secrecy = { workspace = true, optional = true }
 anyhow = "1.0.104"
 futures-executor.workspace = true
 runifold-providers = { path = "../runifold-providers", features = ["anthropic", "gemini", "ollama", "openai-realtime"] }
-runifold-testkit = { path = "../runifold-testkit" }
 serde.workspace = true
 serde_json.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+runifold-testkit = { path = "../runifold-testkit" }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
 
 [target.wasm32-unknown-unknown.dev-dependencies]
