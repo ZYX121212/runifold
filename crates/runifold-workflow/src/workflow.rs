@@ -3,9 +3,11 @@ use std::{fmt, sync::Arc, time::Duration};
 use runifold_agent::Agent;
 use runifold_core::{CapabilitySet, EffectClass, Usage};
 
+use crate::remediation::RepairableNode;
 use crate::{
     AgentStep, StepId, WorkflowBuildError, WorkflowCondition, WorkflowInterruptRequest,
-    WorkflowSignalName, WorkflowStep, WorkflowStepError, WorkflowWait,
+    WorkflowRemediationPolicy, WorkflowReviewer, WorkflowSignalName, WorkflowStep,
+    WorkflowStepError, WorkflowWait,
 };
 
 pub(crate) enum WorkflowNodeKind {
@@ -17,6 +19,7 @@ pub(crate) enum WorkflowNodeKind {
     },
     Parallel(Arc<[ParallelBranch]>),
     Race(Arc<[ParallelBranch]>),
+    Repairable(RepairableNode),
     Timer(WorkflowWait),
     Signal(WorkflowWait),
     SignalOrTimeout(WorkflowWait),
@@ -52,6 +55,7 @@ impl WorkflowNode {
             }
             WorkflowNodeKind::Parallel(_)
             | WorkflowNodeKind::Race(_)
+            | WorkflowNodeKind::Repairable(_)
             | WorkflowNodeKind::Timer(_)
             | WorkflowNodeKind::Signal(_)
             | WorkflowNodeKind::SignalOrTimeout(_)
@@ -185,6 +189,63 @@ impl WorkflowBuilder {
             self.version = version;
         }
         self
+    }
+
+    /// Appends one review-gated step with bounded automatic remediation.
+    ///
+    /// The first generation receives the ordinary workflow input. When the
+    /// reviewer requests repair, later generations receive a serialized
+    /// [`crate::WorkflowRepairInput`]. Generation and review capabilities are
+    /// attenuated independently, and every substage is checkpointed.
+    #[must_use]
+    pub fn repairable_step<S, R>(
+        mut self,
+        id: impl Into<String>,
+        generator: S,
+        reviewer: R,
+        policy: WorkflowRemediationPolicy,
+        generator_capabilities: CapabilitySet,
+        reviewer_capabilities: CapabilitySet,
+    ) -> Self
+    where
+        S: WorkflowStep + 'static,
+        R: WorkflowReviewer + 'static,
+    {
+        self.push_node(
+            id,
+            generator_capabilities,
+            WorkflowNodeKind::Repairable(RepairableNode {
+                generator: Arc::new(generator),
+                reviewer: Arc::new(reviewer),
+                reviewer_capabilities,
+                policy,
+            }),
+        );
+        self
+    }
+
+    /// Appends one Agent-backed generation step with bounded output review.
+    #[must_use]
+    pub fn repairable_agent<R>(
+        self,
+        id: impl Into<String>,
+        agent: Arc<Agent>,
+        reviewer: R,
+        policy: WorkflowRemediationPolicy,
+        generator_capabilities: CapabilitySet,
+        reviewer_capabilities: CapabilitySet,
+    ) -> Self
+    where
+        R: WorkflowReviewer + 'static,
+    {
+        self.repairable_step(
+            id,
+            AgentStep::new(agent),
+            reviewer,
+            policy,
+            generator_capabilities,
+            reviewer_capabilities,
+        )
     }
 
     /// Appends a durable timer that releases its worker lease while waiting.

@@ -7,11 +7,11 @@ use runifold_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{StepId, WorkflowError, WorkflowOutcome, WorkflowWait};
+use crate::{StepId, WorkflowError, WorkflowOutcome, WorkflowRemediationCheckpoint, WorkflowWait};
 use crate::{WorkflowLease, WorkflowStore};
 
 const CHECKPOINT_KIND: &str = "runifold.workflow";
-const CHECKPOINT_SCHEMA_VERSION: u32 = 4;
+const CHECKPOINT_SCHEMA_VERSION: u32 = 5;
 const MIN_CHECKPOINT_SCHEMA_VERSION: u32 = 3;
 
 /// Recovery behavior for a workflow interrupted inside one node.
@@ -21,7 +21,7 @@ pub enum WorkflowResumePolicy {
     /// Reject recovery that could duplicate model cost or external effects.
     #[default]
     RejectAmbiguous,
-    /// Explicitly retry only the interrupted workflow node.
+    /// Explicitly retry only the interrupted workflow node or review substage.
     RetryInterruptedStep,
 }
 
@@ -83,7 +83,7 @@ pub enum WorkflowForkPolicy {
     /// Fork only from a stable boundary that cannot repeat an ambiguous node.
     #[default]
     RejectAmbiguous,
-    /// Re-run one serial node whose checkpoint was persisted as in-flight.
+    /// Re-run one serial node or review substage persisted as in-flight.
     RetryInterruptedStep,
 }
 
@@ -174,6 +174,17 @@ pub enum WorkflowCheckpointPhase {
     StepInFlight {
         /// Stable interrupted node identity.
         step: StepId,
+    },
+    /// One reviewable serial node is generating, reviewing, or committing.
+    Remediating {
+        /// Stable repairable node identity.
+        step: StepId,
+        /// One-based generation attempt.
+        attempt: u32,
+        /// Original stable value supplied to the node.
+        original_input: Value,
+        /// Durable remediation substate.
+        checkpoint: WorkflowRemediationCheckpoint,
     },
     /// The worker lease was released while this node awaits a durable wake.
     Waiting {
@@ -392,13 +403,45 @@ pub(crate) fn fork_checkpoint(
     policy: WorkflowForkPolicy,
 ) -> Result<Checkpoint, CheckpointError> {
     let (_, mut state) = decode(source)?;
-    match &state.phase {
+    match state.phase.clone() {
         WorkflowCheckpointPhase::StepInFlight { .. }
             if policy == WorkflowForkPolicy::RetryInterruptedStep =>
         {
             state.phase = WorkflowCheckpointPhase::Ready;
         }
+        WorkflowCheckpointPhase::Remediating {
+            step,
+            attempt,
+            original_input,
+            checkpoint: WorkflowRemediationCheckpoint::GenerationInFlight { input },
+        } if policy == WorkflowForkPolicy::RetryInterruptedStep => {
+            state.phase = WorkflowCheckpointPhase::Remediating {
+                step,
+                attempt,
+                original_input,
+                checkpoint: WorkflowRemediationCheckpoint::GenerationReady { input },
+            };
+        }
+        WorkflowCheckpointPhase::Remediating {
+            step,
+            attempt,
+            original_input,
+            checkpoint: WorkflowRemediationCheckpoint::ReviewInFlight { candidate },
+        } if policy == WorkflowForkPolicy::RetryInterruptedStep => {
+            state.phase = WorkflowCheckpointPhase::Remediating {
+                step,
+                attempt,
+                original_input,
+                checkpoint: WorkflowRemediationCheckpoint::ReviewReady { candidate },
+            };
+        }
         WorkflowCheckpointPhase::StepInFlight { .. }
+        | WorkflowCheckpointPhase::Remediating {
+            checkpoint:
+                WorkflowRemediationCheckpoint::GenerationInFlight { .. }
+                | WorkflowRemediationCheckpoint::ReviewInFlight { .. },
+            ..
+        }
         | WorkflowCheckpointPhase::ParallelInFlight { .. }
         | WorkflowCheckpointPhase::RaceInFlight { .. } => {
             return Err(CheckpointError::new(
@@ -535,5 +578,53 @@ mod tests {
         ));
         assert_eq!(revision.state.usage.tokens, 7);
         assert_eq!(revision.state.next_index, 0);
+    }
+
+    #[test]
+    fn schema_v4_ready_checkpoint_remains_readable() {
+        let checkpoint = Checkpoint::initial(
+            CheckpointId::new(),
+            RunId::new(),
+            CHECKPOINT_KIND,
+            4,
+            json!({
+                "workflow": "v4-compatible",
+                "workflow_version": 7,
+                "layout": ["draft"],
+                "next_index": 0,
+                "value": {"request": "review this"},
+                "outputs": {},
+                "usage": {
+                    "tokens": 11,
+                    "cost_microusd": 12,
+                    "duration_micros": 13,
+                    "turns": 14,
+                    "tool_calls": 15,
+                    "delegations": 16
+                },
+                "phase": {"state": "ready"}
+            }),
+        );
+
+        let revision = decode_revision(checkpoint).unwrap();
+
+        assert_eq!(revision.state.workflow, "v4-compatible");
+        assert_eq!(revision.state.workflow_version, 7);
+        assert_eq!(revision.state.layout, [StepId::parse("draft").unwrap()]);
+        assert_eq!(revision.state.usage.tokens, 11);
+        assert!(matches!(
+            revision.state.phase,
+            WorkflowCheckpointPhase::Ready
+        ));
+    }
+
+    #[test]
+    fn future_checkpoint_schema_is_rejected() {
+        let mut checkpoint = in_flight_checkpoint();
+        checkpoint.schema_version = CHECKPOINT_SCHEMA_VERSION + 1;
+
+        let error = decode_revision(checkpoint).unwrap_err();
+
+        assert_eq!(error.kind, CheckpointErrorKind::InvalidPayload);
     }
 }

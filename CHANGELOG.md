@@ -6,6 +6,21 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-26
+
+### Added
+
+- Added review-gated workflow generation with application-owned reviewers,
+  bounded feedback-driven repair, independently attenuated generation/review
+  capabilities, durable per-substage checkpoints, conservative in-flight
+  recovery, and stable rejection/exhaustion failures.
+
+### Changed
+
+- Workflow checkpoint writers now emit schema v5. Readers remain compatible
+  with schemas v3 and v4, but v0.7 workers cannot read checkpoints after a
+  v0.8 worker advances them; drain old workers before upgrading.
+
 ## [0.7.2] - 2026-08-14
 
 ### Added

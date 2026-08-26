@@ -355,6 +355,7 @@ Runifold is pre-alpha. The implemented foundation includes:
 - lease-free durable timers and idempotent external signals that survive process restarts and early webhook delivery;
 - store-authoritative signal-or-timeout races, externally fenced cancellation, and auditable signal dead letters with safe retention.
 - durable human review with inspectable interrupt state, typed approve/edit/reject decisions, idempotent delivery, and crash-safe resume;
+- review-gated generation with application-owned verdicts, bounded feedback-driven repair, per-attempt checkpoints, and conservative crash recovery;
 - immutable checkpoint history with bounded state inspection, idempotent fork/replay, explicit ambiguous-effect authority, and durable lineage;
 - typed multi-turn conversations with append-only transcripts, summary-buffer backpressure, bounded windows, and provenance-required cross-session semantic memory;
 - tenant-scoped workflow admission with outstanding/concurrent quotas, fair claims, and fail-closed control-plane isolation;
@@ -1595,6 +1596,38 @@ the worker lease is released. A decision ID is independently stable, so an
 operator can safely retry the same command after a timeout. The downstream
 node receives a typed `WorkflowInterruptOutcome`, preserving the distinction
 between approval, edit, and rejection.
+
+Application-owned output review can drive bounded repair without teaching the
+runtime domain-specific policy:
+
+```rust,ignore
+use runifold::{
+    CapabilitySet, Workflow, WorkflowRemediationPolicy, WorkflowReviewer,
+};
+
+// `ComplianceReviewer` implements `WorkflowReviewer` and returns Approve,
+// Repair { feedback }, or Reject { reason } for each generated candidate.
+let workflow = Workflow::builder("reviewed-answer")
+    .repairable_agent(
+        "draft",
+        answer_agent,
+        ComplianceReviewer::new(policy_bundle),
+        WorkflowRemediationPolicy::new(2),
+        generation_capabilities,
+        reviewer_capabilities,
+    )
+    .build()?;
+```
+
+The first generation receives the ordinary workflow input. A repair verdict
+persists the rejected candidate and structured feedback, then supplies a
+`WorkflowRepairInput` to the next generation. Every generation and review
+substage is write-ahead checkpointed. Recovery continues from a durable
+candidate without regenerating it; a genuinely in-flight generation or review
+still requires `WorkflowResumePolicy::RetryInterruptedStep`. Approval is
+checkpointed before the outer step commits, rejection is terminal, and repair
+exhaustion fails closed. Ordinary Run budgets and cancellation apply to every
+attempt.
 
 Checkpoint time travel creates a new execution instead of mutating history:
 

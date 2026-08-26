@@ -7,6 +7,7 @@ mod governance;
 mod outcome;
 mod parallel;
 mod race;
+mod remediation;
 mod step;
 mod store;
 mod task_retention;
@@ -34,6 +35,11 @@ pub use governance::{
     WorkflowTaskTombstoneArchiveFuture, WorkflowTaskTombstoneArchiveReport,
 };
 pub use outcome::WorkflowOutcome;
+pub use remediation::{
+    WorkflowRemediationCheckpoint, WorkflowRemediationPolicy, WorkflowRepairInput,
+    WorkflowReviewError, WorkflowReviewFuture, WorkflowReviewRequest, WorkflowReviewVerdict,
+    WorkflowReviewer,
+};
 pub use step::{
     AgentStep, AgentStepOutput, PredicateCondition, StepId, WorkflowCondition, WorkflowStep,
     WorkflowStepFuture,

@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::checkpoint::WorkflowCheckpointCursor;
 use crate::parallel::execute_parallel;
 use crate::race::execute_race;
+use crate::remediation::{execute_repairable_node, prepare_remediation_resume};
 use crate::workflow::WorkflowNodeKind;
 use crate::{
     ParallelBranchCheckpoint, StepId, Workflow, WorkflowCheckpoint, WorkflowCheckpointPhase,
@@ -123,6 +124,9 @@ impl Workflow {
                     state.usage = run.budget().usage();
                     state.phase = WorkflowCheckpointPhase::Ready;
                 }
+                WorkflowCheckpointPhase::Remediating { .. } => {
+                    prepare_remediation_resume(&mut state, run, policy)?;
+                }
                 WorkflowCheckpointPhase::Waiting { wait, .. } => {
                     validate_exact_usage(state.usage, run.budget().usage())?;
                     let wake = wake.ok_or(WorkflowError::DurableWaitRequiresWorker)?;
@@ -231,6 +235,12 @@ impl Workflow {
                 WorkflowNodeKind::Race(branches) => {
                     self.execute_race_node(node, branches, state, run, caused_by, checkpoint)
                         .await?
+                }
+                WorkflowNodeKind::Repairable(repairable) => {
+                    execute_repairable_node(
+                        &self.name, node, repairable, state, run, caused_by, checkpoint,
+                    )
+                    .await?
                 }
                 WorkflowNodeKind::Timer(wait)
                 | WorkflowNodeKind::Signal(wait)
@@ -518,6 +528,22 @@ impl Workflow {
                         }
                     }
                 }
+                WorkflowNodeKind::Repairable(repairable) => {
+                    if let Some(missing) = node
+                        .capabilities
+                        .first_missing_from(run.capabilities())
+                        .or_else(|| {
+                            repairable
+                                .reviewer_capabilities
+                                .first_missing_from(run.capabilities())
+                        })
+                    {
+                        return Err(WorkflowError::AuthorityEscalation {
+                            step: node.id.clone(),
+                            capability: missing.name.clone(),
+                        });
+                    }
+                }
                 _ => {
                     if let Some(missing) = node.capabilities.first_missing_from(run.capabilities())
                     {
@@ -548,6 +574,30 @@ impl Workflow {
                 .nodes
                 .get(state.next_index)
                 .is_some_and(|node| node.id == *step),
+            WorkflowCheckpointPhase::Remediating {
+                step,
+                attempt,
+                original_input,
+                checkpoint,
+            } => {
+                let valid_attempt = *attempt > 0;
+                let input_matches = *original_input == state.value;
+                let node_matches = self.nodes.get(state.next_index).is_some_and(|node| {
+                    node.id == *step && matches!(node.kind, WorkflowNodeKind::Repairable(_))
+                });
+                let checkpoint_matches = match checkpoint {
+                    crate::WorkflowRemediationCheckpoint::GenerationReady { input }
+                    | crate::WorkflowRemediationCheckpoint::GenerationInFlight { input } => {
+                        *attempt > 1 || *input == *original_input
+                    }
+                    crate::WorkflowRemediationCheckpoint::ReviewReady { .. }
+                    | crate::WorkflowRemediationCheckpoint::ReviewInFlight { .. }
+                    | crate::WorkflowRemediationCheckpoint::Approved { .. }
+                    | crate::WorkflowRemediationCheckpoint::Rejected { .. }
+                    | crate::WorkflowRemediationCheckpoint::Exhausted { .. } => true,
+                };
+                valid_attempt && input_matches && node_matches && checkpoint_matches
+            }
             WorkflowCheckpointPhase::Waiting { step, wait } => {
                 self.nodes.get(state.next_index).is_some_and(|node| {
                     if node.id != *step {
@@ -711,7 +761,7 @@ pub(crate) async fn save_checkpoint(
     Ok(())
 }
 
-fn check_lifecycle(run: &RunContext) -> Result<(), WorkflowError> {
+pub(crate) fn check_lifecycle(run: &RunContext) -> Result<(), WorkflowError> {
     if run.cancellation().is_cancelled() {
         return Err(WorkflowError::Cancelled);
     }
@@ -790,6 +840,9 @@ fn workflow_run_error(error: &WorkflowError) -> RunError {
         WorkflowError::AmbiguousCheckpoint { .. }
         | WorkflowError::Serialization(_)
         | WorkflowError::Step { .. }
+        | WorkflowError::Review { .. }
+        | WorkflowError::RemediationRejected { .. }
+        | WorkflowError::RemediationExhausted { .. }
         | WorkflowError::ParallelBranch { .. }
         | WorkflowError::RaceAllFailed { .. }
         | WorkflowError::ChildRun(_)
@@ -804,14 +857,14 @@ fn workflow_run_error(error: &WorkflowError) -> RunError {
     }
 }
 
-fn validate_exact_usage(expected: Usage, actual: Usage) -> Result<(), WorkflowError> {
+pub(crate) fn validate_exact_usage(expected: Usage, actual: Usage) -> Result<(), WorkflowError> {
     if expected != actual {
         return Err(WorkflowError::CheckpointUsageMismatch);
     }
     Ok(())
 }
 
-fn validate_usage_floor(floor: Usage, actual: Usage) -> Result<(), WorkflowError> {
+pub(crate) fn validate_usage_floor(floor: Usage, actual: Usage) -> Result<(), WorkflowError> {
     let covers = actual.tokens >= floor.tokens
         && actual.cost_microusd >= floor.cost_microusd
         && actual.duration_micros >= floor.duration_micros

@@ -1,16 +1,27 @@
 //! `SQLite` workflow-store durability and contention contracts.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
-use runifold_core::{Budget, Checkpoint, CheckpointId, RunId, Usage};
+use runifold_core::{Budget, CapabilitySet, Checkpoint, CheckpointId, RunContext, RunId, Usage};
 use runifold_store_sqlite::SqliteWorkflowStore;
 use runifold_workflow::{
-    LeaseDuration, WorkerId, WorkflowBudgetAuditProjectionId, WorkflowCheckpointHistoryLimit,
-    WorkflowCheckpointPhase, WorkflowCheckpointState, WorkflowDisposition, WorkflowForkCommand,
-    WorkflowForkOutcome, WorkflowForkPolicy, WorkflowInterruptCommand, WorkflowInterruptDecision,
-    WorkflowInterruptDecisionOutcome, WorkflowInterruptRequest, WorkflowStore,
-    WorkflowStoreErrorKind, WorkflowTask, WorkflowTaskStatus, WorkflowTenantBudgetPolicy,
-    WorkflowTenantId, WorkflowWait, WorkflowWake,
+    LeaseDuration, WorkerId, Workflow, WorkflowBudgetAuditProjectionId,
+    WorkflowCheckpointHistoryLimit, WorkflowCheckpointPhase, WorkflowCheckpointState,
+    WorkflowDefinition, WorkflowDisposition, WorkflowForkCommand, WorkflowForkOutcome,
+    WorkflowForkPolicy, WorkflowInterruptCommand, WorkflowInterruptDecision,
+    WorkflowInterruptDecisionOutcome, WorkflowInterruptRequest, WorkflowRegistry,
+    WorkflowRemediationCheckpoint, WorkflowRemediationPolicy, WorkflowReviewFuture,
+    WorkflowReviewRequest, WorkflowReviewVerdict, WorkflowReviewer, WorkflowStep,
+    WorkflowStepFuture, WorkflowStore, WorkflowStoreErrorKind, WorkflowTask, WorkflowTaskStatus,
+    WorkflowTenantBudgetPolicy, WorkflowTenantId, WorkflowWait, WorkflowWake, WorkflowWorker,
+    WorkflowWorkerOutcome,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -33,6 +44,44 @@ fn crash_lease() -> LeaseDuration {
 
 fn task(name: &str) -> WorkflowTask {
     WorkflowTask::new(name, 1, json!({"request": name})).expect("test workflow task is valid")
+}
+
+struct CountingGenerator {
+    calls: Arc<AtomicUsize>,
+}
+
+impl WorkflowStep for CountingGenerator {
+    fn execute<'a>(
+        &'a self,
+        _input: serde_json::Value,
+        _run: &'a RunContext,
+    ) -> WorkflowStepFuture<'a> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(json!({"text": "unexpected regenerated candidate"})) })
+    }
+}
+
+struct ApprovePersistedCandidate {
+    calls: Arc<AtomicUsize>,
+}
+
+impl WorkflowReviewer for ApprovePersistedCandidate {
+    fn review<'a>(
+        &'a self,
+        request: WorkflowReviewRequest,
+        _run: &'a RunContext,
+    ) -> WorkflowReviewFuture<'a> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            assert_eq!(request.attempt, 1);
+            assert_eq!(
+                request.original_input,
+                json!({"request": "durable-remediation"})
+            );
+            assert_eq!(request.candidate, json!({"text": "persisted candidate"}));
+            Ok(WorkflowReviewVerdict::approve())
+        })
+    }
 }
 
 #[test]
@@ -283,6 +332,152 @@ async fn workflow_state_survives_reopen_with_interrupt_history_and_budget_projec
     assert_eq!(settled.reserved.tokens, 0);
     drop(final_store);
     std::fs::remove_file(path).expect("test database is removable");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one end-to-end scenario proves review-ready persistence, reopen, resume, and history"
+)]
+async fn review_ready_checkpoint_resumes_after_reopen_without_regeneration() {
+    const WORKFLOW_CHECKPOINT_SCHEMA_V5: u32 = 5;
+
+    let path = database_path("remediation-review-ready");
+    let generator_calls = Arc::new(AtomicUsize::new(0));
+    let reviewer_calls = Arc::new(AtomicUsize::new(0));
+    let workflow = Workflow::builder("durable-remediation")
+        .repairable_step(
+            "draft",
+            CountingGenerator {
+                calls: generator_calls.clone(),
+            },
+            ApprovePersistedCandidate {
+                calls: reviewer_calls.clone(),
+            },
+            WorkflowRemediationPolicy::new(1),
+            CapabilitySet::new(),
+            CapabilitySet::new(),
+        )
+        .build()
+        .expect("repairable workflow builds");
+    let workflow_task = task("durable-remediation");
+    let checkpoint_id = workflow_task.checkpoint_id;
+    let draft_step = workflow
+        .step_ids()
+        .next()
+        .expect("repairable workflow contains its draft step")
+        .clone();
+    let store = SqliteWorkflowStore::open(&path).expect("SQLite workflow store opens");
+    store
+        .enqueue(workflow_task)
+        .await
+        .expect("repairable workflow task enqueues");
+    let seeded = store
+        .claim(worker("checkpoint-seeder"), lease())
+        .await
+        .expect("checkpoint seed claim succeeds")
+        .expect("checkpoint seed task is claimable");
+    let original_input = json!({"request": "durable-remediation"});
+    let checkpoint = Checkpoint::initial(
+        checkpoint_id,
+        RunId::new(),
+        "runifold.workflow",
+        WORKFLOW_CHECKPOINT_SCHEMA_V5,
+        serde_json::to_value(WorkflowCheckpointState {
+            workflow: workflow.name().to_owned(),
+            workflow_version: workflow.version(),
+            layout: workflow.step_ids().cloned().collect(),
+            next_index: 0,
+            value: original_input.clone(),
+            outputs: BTreeMap::new(),
+            usage: Usage::default(),
+            phase: WorkflowCheckpointPhase::Remediating {
+                step: draft_step,
+                attempt: 1,
+                original_input,
+                checkpoint: WorkflowRemediationCheckpoint::ReviewReady {
+                    candidate: json!({"text": "persisted candidate"}),
+                },
+            },
+        })
+        .expect("review-ready checkpoint serializes"),
+    );
+    store
+        .compare_and_swap_checkpoint(seeded.lease.clone(), checkpoint, None)
+        .await
+        .expect("review-ready checkpoint persists");
+    store
+        .finish(
+            seeded.lease,
+            WorkflowDisposition::RetryAfter(Duration::ZERO),
+        )
+        .await
+        .expect("seeded task returns to the queue");
+    drop(store);
+
+    let reopened = Arc::new(
+        SqliteWorkflowStore::open(&path).expect("SQLite remediation workflow store reopens"),
+    );
+    let mut registry = WorkflowRegistry::new();
+    registry
+        .register(WorkflowDefinition::new(
+            Arc::new(workflow),
+            Budget::default(),
+            CapabilitySet::new(),
+        ))
+        .expect("repairable workflow definition registers");
+    let worker = WorkflowWorker::new(
+        reopened.clone(),
+        registry,
+        worker("remediation-worker"),
+        lease(),
+        Duration::from_secs(1),
+    )
+    .expect("remediation worker configuration is valid");
+
+    let outcome = worker
+        .run_once()
+        .await
+        .expect("review-ready workflow resumes");
+
+    assert!(matches!(
+        outcome,
+        WorkflowWorkerOutcome::Completed {
+            checkpoint_id: completed_id,
+            ref outcome,
+        } if completed_id == checkpoint_id
+            && outcome.output == json!({"text": "persisted candidate"})
+    ));
+    assert_eq!(generator_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(reviewer_calls.load(Ordering::SeqCst), 1);
+    drop(worker);
+    drop(reopened);
+
+    let final_store =
+        SqliteWorkflowStore::open(&path).expect("completed remediation workflow store reopens");
+    assert_eq!(
+        final_store
+            .inspect(WorkflowTenantId::default(), checkpoint_id)
+            .await
+            .expect("completed remediation workflow remains inspectable")
+            .status,
+        WorkflowTaskStatus::Completed
+    );
+    let history = final_store
+        .list_checkpoint_history(
+            WorkflowTenantId::default(),
+            checkpoint_id,
+            None,
+            WorkflowCheckpointHistoryLimit::new(16).expect("history limit is valid"),
+        )
+        .await
+        .expect("remediation checkpoint history survives reopen");
+    assert!(matches!(
+        history.last().map(|revision| &revision.state.phase),
+        Some(WorkflowCheckpointPhase::Completed { .. })
+    ));
+    drop(final_store);
+    std::fs::remove_file(path).expect("test remediation database is removable");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]

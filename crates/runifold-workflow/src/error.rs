@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use runifold_core::{BudgetExceeded, CheckpointError, ChildRunError, JournalError};
 use thiserror::Error;
 
-use crate::{StepId, WorkflowWaitError};
+use crate::{StepId, WorkflowReviewError, WorkflowWaitError};
 
 /// Invalid workflow definition.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -109,6 +109,33 @@ pub enum WorkflowError {
         /// Typed step failure.
         #[source]
         source: Box<WorkflowStepError>,
+    },
+    /// An application-owned reviewer failed to evaluate a generated candidate.
+    #[error("workflow step `{step}` review failed: {source}")]
+    Review {
+        /// Stable repairable step identity.
+        step: StepId,
+        /// Typed reviewer failure.
+        #[source]
+        source: WorkflowReviewError,
+    },
+    /// A reviewer permanently rejected a generated candidate.
+    #[error("workflow step `{step}` was rejected after {attempts} generation attempt(s): {reason}")]
+    RemediationRejected {
+        /// Stable repairable step identity.
+        step: StepId,
+        /// Number of generated candidates reviewed.
+        attempts: u32,
+        /// Safe reviewer explanation.
+        reason: String,
+    },
+    /// A repairable step consumed every configured repair attempt.
+    #[error("workflow step `{step}` exhausted remediation after {attempts} generation attempt(s)")]
+    RemediationExhausted {
+        /// Stable repairable step identity.
+        step: StepId,
+        /// Number of generated candidates reviewed.
+        attempts: u32,
     },
     /// One branch of a parallel node failed.
     #[error("parallel branch `{branch}` in workflow step `{step}` failed: {source}")]

@@ -13,6 +13,20 @@ artifacts, then publishing immutable versions to crates.io.
 - `cargo-semver-checks` is a release gate after the first release tag exists.
   Its output supplements review; it cannot prove all Rust API compatibility.
 
+## Workflow checkpoint compatibility
+
+Runifold 0.8 writes workflow checkpoint schema v5 and reads schemas v3 through
+v5. Existing v0.7 checkpoints therefore upgrade in place when a v0.8 worker
+first advances them. A v0.7 worker cannot read a checkpoint after it has been
+written as v5.
+
+Drain v0.7 workflow workers before starting v0.8 workers. Do not run mixed
+v0.7/v0.8 worker pools against the same workflow store. After v0.8 has advanced
+a checkpoint, rollback requires either completing that workflow with v0.8 or
+restoring a pre-upgrade store snapshot; deploy an ordinary forward fix for all
+other rollback scenarios. This restriction applies to workflow checkpoints,
+not to application payloads that merely pass through a workflow.
+
 ## Prepare a release
 
 1. Move relevant entries from `Unreleased` in `CHANGELOG.md` to the new version.

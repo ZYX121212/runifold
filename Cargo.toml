@@ -26,7 +26,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.7.2"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -50,23 +50,23 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 quote = "1"
 rusqlite = { version = "0.39.0", default-features = false }
 schemars = "1.2.1"
-runifold-core = { version = "0.7.2", path = "crates/runifold-core" }
-runifold-effect = { version = "0.7.2", path = "crates/runifold-effect" }
-runifold-agent = { version = "0.7.2", path = "crates/runifold-agent" }
-runifold-model = { version = "0.7.2", path = "crates/runifold-model" }
-runifold-ops = { version = "0.7.2", path = "crates/runifold-ops" }
-runifold-macros = { version = "0.7.2", path = "crates/runifold-macros" }
-runifold-providers = { version = "0.7.2", path = "crates/runifold-providers" }
-runifold-provider-testkit = { version = "0.7.2", path = "crates/runifold-provider-testkit" }
-runifold-retrieval = { version = "0.7.2", path = "crates/runifold-retrieval" }
-runifold-retrieval-pgvector = { version = "0.7.2", path = "crates/runifold-retrieval-pgvector" }
-runifold-retrieval-qdrant = { version = "0.7.2", path = "crates/runifold-retrieval-qdrant" }
-runifold-retrieval-text = { version = "0.7.2", path = "crates/runifold-retrieval-text" }
-runifold-store-postgres = { version = "0.7.2", path = "crates/runifold-store-postgres" }
-runifold-store-sqlite = { version = "0.7.2", path = "crates/runifold-store-sqlite" }
-runifold-testkit = { version = "0.7.2", path = "crates/runifold-testkit" }
-runifold-tool = { version = "0.7.2", path = "crates/runifold-tool" }
-runifold-workflow = { version = "0.7.2", path = "crates/runifold-workflow" }
+runifold-core = { version = "0.8.0", path = "crates/runifold-core" }
+runifold-effect = { version = "0.8.0", path = "crates/runifold-effect" }
+runifold-agent = { version = "0.8.0", path = "crates/runifold-agent" }
+runifold-model = { version = "0.8.0", path = "crates/runifold-model" }
+runifold-ops = { version = "0.8.0", path = "crates/runifold-ops" }
+runifold-macros = { version = "0.8.0", path = "crates/runifold-macros" }
+runifold-providers = { version = "0.8.0", path = "crates/runifold-providers" }
+runifold-provider-testkit = { version = "0.8.0", path = "crates/runifold-provider-testkit" }
+runifold-retrieval = { version = "0.8.0", path = "crates/runifold-retrieval" }
+runifold-retrieval-pgvector = { version = "0.8.0", path = "crates/runifold-retrieval-pgvector" }
+runifold-retrieval-qdrant = { version = "0.8.0", path = "crates/runifold-retrieval-qdrant" }
+runifold-retrieval-text = { version = "0.8.0", path = "crates/runifold-retrieval-text" }
+runifold-store-postgres = { version = "0.8.0", path = "crates/runifold-store-postgres" }
+runifold-store-sqlite = { version = "0.8.0", path = "crates/runifold-store-sqlite" }
+runifold-testkit = { version = "0.8.0", path = "crates/runifold-testkit" }
+runifold-tool = { version = "0.8.0", path = "crates/runifold-tool" }
+runifold-workflow = { version = "0.8.0", path = "crates/runifold-workflow" }
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
