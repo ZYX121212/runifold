@@ -6,7 +6,7 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
-## [0.8.1] - 2026-08-26
+## [0.8.2] - 2026-08-26
 
 ### Added
 
@@ -22,6 +22,9 @@ breaking changes require a minor-version increment.
   requires declared properties, and applies the same behavior to Responses,
   Chat Completions, and strict function Tools without mutating canonical
   requests.
+- Kept the workflow budget supervisor's error return compact so the release
+  gate remains warning-free on Rust and Clippy 1.98. Version 0.8.1 was tagged
+  but not published after this newly introduced lint stopped its release job.
 
 ## [0.8.0] - 2026-08-26
 

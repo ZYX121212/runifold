@@ -46,10 +46,10 @@ archive-s3 = [
 runifold-agent = { workspace = true, optional = true }
 runifold-core.workspace = true
 runifold-effect = { workspace = true, optional = true }
-runifold-mcp = { version = "0.8.1", path = "../runifold-mcp", optional = true }
+runifold-mcp = { version = "0.8.2", path = "../runifold-mcp", optional = true }
 runifold-model.workspace = true
 runifold-macros = { workspace = true, optional = true }
-runifold-observability-otel = { version = "0.8.1", path = "../runifold-observability-otel", optional = true }
+runifold-observability-otel = { version = "0.8.2", path = "../runifold-observability-otel", optional = true }
 runifold-retrieval = { workspace = true, optional = true }
 runifold-retrieval-pgvector = { workspace = true, optional = true }
 runifold-retrieval-qdrant = { workspace = true, optional = true }

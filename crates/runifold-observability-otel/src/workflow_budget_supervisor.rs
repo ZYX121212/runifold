@@ -343,7 +343,7 @@ where
                     .release_tenant_budget_audit_projection(release_lease)
                     .await;
                 self.record_cycle_error(&error);
-                Err(error.into())
+                Err((*error).into())
             }
         }
     }
@@ -485,7 +485,7 @@ where
             OtelWorkflowBudgetProjectionReport,
             WorkflowBudgetAuditProjectionLease,
         ),
-        (WorkflowStoreError, WorkflowBudgetAuditProjectionLease),
+        (Box<WorkflowStoreError>, WorkflowBudgetAuditProjectionLease),
     > {
         let projection = project_claimed_available(
             Arc::clone(&self.store),
@@ -502,8 +502,8 @@ where
             Arc::clone(&self.sleeper),
         );
         match select(Box::pin(projection), Box::pin(heartbeat)).await {
-            Either::Left((result, _)) => result.map_err(|error| (error, lease)),
-            Either::Right((error, _)) => Err((error, lease)),
+            Either::Left((result, _)) => result.map_err(|error| (Box::new(error), lease)),
+            Either::Right((error, _)) => Err((Box::new(error), lease)),
         }
     }
 
