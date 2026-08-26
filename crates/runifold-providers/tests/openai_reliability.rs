@@ -9,7 +9,7 @@ use std::{
 use futures_util::future::join_all;
 use runifold_model::{
     ContentPart, Message, Model, ModelCallContext, ModelErrorKind, ModelRef, ModelRequest,
-    ModelUsage, ResponseMode, Role, ToolResult,
+    ModelUsage, OutputFormat, ResponseMode, Role, ToolResult,
 };
 use runifold_provider_testkit::{
     CassetteServer, HttpExchange, ResponseChunk, ScriptedResponse, SuccessContract, verify_success,
@@ -17,6 +17,13 @@ use runifold_provider_testkit::{
 use runifold_providers::openai::{
     OpenAiClient, OpenAiCompatibleProfile, OpenAiConfig, OpenAiWireProtocol,
 };
+use schemars::JsonSchema;
+
+#[derive(JsonSchema)]
+struct TypedWireAnswer {
+    value: u32,
+    note: Option<String>,
+}
 
 fn request() -> ModelRequest {
     ModelRequest::new(ModelRef::new("openai", "gpt-test"), Message::user("stress"))
@@ -56,6 +63,39 @@ async fn one_client_isolates_16_concurrent_responses_streams() {
     server.assert_finished().unwrap();
     assert_eq!(server.stats().completed, 16);
     assert!(server.stats().max_in_flight > 1);
+}
+
+#[tokio::test]
+async fn typed_strict_schema_reaches_the_http_transport_in_wire_form() {
+    let example = TypedWireAnswer {
+        value: 7,
+        note: None,
+    };
+    assert_eq!(example.value, 7);
+    assert!(example.note.is_none());
+    let server = CassetteServer::start(vec![HttpExchange::new(
+        "POST",
+        "/v1/responses",
+        response(Duration::ZERO),
+    )])
+    .unwrap();
+    let request = request().output_format(OutputFormat::typed::<TypedWireAnswer>("typed_answer"));
+
+    client(&server)
+        .invoke(request, ModelCallContext::new())
+        .await
+        .unwrap();
+
+    server.assert_finished().unwrap();
+    let body = server.observed_requests()[0].json_body().unwrap();
+    let schema = &body["text"]["format"]["schema"];
+    assert!(schema.get("$schema").is_none());
+    assert_eq!(schema["additionalProperties"], false);
+    let required = schema["required"].as_array().unwrap();
+    assert_eq!(required.len(), 2);
+    for name in ["value", "note"] {
+        assert!(required.iter().any(|value| value.as_str() == Some(name)));
+    }
 }
 
 #[tokio::test]

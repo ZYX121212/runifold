@@ -10,10 +10,7 @@ use runifold_model::{
 use serde_json::{Map, Value, json};
 use smallvec::SmallVec;
 
-use super::{
-    OpenAiChatDialect,
-    encode::{function_tool_strict, validate_strict_schema},
-};
+use super::{OpenAiChatDialect, encode::function_tool_schema, schema::prepare_strict_schema};
 use crate::content_projection::{
     encode_content_envelope, encode_tool_result_envelope, validate_image_media_type,
     validate_inline_image, validate_media_url,
@@ -98,13 +95,13 @@ pub(crate) fn encode_chat_request_for(
                     .tools
                     .iter()
                     .map(|tool| -> Result<Value, ModelError> {
-                        let strict = function_tool_strict(tool, provider)?;
+                        let (parameters, strict) = function_tool_schema(tool, provider)?;
                         Ok(json!({
                             "type": "function",
                             "function": {
                                 "name": tool.name,
                                 "description": tool.description,
-                                "parameters": tool.input_schema,
+                                "parameters": parameters,
                                 "strict": strict
                             }
                         }))
@@ -297,12 +294,14 @@ fn encode_chat_output_format(format: &OutputFormat) -> Result<Value, ModelError>
             schema,
             strict,
         } => {
-            if *strict {
-                validate_strict_schema(schema)?;
-            }
+            let wire_schema = if *strict {
+                prepare_strict_schema(schema)?
+            } else {
+                schema.clone()
+            };
             json!({
                 "type": "json_schema",
-                "json_schema": {"name": name, "schema": schema, "strict": strict}
+                "json_schema": {"name": name, "schema": wire_schema, "strict": strict}
             })
         }
         _ => return Err(unsupported("output format is newer than this adapter")),
@@ -964,9 +963,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use runifold_model::{
-        ContentPart, MediaSource, Message, ModelRef, ModelRequest, ModelStreamAccumulator, Role,
-        ToolCall, ToolResult,
+        ContentPart, MediaSource, Message, ModelRef, ModelRequest, ModelStreamAccumulator,
+        OutputFormat, Role, ToolCall, ToolResult,
     };
+    use schemars::JsonSchema;
     use serde_json::{Value, json};
 
     use crate::content_projection::decode_content_envelope;
@@ -976,6 +976,12 @@ mod tests {
         ChatCompletionsDecoder, OpenAiChatDialect, decode_complete_chat_response,
         encode_chat_request, encode_chat_request_for,
     };
+
+    #[derive(JsonSchema)]
+    struct ChatAnswer {
+        value: String,
+        explanation: Option<String>,
+    }
 
     #[test]
     fn encodes_standard_chat_messages() {
@@ -988,6 +994,32 @@ mod tests {
         assert_eq!(body["messages"][0]["content"], "hello");
         assert_eq!(body["stream"], true);
         assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn typed_output_schema_is_normalized_for_strict_chat() {
+        let example = ChatAnswer {
+            value: "ok".into(),
+            explanation: None,
+        };
+        assert_eq!(example.value, "ok");
+        assert!(example.explanation.is_none());
+        let request = ModelRequest::new(
+            ModelRef::new("openai", "chat-model"),
+            Message::user("answer"),
+        )
+        .output_format(OutputFormat::typed::<ChatAnswer>("chat_answer"));
+
+        let body = encode_chat_request(&request, "openai").unwrap();
+        let schema = &body["response_format"]["json_schema"]["schema"];
+
+        assert!(schema.get("$schema").is_none());
+        assert_eq!(schema["additionalProperties"], false);
+        let required = schema["required"].as_array().unwrap();
+        assert_eq!(required.len(), 2);
+        for name in ["value", "explanation"] {
+            assert!(required.iter().any(|value| value.as_str() == Some(name)));
+        }
     }
 
     #[test]

@@ -388,6 +388,12 @@ preflight: supported keywords and formats, keyword value types, object
 required/additional-property closure, array items, local references, nesting,
 property, enum, and string-budget limits are rejected locally before any HTTP
 request.
+Before that preflight, strict schemas are compiled on a clone into the
+OpenAI-compatible wire subset. Generator metadata is removed, ordinary objects
+are closed and made fully required, and Schemars numeric format hints are
+discarded while their numeric bounds remain intact. Open maps and other schemas
+that cannot be converted without losing meaning continue to fail locally. The
+provider-neutral canonical request is never mutated by this wire conversion.
 
 Programmatic Tool Calling correlation is preserved end to end. A Responses
 `caller` object is retained on the canonical Tool call, copied across local

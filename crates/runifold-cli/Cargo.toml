@@ -21,8 +21,8 @@ anyhow = "1.0.104"
 clap = { version = "4.6.4", features = ["derive", "env"] }
 runifold-core.workspace = true
 runifold-ops.workspace = true
-runifold-store-postgres = { version = "0.8.0", path = "../runifold-store-postgres" }
-runifold-store-sqlite = { version = "0.8.0", path = "../runifold-store-sqlite" }
+runifold-store-postgres = { version = "0.8.1", path = "../runifold-store-postgres" }
+runifold-store-sqlite = { version = "0.8.1", path = "../runifold-store-sqlite" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }

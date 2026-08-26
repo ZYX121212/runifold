@@ -24,6 +24,15 @@ operation at the model boundary. `Agent::structured_output` and
 `AgentBuilder::structured_output` propagate that format to every model turn in
 the canonical Agent loop.
 
+Provider adapters may compile the canonical schema into a narrower wire
+dialect. The OpenAI-compatible adapter removes generator metadata such as the
+root `$schema`, closes ordinary objects with `additionalProperties: false`,
+requires every declared property, and removes Schemars-only numeric format
+hints before validating the provider subset. This conversion happens on a
+clone: the canonical request remains unchanged for routing, retries, and
+observability. Constraints that cannot be converted without changing their
+meaning, such as open map objects, still fail before transport.
+
 The type used to produce a schema only needs `JsonSchema`. Decoding is a
 separate operation requiring `DeserializeOwned`; this avoids claiming that a
 request configuration itself guarantees a valid response.
@@ -44,6 +53,10 @@ metadata, or execution counters.
 For the compile-time-safe path, `AgentBuilder::build_structured::<T>` returns
 `StructuredAgent<T>`. Its `run` method always decodes the same `T` used to
 derive the provider schema, eliminating schema/decoder type drift.
+`build_structured_with_strictness::<T>(name, false)` provides the same local
+typed completion validation and bounded repair when a compatible endpoint has
+only verified non-strict schema support. The corresponding model, Agent, and
+builder configuration methods expose the same explicit strictness choice.
 
 ## Error and privacy semantics
 

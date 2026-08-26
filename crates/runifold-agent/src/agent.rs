@@ -232,15 +232,38 @@ impl Agent {
     where
         T: JsonSchema,
     {
-        self.output_format(OutputFormat::typed::<T>(name))
+        self.structured_output_with_strictness::<T>(name, true)
+    }
+
+    /// Requests structured output described by `T` with explicit provider
+    /// strictness.
+    #[must_use]
+    pub fn structured_output_with_strictness<T>(self, name: impl Into<String>, strict: bool) -> Self
+    where
+        T: JsonSchema,
+    {
+        self.output_format(OutputFormat::typed_with_strictness::<T>(name, strict))
     }
 
     /// Binds provider schema generation and local decoding to the same type.
-    pub fn into_structured<T>(mut self, name: impl Into<String>) -> StructuredAgent<T>
+    pub fn into_structured<T>(self, name: impl Into<String>) -> StructuredAgent<T>
     where
         T: JsonSchema + serde::de::DeserializeOwned + Send + 'static,
     {
-        self = self.structured_output::<T>(name);
+        self.into_structured_with_strictness::<T>(name, true)
+    }
+
+    /// Binds provider schema generation and local decoding to `T` with
+    /// explicit provider strictness.
+    pub fn into_structured_with_strictness<T>(
+        mut self,
+        name: impl Into<String>,
+        strict: bool,
+    ) -> StructuredAgent<T>
+    where
+        T: JsonSchema + serde::de::DeserializeOwned + Send + 'static,
+    {
+        self = self.structured_output_with_strictness::<T>(name, strict);
         self.completion_validator = completion::CompletionValidator::structured::<T>();
         StructuredAgent::new(self)
     }

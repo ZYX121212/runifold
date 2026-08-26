@@ -27,6 +27,7 @@ mod realtime_session_transport;
 mod realtime_transport;
 #[cfg(all(feature = "openai-realtime", target_arch = "wasm32"))]
 mod realtime_webrtc;
+mod schema;
 
 pub use chat::{ChatCompletionsDecoder, encode_chat_request};
 pub use client::OpenAiClient;

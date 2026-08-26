@@ -345,7 +345,17 @@ impl ModelRequest {
     where
         T: JsonSchema,
     {
-        self.output_format(OutputFormat::typed::<T>(name))
+        self.structured_output_with_strictness::<T>(name, true)
+    }
+
+    /// Requests structured output described by `T` with explicit provider
+    /// strictness.
+    #[must_use]
+    pub fn structured_output_with_strictness<T>(self, name: impl Into<String>, strict: bool) -> Self
+    where
+        T: JsonSchema,
+    {
+        self.output_format(OutputFormat::typed_with_strictness::<T>(name, strict))
     }
 
     /// Sets the feature-degradation policy.

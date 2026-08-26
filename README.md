@@ -912,6 +912,20 @@ restarts completed Tool effects. The full response, transcript, counters,
 repair count (through `typed.outcome.terminal_repairs()`), and usage remain
 available in `typed.outcome`.
 
+For an OpenAI-compatible endpoint that has only verified non-strict schema
+support, keep the same local typed validation and repair boundary while
+disabling only provider enforcement:
+
+```rust,ignore
+let agent = client
+    .agent("researcher", "your-model")
+    .build_structured_with_strictness::<ResearchAnswer>("research_answer", false)?;
+```
+
+The ordinary `build_structured` path remains strict by default. OpenAI-compatible
+strict requests are normalized into the provider's supported wire-schema
+subset without mutating the canonical schema.
+
 Typed Tools are ordinary async Rust functions:
 
 ```rust,ignore

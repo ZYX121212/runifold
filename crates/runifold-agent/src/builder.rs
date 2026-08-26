@@ -290,7 +290,17 @@ impl AgentBuilder {
     where
         T: JsonSchema,
     {
-        self.output_format(OutputFormat::typed::<T>(name))
+        self.structured_output_with_strictness::<T>(name, true)
+    }
+
+    /// Requests structured output described by `T` with explicit provider
+    /// strictness.
+    #[must_use]
+    pub fn structured_output_with_strictness<T>(self, name: impl Into<String>, strict: bool) -> Self
+    where
+        T: JsonSchema,
+    {
+        self.output_format(OutputFormat::typed_with_strictness::<T>(name, strict))
     }
 
     /// Adds a provider-hosted tool such as Ark web search.
@@ -449,7 +459,29 @@ impl AgentBuilder {
     where
         T: JsonSchema + serde::de::DeserializeOwned + Send + 'static,
     {
-        self.build().map(|agent| agent.into_structured::<T>(name))
+        self.build_structured_with_strictness::<T>(name, true)
+    }
+
+    /// Builds an Agent whose schema and local decoder are bound to `T`, with
+    /// explicit provider strictness.
+    ///
+    /// Local structured-output validation and bounded repair remain enabled
+    /// when provider strictness is disabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentBuildError`] under the same validation rules as
+    /// [`Self::build`].
+    pub fn build_structured_with_strictness<T>(
+        self,
+        name: impl Into<String>,
+        strict: bool,
+    ) -> Result<StructuredAgent<T>, AgentBuildError>
+    where
+        T: JsonSchema + serde::de::DeserializeOwned + Send + 'static,
+    {
+        self.build()
+            .map(|agent| agent.into_structured_with_strictness::<T>(name, strict))
     }
 }
 
@@ -632,6 +664,22 @@ mod tests {
         assert_eq!(name, "typed_answer");
         assert!(strict);
         assert_eq!(schema["properties"]["value"]["type"], "integer");
+    }
+
+    #[test]
+    fn structured_builder_can_disable_provider_strictness_without_losing_typed_binding() {
+        let agent = Agent::builder(
+            "worker",
+            Arc::new(ScriptedModel::new()),
+            ModelRef::new("test", "scripted"),
+        )
+        .build_structured_with_strictness::<TypedAnswer>("typed_answer", false)
+        .unwrap();
+
+        let OutputFormat::JsonSchema { strict, .. } = &agent.agent().output_format else {
+            panic!("expected JSON-schema output");
+        };
+        assert!(!strict);
     }
 
     #[test]

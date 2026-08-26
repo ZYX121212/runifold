@@ -58,6 +58,7 @@ url.workspace = true
 [dev-dependencies]
 aws-smithy-eventstream = "=0.60.18"
 runifold-provider-testkit.workspace = true
+schemars.workspace = true
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
 
 [lints]

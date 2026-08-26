@@ -12,6 +12,8 @@ use runifold_model::{
     Role, ToolChoice, ToolResult,
 };
 
+use super::schema::prepare_strict_schema;
+
 /// Encodes a canonical request as an `OpenAI` Responses API request.
 ///
 /// # Errors
@@ -74,12 +76,12 @@ pub(crate) fn encode_request_for(
             .tools
             .iter()
             .map(|tool| -> Result<Value, ModelError> {
-                let strict = function_tool_strict(tool, provider)?;
+                let (parameters, strict) = function_tool_schema(tool, provider)?;
                 Ok(json!({
                     "type": "function",
                     "name": tool.name,
                     "description": tool.description,
-                    "parameters": tool.input_schema,
+                    "parameters": parameters,
                     "strict": strict
                 }))
             })
@@ -487,13 +489,15 @@ fn encode_output_format(format: &OutputFormat) -> Result<Value, ModelError> {
             schema,
             strict,
         } => {
-            if *strict {
-                validate_strict_schema(schema)?;
-            }
+            let wire_schema = if *strict {
+                prepare_strict_schema(schema)?
+            } else {
+                schema.clone()
+            };
             json!({
                 "type": "json_schema",
                 "name": name,
-                "schema": schema,
+                "schema": wire_schema,
                 "strict": strict
             })
         }
@@ -506,399 +510,32 @@ fn encode_output_format(format: &OutputFormat) -> Result<Value, ModelError> {
     Ok(json!({"format": format}))
 }
 
-pub(crate) fn function_tool_strict(
+pub(crate) fn function_tool_schema(
     tool: &runifold_model::ToolSpec,
     provider: &str,
-) -> Result<bool, ModelError> {
+) -> Result<(Value, bool), ModelError> {
     let provider_key = format!("{provider}.strict");
     let strict = tool
         .metadata
         .get(&provider_key)
         .or_else(|| tool.metadata.get("openai-compatible.strict"));
     let Some(strict) = strict else {
-        return Ok(false);
+        return Ok((tool.input_schema.clone(), false));
     };
     let strict = strict
         .as_bool()
         .ok_or_else(|| invalid(format!("tool metadata `{provider_key}` must be a boolean")))?;
-    if strict {
-        validate_strict_schema(&tool.input_schema).map_err(|error| {
+    let schema = if strict {
+        prepare_strict_schema(&tool.input_schema).map_err(|error| {
             invalid(format!(
                 "tool `{}` requested OpenAI strict mode with an incompatible JSON Schema: {}",
                 tool.name, error.message
             ))
-        })?;
-    }
-    Ok(strict)
-}
-
-#[derive(Default)]
-struct StrictSchemaStats {
-    properties: usize,
-    enum_values: usize,
-    string_chars: usize,
-}
-
-pub(crate) fn validate_strict_schema(schema: &Value) -> Result<(), ModelError> {
-    if schema.get("type").and_then(Value::as_str) != Some("object") || schema.get("anyOf").is_some()
-    {
-        return Err(invalid(
-            "strict schema root must be an object and cannot use anyOf",
-        ));
-    }
-    let mut stats = StrictSchemaStats::default();
-    validate_strict_schema_node(schema, 1, &mut stats)?;
-    if stats.properties > 5_000 {
-        return Err(invalid("strict schema exceeds 5000 object properties"));
-    }
-    if stats.enum_values > 1_000 {
-        return Err(invalid("strict schema exceeds 1000 enum values"));
-    }
-    if stats.string_chars > 120_000 {
-        return Err(invalid("strict schema exceeds the 120000 character limit"));
-    }
-    Ok(())
-}
-
-const STRICT_SCHEMA_KEYWORDS: &[&str] = &[
-    "$defs",
-    "$ref",
-    "additionalProperties",
-    "anyOf",
-    "const",
-    "description",
-    "enum",
-    "exclusiveMaximum",
-    "exclusiveMinimum",
-    "format",
-    "items",
-    "maxItems",
-    "maximum",
-    "minItems",
-    "minimum",
-    "multipleOf",
-    "pattern",
-    "properties",
-    "required",
-    "title",
-    "type",
-];
-
-fn validate_strict_schema_node(
-    schema: &Value,
-    object_depth: usize,
-    stats: &mut StrictSchemaStats,
-) -> Result<(), ModelError> {
-    let Some(object) = schema.as_object() else {
-        return Err(invalid("strict schema nodes must be objects"));
-    };
-    validate_schema_header(object)?;
-    validate_schema_constraints(object)?;
-    validate_schema_subschemas(object, object_depth, stats)?;
-    let is_object = schema_has_type(schema, "object");
-    let is_array = schema_has_type(schema, "array");
-    validate_keyword_placements(schema, object)?;
-    if is_object {
-        validate_object_schema(object, object_depth, stats)?;
-    }
-    if is_array {
-        validate_array_schema(object, object_depth, stats)?;
-    }
-    accumulate_schema_values(object, stats)
-}
-
-fn validate_schema_header(object: &Map<String, Value>) -> Result<(), ModelError> {
-    if let Some(keyword) = object
-        .keys()
-        .find(|keyword| !STRICT_SCHEMA_KEYWORDS.contains(&keyword.as_str()))
-    {
-        return Err(invalid(format!(
-            "strict schema keyword `{keyword}` is not supported"
-        )));
-    }
-    let Some(types) = object.get("type") else {
-        if ["$ref", "anyOf", "enum", "const"]
-            .iter()
-            .any(|keyword| object.contains_key(*keyword))
-        {
-            return Ok(());
-        }
-        return Err(invalid(
-            "strict schema node must declare type, $ref, anyOf, enum, or const",
-        ));
-    };
-    let valid = match types {
-        Value::String(kind) => strict_schema_type(kind),
-        Value::Array(kinds) => {
-            !kinds.is_empty()
-                && kinds
-                    .iter()
-                    .all(|kind| kind.as_str().is_some_and(strict_schema_type))
-                && kinds
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len()
-                    == kinds.len()
-        }
-        _ => false,
-    };
-    if valid {
-        Ok(())
+        })?
     } else {
-        Err(invalid("strict schema contains an unsupported `type`"))
-    }
-}
-
-fn validate_schema_constraints(object: &Map<String, Value>) -> Result<(), ModelError> {
-    for keyword in ["description", "title", "pattern"] {
-        if object.get(keyword).is_some_and(|value| !value.is_string()) {
-            return Err(invalid(format!(
-                "strict schema `{keyword}` must be a string"
-            )));
-        }
-    }
-    if let Some(reference) = object.get("$ref") {
-        let reference = reference
-            .as_str()
-            .ok_or_else(|| invalid("strict schema `$ref` must be a string"))?;
-        if reference != "#" && !reference.starts_with("#/") {
-            return Err(invalid("strict schema `$ref` must be a local reference"));
-        }
-    }
-    validate_schema_format(object)?;
-    for keyword in [
-        "exclusiveMaximum",
-        "exclusiveMinimum",
-        "maximum",
-        "minimum",
-        "multipleOf",
-    ] {
-        if object.get(keyword).is_some_and(|value| !value.is_number()) {
-            return Err(invalid(format!(
-                "strict schema `{keyword}` must be a number"
-            )));
-        }
-    }
-    for keyword in ["maxItems", "minItems"] {
-        if object
-            .get(keyword)
-            .is_some_and(|value| value.as_u64().is_none())
-        {
-            return Err(invalid(format!(
-                "strict schema `{keyword}` must be a non-negative integer"
-            )));
-        }
-    }
-    if object
-        .get("multipleOf")
-        .and_then(Value::as_f64)
-        .is_some_and(|value| value <= 0.0)
-    {
-        return Err(invalid("strict schema `multipleOf` must be positive"));
-    }
-    if let (Some(minimum), Some(maximum)) = (
-        object.get("minItems").and_then(Value::as_u64),
-        object.get("maxItems").and_then(Value::as_u64),
-    ) && minimum > maximum
-    {
-        return Err(invalid("strict schema `minItems` cannot exceed `maxItems`"));
-    }
-    Ok(())
-}
-
-fn validate_schema_format(object: &Map<String, Value>) -> Result<(), ModelError> {
-    let Some(format) = object.get("format") else {
-        return Ok(());
+        tool.input_schema.clone()
     };
-    let supported = format.as_str().is_some_and(|format| {
-        matches!(
-            format,
-            "date-time"
-                | "time"
-                | "date"
-                | "duration"
-                | "email"
-                | "hostname"
-                | "ipv4"
-                | "ipv6"
-                | "uuid"
-        )
-    });
-    if supported {
-        Ok(())
-    } else {
-        Err(invalid("strict schema contains an unsupported `format`"))
-    }
-}
-
-fn validate_schema_subschemas(
-    object: &Map<String, Value>,
-    object_depth: usize,
-    stats: &mut StrictSchemaStats,
-) -> Result<(), ModelError> {
-    if let Some(definitions) = object.get("$defs") {
-        let definitions = definitions
-            .as_object()
-            .ok_or_else(|| invalid("strict schema `$defs` must be an object"))?;
-        for (name, value) in definitions {
-            stats.string_chars = stats.string_chars.saturating_add(name.chars().count());
-            validate_strict_schema_node(value, object_depth, stats)?;
-        }
-    }
-    if let Some(branches) = object.get("anyOf") {
-        let branches = branches
-            .as_array()
-            .filter(|branches| !branches.is_empty())
-            .ok_or_else(|| invalid("strict schema `anyOf` must be a non-empty array"))?;
-        for branch in branches {
-            validate_strict_schema_node(branch, object_depth, stats)?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_keyword_placements(
-    schema: &Value,
-    object: &Map<String, Value>,
-) -> Result<(), ModelError> {
-    let placements = [
-        (
-            schema_has_type(schema, "object"),
-            &["additionalProperties", "properties", "required"][..],
-            "object",
-        ),
-        (
-            schema_has_type(schema, "array"),
-            &["items", "maxItems", "minItems"][..],
-            "array",
-        ),
-        (
-            schema_has_type(schema, "string"),
-            &["format", "pattern"][..],
-            "string",
-        ),
-        (
-            schema_has_type(schema, "number") || schema_has_type(schema, "integer"),
-            &[
-                "exclusiveMaximum",
-                "exclusiveMinimum",
-                "maximum",
-                "minimum",
-                "multipleOf",
-            ][..],
-            "numeric",
-        ),
-    ];
-    for (valid_type, keywords, kind) in placements {
-        if !valid_type && keywords.iter().any(|keyword| object.contains_key(*keyword)) {
-            return Err(invalid(format!(
-                "strict schema {kind} keywords require a compatible type"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn validate_object_schema(
-    object: &Map<String, Value>,
-    object_depth: usize,
-    stats: &mut StrictSchemaStats,
-) -> Result<(), ModelError> {
-    if object_depth > 10 {
-        return Err(invalid("strict schema exceeds 10 object nesting levels"));
-    }
-    if object.get("additionalProperties") != Some(&Value::Bool(false)) {
-        return Err(invalid(
-            "strict schema objects require `additionalProperties: false`",
-        ));
-    }
-    let properties = object
-        .get("properties")
-        .and_then(Value::as_object)
-        .ok_or_else(|| invalid("strict schema objects require `properties`"))?;
-    let required = object
-        .get("required")
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid("strict schema objects require `required`"))?;
-    let required_count = required.len();
-    let required = required
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .ok_or_else(|| invalid("strict schema required names must be strings"))
-        })
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-    if required.len() != required_count
-        || required.len() != properties.len()
-        || properties
-            .keys()
-            .any(|name| !required.contains(name.as_str()))
-    {
-        return Err(invalid("strict schema requires every object property"));
-    }
-    stats.properties = stats.properties.saturating_add(properties.len());
-    for (name, value) in properties {
-        stats.string_chars = stats.string_chars.saturating_add(name.chars().count());
-        validate_strict_schema_node(value, object_depth + 1, stats)?;
-    }
-    Ok(())
-}
-
-fn validate_array_schema(
-    object: &Map<String, Value>,
-    object_depth: usize,
-    stats: &mut StrictSchemaStats,
-) -> Result<(), ModelError> {
-    let items = object
-        .get("items")
-        .ok_or_else(|| invalid("strict schema arrays require `items`"))?;
-    validate_strict_schema_node(items, object_depth, stats)
-}
-
-fn accumulate_schema_values(
-    object: &Map<String, Value>,
-    stats: &mut StrictSchemaStats,
-) -> Result<(), ModelError> {
-    if let Some(values) = object.get("enum") {
-        let values = values
-            .as_array()
-            .filter(|values| !values.is_empty())
-            .ok_or_else(|| invalid("strict schema `enum` must be a non-empty array"))?;
-        stats.enum_values = stats.enum_values.saturating_add(values.len());
-        let enum_string_chars = values
-            .iter()
-            .filter_map(Value::as_str)
-            .map(|value| value.chars().count())
-            .sum::<usize>();
-        if values.len() > 250 && enum_string_chars > 15_000 {
-            return Err(invalid(
-                "strict schema enum exceeds the 15000 character limit",
-            ));
-        }
-        stats.string_chars = stats.string_chars.saturating_add(enum_string_chars);
-    }
-    if let Some(value) = object.get("const").and_then(Value::as_str) {
-        stats.string_chars = stats.string_chars.saturating_add(value.chars().count());
-    }
-    Ok(())
-}
-
-fn strict_schema_type(kind: &str) -> bool {
-    matches!(
-        kind,
-        "string" | "number" | "integer" | "boolean" | "object" | "array" | "null"
-    )
-}
-
-fn schema_has_type(schema: &Value, expected: &str) -> bool {
-    schema.get("type").is_some_and(|kind| {
-        kind.as_str() == Some(expected)
-            || kind
-                .as_array()
-                .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some(expected)))
-    })
+    Ok((schema, strict))
 }
 
 fn merge_provider_options(
@@ -973,10 +610,23 @@ mod tests {
         ContentPart, MediaSource, Message, ModelErrorKind, ModelRef, ModelRequest, OutputFormat,
         ProviderToolSpec, ResponseMode, Role, ToolCall, ToolResult, ToolSpec,
     };
+    use schemars::{JsonSchema, schema_for};
 
     use super::encode_request;
 
     use crate::content_projection::decode_content_envelope;
+
+    #[derive(JsonSchema)]
+    struct NestedAnswer {
+        approved: bool,
+    }
+
+    #[derive(JsonSchema)]
+    struct TypedAnswer {
+        value: u32,
+        note: Option<String>,
+        nested: NestedAnswer,
+    }
 
     #[test]
     fn encodes_text_tools_and_structured_output() {
@@ -1018,6 +668,85 @@ mod tests {
     }
 
     #[test]
+    fn typed_output_schema_is_normalized_for_strict_responses() {
+        let example = TypedAnswer {
+            value: 7,
+            note: None,
+            nested: NestedAnswer { approved: true },
+        };
+        assert_eq!(example.value, 7);
+        assert!(example.note.is_none());
+        assert!(example.nested.approved);
+        let format = OutputFormat::typed::<TypedAnswer>("typed_answer");
+        let canonical = match &format {
+            OutputFormat::JsonSchema { schema, .. } => schema.clone(),
+            _ => panic!("expected typed JSON schema"),
+        };
+        let request = ModelRequest::new(
+            ModelRef::new("openai", "test-model"),
+            Message::user("answer"),
+        )
+        .output_format(format);
+
+        let encoded = encode_request(&request).unwrap();
+        let wire = &encoded["text"]["format"]["schema"];
+
+        assert!(canonical.get("$schema").is_some());
+        assert!(wire.get("$schema").is_none());
+        assert_eq!(wire["additionalProperties"], false);
+        let required = wire["required"].as_array().unwrap();
+        assert_eq!(required.len(), 3);
+        for name in ["value", "note", "nested"] {
+            assert!(required.iter().any(|value| value.as_str() == Some(name)));
+        }
+        assert_eq!(wire["$defs"]["NestedAnswer"]["additionalProperties"], false);
+        assert_eq!(
+            wire["$defs"]["NestedAnswer"]["required"],
+            serde_json::json!(["approved"])
+        );
+    }
+
+    #[test]
+    fn non_strict_typed_output_schema_is_preserved() {
+        let format = OutputFormat::typed_with_strictness::<TypedAnswer>("typed_answer", false);
+        let request = ModelRequest::new(
+            ModelRef::new("openai", "test-model"),
+            Message::user("answer"),
+        )
+        .output_format(format);
+
+        let encoded = encode_request(&request).unwrap();
+        let wire = &encoded["text"]["format"]["schema"];
+
+        assert!(wire.get("$schema").is_some());
+        assert!(wire.get("additionalProperties").is_none());
+        assert_eq!(encoded["text"]["format"]["strict"], false);
+    }
+
+    #[test]
+    fn typed_tool_schema_is_normalized_when_strict_is_enabled() {
+        let tool = ToolSpec {
+            name: "review".into(),
+            description: "Review an answer".into(),
+            input_schema: schema_for!(TypedAnswer).to_value(),
+            output_schema: None,
+            metadata: BTreeMap::from([("openai.strict".into(), serde_json::json!(true))]),
+        };
+        let request = ModelRequest::new(
+            ModelRef::new("openai", "test-model"),
+            Message::user("review"),
+        )
+        .tool(tool);
+
+        let encoded = encode_request(&request).unwrap();
+        let parameters = &encoded["tools"][0]["parameters"];
+
+        assert!(parameters.get("$schema").is_none());
+        assert_eq!(parameters["additionalProperties"], false);
+        assert_eq!(encoded["tools"][0]["strict"], true);
+    }
+
+    #[test]
     fn function_strictness_is_explicit_and_validated_locally() {
         let schema = serde_json::json!({
             "type": "object",
@@ -1045,7 +774,9 @@ mod tests {
             description: "Get weather".into(),
             input_schema: serde_json::json!({
                 "type":"object",
-                "properties":{"city":{"type":"string"}}
+                "properties":{"city":{"type":"string"}},
+                "required":["city"],
+                "additionalProperties":{"type":"string"}
             }),
             output_schema: None,
             metadata: BTreeMap::from([("openai.strict".into(), serde_json::json!(true))]),
@@ -1060,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_schema_rejects_unsupported_keywords_and_nested_optional_fields() {
+    fn strict_schema_rejects_unsupported_keywords_and_open_objects() {
         for schema in [
             serde_json::json!({
                 "type":"object",
@@ -1075,8 +806,8 @@ mod tests {
                     "nested":{
                         "type":"object",
                         "properties":{"value":{"type":"string"}},
-                        "required":[],
-                        "additionalProperties":false
+                        "required":["value"],
+                        "additionalProperties":{"type":"string"}
                     }
                 },
                 "required":["nested"],

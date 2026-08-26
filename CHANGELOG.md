@@ -6,6 +6,23 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-26
+
+### Added
+
+- Added explicit provider strictness variants for typed model requests and
+  structured Agents, preserving local typed validation and bounded repair when
+  a compatible endpoint requires non-strict provider enforcement.
+
+### Fixed
+
+- Compiled Schemars-generated schemas into the OpenAI-compatible strict wire
+  subset before local preflight and transport. The adapter now removes root
+  `$schema` metadata and numeric representation hints, closes object schemas,
+  requires declared properties, and applies the same behavior to Responses,
+  Chat Completions, and strict function Tools without mutating canonical
+  requests.
+
 ## [0.8.0] - 2026-08-26
 
 ### Added
