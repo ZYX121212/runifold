@@ -12,12 +12,16 @@ pub(super) struct AgentProgress {
     pub(super) tool_calls: u32,
     pub(super) delegations: u32,
     pub(super) terminal_repairs: u32,
+    pub(super) turn_review_repairs: u32,
+    pub(super) terminal_review_repairs: u32,
     pub(super) durable_conversation: Option<DurableConversationCheckpoint>,
 }
 
 impl From<AgentCheckpointState> for AgentProgress {
     fn from(state: AgentCheckpointState) -> Self {
         let terminal_repairs = terminal_repair_count(&state.transcript);
+        let turn_review_repairs = turn_review_repair_count(&state.transcript);
+        let terminal_review_repairs = terminal_review_repair_count(&state.transcript);
         Self {
             execution_id: state.execution_id,
             transcript: state.transcript,
@@ -25,6 +29,8 @@ impl From<AgentCheckpointState> for AgentProgress {
             tool_calls: state.tool_calls,
             delegations: state.delegations,
             terminal_repairs,
+            turn_review_repairs,
+            terminal_review_repairs,
             durable_conversation: state.durable_conversation,
         }
     }
@@ -48,6 +54,30 @@ fn terminal_repair_count(transcript: &[Message]) -> u32 {
         .iter()
         .filter(|message| {
             message.metadata.get("runifold.terminal_repair") == Some(&serde_json::Value::Bool(true))
+        })
+        .count()
+        .try_into()
+        .unwrap_or(u32::MAX)
+}
+
+fn terminal_review_repair_count(transcript: &[Message]) -> u32 {
+    transcript
+        .iter()
+        .filter(|message| {
+            message.metadata.get("runifold.terminal_review_repair")
+                == Some(&serde_json::Value::Bool(true))
+        })
+        .count()
+        .try_into()
+        .unwrap_or(u32::MAX)
+}
+
+fn turn_review_repair_count(transcript: &[Message]) -> u32 {
+    transcript
+        .iter()
+        .filter(|message| {
+            message.metadata.get("runifold.turn_review_repair")
+                == Some(&serde_json::Value::Bool(true))
         })
         .count()
         .try_into()

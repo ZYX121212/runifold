@@ -1,26 +1,32 @@
 use std::{fmt, sync::Arc};
 
 use runifold_core::{
-    Checkpoint, CheckpointError, CheckpointErrorKind, CheckpointId, CheckpointStore, RunContext,
-    Usage,
+    CapabilityId, Checkpoint, CheckpointError, CheckpointErrorKind, CheckpointId, CheckpointStore,
+    RunContext, Usage,
 };
 use runifold_model::{Message, ModelRef, ModelResponse};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::conversation::{ConversationId, ConversationVersion, MemoryNamespace};
-use crate::{AgentError, AgentOutcome, TerminalRequirementFailure};
+use crate::{
+    AgentError, AgentOutcome, TerminalRequirementFailure, TerminalReviewPolicy,
+    TerminalReviewerDescriptor, TurnReviewPolicy,
+};
 
 const CHECKPOINT_KIND: &str = "runifold.agent";
 const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 
-/// Recovery behavior for a checkpoint captured during an external turn.
+/// Recovery behavior for a checkpoint captured during an external operation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ResumePolicy {
     /// Reject recovery that could duplicate model cost or external effects.
     #[default]
     RejectAmbiguous,
-    /// Explicitly retry the entire interrupted model-and-callable turn.
+    /// Explicitly retry an interrupted model-and-callable turn, internal turn
+    /// review, or terminal review. Durable review candidates and approved turn
+    /// plans are reused without regenerating them.
     RetryInterruptedTurn,
 }
 
@@ -47,6 +53,84 @@ pub enum AgentCheckpointPhase {
         /// Safe failure details retained without the generated body.
         failure: TerminalRequirementFailure,
         /// Repair turns completed before exhaustion.
+        attempts: u32,
+    },
+    /// A selected model response is durable and has not entered internal
+    /// turn review.
+    TurnReviewReady {
+        /// Response awaiting review before it can affect execution.
+        response: Box<ModelResponse>,
+        /// One-based model turn that produced the response.
+        turn: u32,
+    },
+    /// Internal review of a durable model response may have partially
+    /// executed.
+    TurnReviewInFlight {
+        /// Response supplied to the reviewer.
+        response: Box<ModelResponse>,
+        /// One-based model turn that produced the response.
+        turn: u32,
+    },
+    /// The response passed review and is durable while its tool plan is
+    /// applied or its terminal path is completed.
+    TurnReviewApproved {
+        /// Approved response reused during recovery without regeneration.
+        response: Box<ModelResponse>,
+        /// One-based model turn that produced the response.
+        turn: u32,
+    },
+    /// An internal reviewer permanently rejected a model response.
+    TurnReviewRejected {
+        /// Response rejected by the reviewer.
+        response: Box<ModelResponse>,
+        /// One-based model turn that produced the response.
+        turn: u32,
+        /// Safe reviewer explanation.
+        reason: String,
+        /// Internal review repairs completed before rejection.
+        attempts: u32,
+    },
+    /// A turn repair verdict exceeded the configured review repair limit.
+    TurnReviewExhausted {
+        /// Last response that required another repair.
+        response: Box<ModelResponse>,
+        /// One-based model turn that produced the response.
+        turn: u32,
+        /// Last bounded feedback returned by the reviewer.
+        feedback: Value,
+        /// Internal review repairs completed before exhaustion.
+        attempts: u32,
+    },
+    /// A locally valid candidate is durable and has not entered review.
+    TerminalReviewReady {
+        /// Candidate awaiting semantic review.
+        response: Box<ModelResponse>,
+        /// One-based semantic review attempt.
+        attempt: u32,
+    },
+    /// Semantic review of a durable candidate may have partially executed.
+    TerminalReviewInFlight {
+        /// Candidate supplied to the reviewer.
+        response: Box<ModelResponse>,
+        /// One-based semantic review attempt.
+        attempt: u32,
+    },
+    /// A reviewer permanently rejected a terminal candidate.
+    TerminalReviewRejected {
+        /// Candidate rejected by the reviewer.
+        response: Box<ModelResponse>,
+        /// Safe reviewer explanation.
+        reason: String,
+        /// Review repairs completed before rejection.
+        attempts: u32,
+    },
+    /// A repair verdict exceeded the configured review repair limit.
+    TerminalReviewExhausted {
+        /// Last candidate that required another repair.
+        response: Box<ModelResponse>,
+        /// Last bounded feedback returned by the reviewer.
+        feedback: Value,
+        /// Review repairs completed before exhaustion.
         attempts: u32,
     },
 }
@@ -83,6 +167,24 @@ pub struct AgentCheckpointState {
     pub delegations: u32,
     /// Shared usage snapshot at persistence time.
     pub usage: Usage,
+    /// Stable internal-turn reviewer identity expected throughout recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_reviewer: Option<TerminalReviewerDescriptor>,
+    /// Internal-turn review scope and repair limit expected during recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_review_policy: Option<TurnReviewPolicy>,
+    /// Stable capabilities delegated to the internal-turn reviewer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turn_reviewer_capabilities: Vec<CapabilityId>,
+    /// Stable reviewer identity expected throughout recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reviewer: Option<TerminalReviewerDescriptor>,
+    /// Terminal-review repair limit expected during recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_review_policy: Option<TerminalReviewPolicy>,
+    /// Stable capabilities delegated to the terminal reviewer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminal_reviewer_capabilities: Vec<CapabilityId>,
     /// Current recovery phase.
     pub phase: AgentCheckpointPhase,
     /// Atomic conversation commit metadata, when this is a durable turn.
@@ -110,6 +212,26 @@ impl AgentCheckpointState {
             AgentCheckpointPhase::TerminalRequirementFailed {
                 failure, attempts, ..
             } => Some(super::agent::completion::failure_error(failure, *attempts)),
+            AgentCheckpointPhase::TerminalReviewRejected { reason, .. } => {
+                Some(AgentError::TerminalReviewRejected {
+                    reason: reason.clone(),
+                })
+            }
+            AgentCheckpointPhase::TerminalReviewExhausted { attempts, .. } => {
+                Some(AgentError::TerminalReviewExhausted {
+                    attempts: *attempts,
+                })
+            }
+            AgentCheckpointPhase::TurnReviewRejected { reason, .. } => {
+                Some(AgentError::TurnReviewRejected {
+                    reason: reason.clone(),
+                })
+            }
+            AgentCheckpointPhase::TurnReviewExhausted { attempts, .. } => {
+                Some(AgentError::TurnReviewExhausted {
+                    attempts: *attempts,
+                })
+            }
             _ => None,
         }
     }

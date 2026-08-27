@@ -50,6 +50,34 @@ impl AgentOutcome {
             .unwrap_or(u32::MAX)
     }
 
+    /// Returns the number of internal-turn review repair turns in this execution.
+    #[must_use]
+    pub fn turn_review_repairs(&self) -> u32 {
+        self.transcript
+            .iter()
+            .filter(|message| {
+                message.metadata.get("runifold.turn_review_repair")
+                    == Some(&serde_json::Value::Bool(true))
+            })
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX)
+    }
+
+    /// Returns the number of semantic-review repair turns in this execution.
+    #[must_use]
+    pub fn terminal_review_repairs(&self) -> u32 {
+        self.transcript
+            .iter()
+            .filter(|message| {
+                message.metadata.get("runifold.terminal_review_repair")
+                    == Some(&serde_json::Value::Bool(true))
+            })
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX)
+    }
+
     /// Locally validates and decodes the final model response while preserving
     /// the complete canonical outcome.
     ///

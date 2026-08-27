@@ -12,6 +12,7 @@ mod middleware;
 mod outcome;
 mod stream;
 mod structured;
+mod terminal_review;
 
 pub use agent::{Agent, AgentConfig, AgentFuture, ToolErrorPolicy};
 pub use builder::{AgentBuildError, AgentBuilder, AgentPromptError};
@@ -47,3 +48,10 @@ pub use middleware::{
 pub use outcome::{AgentOutcome, StructuredAgentOutcome};
 pub use stream::{AgentEventStream, AgentStreamEvent, CallableKind};
 pub use structured::{StructuredAgent, StructuredAgentError};
+pub use terminal_review::{
+    CompositeTerminalReviewMode, CompositeTerminalReviewer, TerminalReviewError,
+    TerminalReviewFuture, TerminalReviewPolicy, TerminalReviewRequest, TerminalReviewVerdict,
+    TerminalReviewVerdictKind, TerminalReviewer, TerminalReviewerDescriptor, TerminalRuleReviewer,
+    TurnReviewError, TurnReviewFuture, TurnReviewPolicy, TurnReviewRequest, TurnReviewScope,
+    TurnReviewVerdict, TurnReviewer, TurnReviewerDescriptor, TurnRuleReviewer,
+};

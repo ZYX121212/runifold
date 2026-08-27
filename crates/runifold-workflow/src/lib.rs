@@ -8,6 +8,7 @@ mod outcome;
 mod parallel;
 mod race;
 mod remediation;
+mod reviewer;
 mod step;
 mod store;
 mod task_retention;
@@ -39,6 +40,10 @@ pub use remediation::{
     WorkflowRemediationCheckpoint, WorkflowRemediationPolicy, WorkflowRepairInput,
     WorkflowReviewError, WorkflowReviewFuture, WorkflowReviewRequest, WorkflowReviewVerdict,
     WorkflowReviewer,
+};
+pub use reviewer::{
+    AgentReviewDecision, AgentReviewDecisionKind, AgentReviewer, CompositeReviewMode,
+    CompositeReviewer, ReviewFinding, ReviewRubric, ReviewSeverity, RuleReviewer,
 };
 pub use step::{
     AgentStep, AgentStepOutput, PredicateCondition, StepId, WorkflowCondition, WorkflowStep,

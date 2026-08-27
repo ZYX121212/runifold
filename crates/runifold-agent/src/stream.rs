@@ -11,7 +11,9 @@ use runifold_core::Usage;
 use runifold_model::{ModelStreamEvent, ToolCall};
 use serde::{Deserialize, Serialize};
 
-use crate::{AgentError, AgentFuture, AgentOutcome, TerminalRequirementFailure};
+use crate::{
+    AgentError, AgentFuture, AgentOutcome, TerminalRequirementFailure, TerminalReviewVerdictKind,
+};
 
 /// The callable boundary represented by an Agent stream event.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -89,6 +91,42 @@ pub enum AgentStreamEvent {
         attempt: u32,
         /// Safe reason the candidate was rejected.
         failure: TerminalRequirementFailure,
+    },
+    /// Internal review started before a model response can affect execution.
+    TurnReviewStarted {
+        /// One-based model turn being reviewed.
+        turn: u32,
+    },
+    /// Internal review returned a validated verdict.
+    TurnReviewCompleted {
+        /// One-based model turn that was reviewed.
+        turn: u32,
+        /// Stable semantic verdict category.
+        verdict: TerminalReviewVerdictKind,
+    },
+    /// An internal review verdict scheduled a replacement model turn.
+    TurnReviewRepairScheduled {
+        /// Cumulative one-based internal repair number.
+        attempt: u32,
+        /// Model turn whose response was rejected.
+        turn: u32,
+    },
+    /// Semantic review of a locally valid terminal candidate started.
+    TerminalReviewStarted {
+        /// One-based review attempt.
+        attempt: u32,
+    },
+    /// Semantic review returned a validated verdict.
+    TerminalReviewCompleted {
+        /// One-based review attempt.
+        attempt: u32,
+        /// Stable semantic verdict category.
+        verdict: TerminalReviewVerdictKind,
+    },
+    /// A semantic review verdict scheduled a bounded regeneration turn.
+    TerminalReviewRepairScheduled {
+        /// One-based repair number.
+        attempt: u32,
     },
 }
 

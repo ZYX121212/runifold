@@ -6,6 +6,27 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-27
+
+### Added
+
+- Added optional Agent `TerminalReviewer` gating with deterministic rule and
+  structured `AgentReviewer` adapters, bounded same-transcript regeneration,
+  attenuated reviewer child runs, review stream events, and crash-safe
+  `review_ready`/`review_in_flight` checkpoint recovery.
+- Bound terminal-review checkpoints to versioned SHA-256 reviewer
+  fingerprints, added deterministic `CompositeTerminalReviewer` composition,
+  bounded review requests and errors, escaped transcript feedback delimiters,
+  and verified SQLite process-kill recovery without candidate regeneration.
+- Added optional internal `TurnReviewer` gating before Tool execution, with
+  intermediate-only or every-response scope, bounded same-transcript plan
+  repair, durable approved-plan replay, policy/capability checkpoint binding,
+  and process-kill verification without regeneration or duplicate review.
+- Added reusable workflow output-review adapters: strict structured
+  `AgentReviewer`, synchronous `RuleReviewer`, and deterministic
+  `CompositeReviewer` composition with versioned rubrics and actionable
+  findings.
+
 ## [0.8.2] - 2026-08-26
 
 ### Added
@@ -674,5 +695,6 @@ This release contains pre-1.0 breaking API changes.
   security policy, CycloneDX SBOMs, package verification, and controlled
   crates.io publication.
 
-[Unreleased]: https://github.com/ZYX121212/runifold/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ZYX121212/runifold/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/ZYX121212/runifold/compare/v0.8.2...v0.9.0
 [0.1.0]: https://github.com/ZYX121212/runifold/releases/tag/v0.1.0

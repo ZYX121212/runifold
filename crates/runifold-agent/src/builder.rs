@@ -15,7 +15,7 @@ use crate::agent::DynamicContext;
 use crate::{
     Agent, AgentConfig, AgentDescriptor, AgentError, AgentFuture, AgentOutcome,
     AgentRegistrationError, AgentRoute, CompletionRequirement, GatewayMiddleware, StructuredAgent,
-    ToolErrorPolicy,
+    TerminalReviewPolicy, TerminalReviewer, ToolErrorPolicy, TurnReviewPolicy, TurnReviewer,
 };
 
 /// Failure while assembling an [`Agent`].
@@ -266,6 +266,74 @@ impl AgentBuilder {
     pub fn completion_requirement(self, requirement: CompletionRequirement) -> Self {
         Self {
             agent: self.agent.completion_requirement(requirement),
+            error: self.error,
+        }
+    }
+
+    /// Installs internal model-turn review before selected responses can
+    /// execute tools or enter completion.
+    #[must_use]
+    pub fn turn_reviewer<R>(
+        self,
+        reviewer: R,
+        policy: TurnReviewPolicy,
+        capabilities: CapabilitySet,
+    ) -> Self
+    where
+        R: TurnReviewer + 'static,
+    {
+        Self {
+            agent: self.agent.turn_reviewer(reviewer, policy, capabilities),
+            error: self.error,
+        }
+    }
+
+    /// Installs a shared, type-erased internal-turn reviewer.
+    #[must_use]
+    pub fn shared_turn_reviewer(
+        self,
+        reviewer: Arc<dyn TurnReviewer>,
+        policy: TurnReviewPolicy,
+        capabilities: CapabilitySet,
+    ) -> Self {
+        Self {
+            agent: self
+                .agent
+                .shared_turn_reviewer(reviewer, policy, capabilities),
+            error: self.error,
+        }
+    }
+
+    /// Installs semantic terminal review with bounded repair and attenuated
+    /// reviewer capabilities.
+    #[must_use]
+    pub fn terminal_reviewer<R>(
+        self,
+        reviewer: R,
+        policy: TerminalReviewPolicy,
+        capabilities: CapabilitySet,
+    ) -> Self
+    where
+        R: TerminalReviewer + 'static,
+    {
+        Self {
+            agent: self.agent.terminal_reviewer(reviewer, policy, capabilities),
+            error: self.error,
+        }
+    }
+
+    /// Installs a shared, type-erased semantic terminal reviewer.
+    #[must_use]
+    pub fn shared_terminal_reviewer(
+        self,
+        reviewer: Arc<dyn TerminalReviewer>,
+        policy: TerminalReviewPolicy,
+        capabilities: CapabilitySet,
+    ) -> Self {
+        Self {
+            agent: self
+                .agent
+                .shared_terminal_reviewer(reviewer, policy, capabilities),
             error: self.error,
         }
     }

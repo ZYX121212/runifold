@@ -31,10 +31,12 @@ use crate::{
 };
 
 const TOOL_RESULT_EXECUTION_ID_METADATA: &str = "runifold.agent.execution_id";
+use crate::terminal_review::{TerminalReviewConfig, TurnReviewConfig};
 use crate::{
     AgentError, AgentEventStream, AgentGateway, AgentOutcome, AgentStreamEvent, CallableKind,
     CompletionRequirement, GatewayError, GatewayErrorKind, StructuredAgent,
 };
+use crate::{TerminalReviewPolicy, TerminalReviewer, TurnReviewPolicy, TurnReviewer};
 
 mod callable;
 mod checkpointing;
@@ -42,6 +44,7 @@ pub(crate) mod completion;
 mod execution;
 mod observability;
 mod retrieval;
+mod review;
 
 /// A boxed, sendable future returned by an agent.
 #[cfg(not(target_arch = "wasm32"))]
@@ -122,6 +125,8 @@ pub struct Agent {
     pub(crate) provider_options: BTreeMap<String, serde_json::Value>,
     pub(crate) completion_requirement: CompletionRequirement,
     pub(crate) completion_validator: completion::CompletionValidator,
+    pub(crate) turn_review: Option<TurnReviewConfig>,
+    pub(crate) terminal_review: Option<TerminalReviewConfig>,
 }
 
 impl Agent {
@@ -156,6 +161,8 @@ impl Agent {
             provider_options: BTreeMap::new(),
             completion_requirement: CompletionRequirement::default(),
             completion_validator: completion::CompletionValidator::content(),
+            turn_review: None,
+            terminal_review: None,
         }
     }
 
@@ -205,6 +212,75 @@ impl Agent {
     #[must_use]
     pub const fn completion_requirement(mut self, requirement: CompletionRequirement) -> Self {
         self.completion_requirement = requirement;
+        self
+    }
+
+    /// Installs semantic review after selected model responses and before any
+    /// tool call from those responses can execute.
+    #[must_use]
+    pub fn turn_reviewer<R>(
+        self,
+        reviewer: R,
+        policy: TurnReviewPolicy,
+        capabilities: CapabilitySet,
+    ) -> Self
+    where
+        R: TurnReviewer + 'static,
+    {
+        self.shared_turn_reviewer(Arc::new(reviewer), policy, capabilities)
+    }
+
+    /// Installs a shared, type-erased internal-turn reviewer.
+    #[must_use]
+    pub fn shared_turn_reviewer(
+        mut self,
+        reviewer: Arc<dyn TurnReviewer>,
+        policy: TurnReviewPolicy,
+        capabilities: CapabilitySet,
+    ) -> Self {
+        let descriptor = reviewer.turn_descriptor().clone();
+        self.turn_review = Some(TurnReviewConfig {
+            reviewer,
+            descriptor,
+            policy,
+            capabilities,
+        });
+        self
+    }
+
+    /// Installs semantic review before a locally valid terminal candidate is
+    /// committed as the Agent outcome.
+    ///
+    /// Reviewer capabilities are attenuated against the parent Run and review
+    /// repairs consume ordinary shared budgets.
+    #[must_use]
+    pub fn terminal_reviewer<R>(
+        self,
+        reviewer: R,
+        policy: TerminalReviewPolicy,
+        capabilities: CapabilitySet,
+    ) -> Self
+    where
+        R: TerminalReviewer + 'static,
+    {
+        self.shared_terminal_reviewer(Arc::new(reviewer), policy, capabilities)
+    }
+
+    /// Installs a shared, type-erased terminal reviewer.
+    #[must_use]
+    pub fn shared_terminal_reviewer(
+        mut self,
+        reviewer: Arc<dyn TerminalReviewer>,
+        policy: TerminalReviewPolicy,
+        capabilities: CapabilitySet,
+    ) -> Self {
+        let descriptor = reviewer.descriptor().clone();
+        self.terminal_review = Some(TerminalReviewConfig {
+            reviewer,
+            descriptor,
+            policy,
+            capabilities,
+        });
         self
     }
 
@@ -278,8 +354,8 @@ impl Agent {
         &self.model_ref
     }
 
-    /// Returns capabilities for every Tool and child Agent exposed by this
-    /// Agent.
+    /// Returns capabilities for every Tool, child Agent, context source, and
+    /// terminal reviewer exposed by this Agent.
     ///
     /// The returned set is not granted automatically. Applications explicitly
     /// decide whether to install it on a root or delegated Run.
@@ -297,6 +373,11 @@ impl Agent {
         }
         for source in &self.dynamic_context {
             capabilities.grant(source.retriever.descriptor().capability());
+        }
+        if let Some(review) = &self.terminal_review {
+            for capability in review.capabilities.iter() {
+                capabilities.grant(capability.clone());
+            }
         }
         capabilities
     }
@@ -332,6 +413,7 @@ impl std::fmt::Debug for Agent {
             .field("effect_recovery", &self.effect_recovery)
             .field("config", &self.config)
             .field("output_format", &self.output_format)
+            .field("terminal_review", &self.terminal_review)
             .finish_non_exhaustive()
     }
 }

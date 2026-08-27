@@ -9,7 +9,7 @@ use runifold_retrieval::RetrievalError;
 use runifold_tool::{ToolError, ToolErrorKind};
 use thiserror::Error;
 
-use crate::{GatewayError, GatewayErrorKind};
+use crate::{GatewayError, GatewayErrorKind, TerminalReviewError};
 
 /// Failure of an agent run.
 #[derive(Debug, Error)]
@@ -44,6 +44,60 @@ pub enum AgentError {
     AmbiguousCheckpoint {
         /// One-based interrupted turn number.
         turn: u32,
+    },
+    /// Recovery would silently retry a possibly partial terminal review.
+    #[error("checkpoint contains an ambiguous in-flight terminal review attempt {attempt}")]
+    AmbiguousTerminalReview {
+        /// One-based interrupted review attempt.
+        attempt: u32,
+    },
+    /// Recovery would silently retry a possibly partial internal turn review.
+    #[error("checkpoint contains an ambiguous in-flight review for model turn {turn}")]
+    AmbiguousTurnReview {
+        /// One-based model turn whose review was interrupted.
+        turn: u32,
+    },
+    /// A reviewer requested authority absent from the parent Run.
+    #[error("terminal reviewer requested unavailable capability `{capability}`")]
+    TerminalReviewAuthorityEscalation {
+        /// Missing capability name.
+        capability: String,
+    },
+    /// An internal reviewer requested authority absent from the parent Run.
+    #[error("turn reviewer requested unavailable capability `{capability}`")]
+    TurnReviewAuthorityEscalation {
+        /// Missing capability name.
+        capability: String,
+    },
+    /// Terminal reviewer execution or verdict validation failed.
+    #[error("terminal review failed: {0}")]
+    TerminalReview(#[from] TerminalReviewError),
+    /// Internal reviewer execution or verdict validation failed.
+    #[error("turn review failed: {0}")]
+    TurnReview(TerminalReviewError),
+    /// The reviewer permanently rejected the terminal candidate.
+    #[error("terminal candidate was rejected by reviewer: {reason}")]
+    TerminalReviewRejected {
+        /// Safe reviewer explanation.
+        reason: String,
+    },
+    /// The reviewer requested another repair after the configured limit.
+    #[error("terminal review remained unsatisfied after {attempts} repair attempts")]
+    TerminalReviewExhausted {
+        /// Review repairs completed before exhaustion.
+        attempts: u32,
+    },
+    /// The internal reviewer permanently rejected a model response.
+    #[error("model turn was rejected by reviewer: {reason}")]
+    TurnReviewRejected {
+        /// Safe reviewer explanation.
+        reason: String,
+    },
+    /// The internal reviewer requested another repair after the configured limit.
+    #[error("turn review remained unsatisfied after {attempts} repair attempts")]
+    TurnReviewExhausted {
+        /// Review repairs completed before exhaustion.
+        attempts: u32,
     },
     /// Agent configuration is invalid.
     #[error("invalid agent configuration: {0}")]
@@ -167,13 +221,23 @@ impl AgentError {
                 }
             },
             Self::InvalidConfig(_) => RunErrorKind::InvalidInput,
-            Self::Protocol(_)
+            Self::TerminalReviewAuthorityEscalation { .. }
+            | Self::TurnReviewAuthorityEscalation { .. } => RunErrorKind::CapabilityDenied,
+            Self::TerminalReview(error) | Self::TurnReview(error) => review_error_kind(error),
+            Self::TerminalReviewRejected { .. }
+            | Self::TerminalReviewExhausted { .. }
+            | Self::TurnReviewRejected { .. }
+            | Self::TurnReviewExhausted { .. }
+            | Self::Protocol(_)
             | Self::ToolRequirementUnsatisfied { .. }
             | Self::EmptyTerminalResponse { .. }
             | Self::StructuredOutputUnsatisfied { .. }
             | Self::ToolOutputNotVisible { .. } => RunErrorKind::Protocol,
             Self::Journal(_) => RunErrorKind::Extension("runifold.observability".into()),
-            Self::Checkpoint(_) | Self::AmbiguousCheckpoint { .. } => {
+            Self::Checkpoint(_)
+            | Self::AmbiguousCheckpoint { .. }
+            | Self::AmbiguousTerminalReview { .. }
+            | Self::AmbiguousTurnReview { .. } => {
                 RunErrorKind::Extension("runifold.checkpoint".into())
             }
             Self::Effect(error) => match error.kind {
@@ -221,6 +285,15 @@ impl AgentError {
             retry_safety: self.retry_safety(),
             metadata,
         }
+    }
+}
+
+fn review_error_kind(error: &TerminalReviewError) -> RunErrorKind {
+    match error {
+        TerminalReviewError::InvalidConfiguration(_)
+        | TerminalReviewError::RequestTooLarge { .. } => RunErrorKind::InvalidInput,
+        TerminalReviewError::Execution(_) => RunErrorKind::Invocation,
+        TerminalReviewError::InvalidVerdict(_) => RunErrorKind::Protocol,
     }
 }
 

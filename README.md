@@ -912,6 +912,122 @@ restarts completed Tool effects. The full response, transcript, counters,
 repair count (through `typed.outcome.terminal_repairs()`), and usage remain
 available in `typed.outcome`.
 
+Selected internal model turns can be reviewed before any proposed Tool call
+or child-Agent delegation executes:
+
+```rust,ignore
+use runifold::{
+    TurnReviewPolicy, TurnReviewScope, TurnRuleReviewer,
+    TerminalReviewVerdict,
+};
+
+let plan_gate = TurnRuleReviewer::new("plan-policy", "v1", |request| {
+    if plan_is_allowed(&request.candidate) {
+        Ok(TerminalReviewVerdict::approve())
+    } else {
+        TerminalReviewVerdict::repair(serde_json::json!({
+            "code": "unsafe_plan",
+            "instruction": "Choose a read-only evidence source."
+        }))
+    }
+})?;
+
+let agent = answer_agent.turn_reviewer(
+    plan_gate,
+    TurnReviewPolicy::new(2),
+    reviewer_capabilities,
+);
+```
+
+`TurnReviewPolicy::new` defaults to `IntermediateOnly`, covering Tool plans and
+provider continuation responses while leaving final-output review independent.
+`TurnReviewScope::EveryModelResponse` also reviews the final response; when a
+terminal reviewer is configured, that response must then pass both gates. A
+turn `Repair` discards the unexecuted plan, injects bounded delimiter-escaped
+review data, and asks the original Agent to reconsider in the same transcript.
+`Reject` terminates fail-closed. `AgentReviewer`, `TerminalRuleReviewer`, and
+`CompositeTerminalReviewer` implement the terminal contract and can also be
+used directly as turn reviewers; `TurnRuleReviewer` provides a turn-specific
+deterministic request type.
+
+Locally valid terminal candidates can also pass through an optional semantic
+review gate before they are committed:
+
+```rust,ignore
+use runifold::{
+    AgentReviewer, ReviewRubric, TerminalReviewPolicy,
+};
+
+let reviewer = AgentReviewer::new(
+    reviewer_agent,
+    ReviewRubric::new(
+        "analysis-correctness",
+        "v1",
+        "Approve only when every conclusion follows from stated evidence.",
+    )?,
+)?;
+
+let agent = answer_agent.terminal_reviewer(
+    reviewer,
+    TerminalReviewPolicy::new(2),
+    reviewer_capabilities,
+);
+```
+
+The completion validator runs first, so malformed or refused output never
+reaches the semantic reviewer. `Approve` commits the candidate, `Reject`
+terminates fail-closed, and `Repair { feedback }` appends the rejected
+candidate plus bounded feedback to the original Agent transcript before the
+original Agent generates again. `TerminalRuleReviewer` provides the same gate
+for deterministic application rules. Reviewers execute as independently
+attenuated child runs and share the ordinary token, cost, turn, deadline, and
+cancellation budgets.
+
+Multiple terminal reviewers can be composed deterministically:
+
+```rust,ignore
+use runifold::{
+    CompositeTerminalReviewMode, CompositeTerminalReviewer,
+    TerminalRuleReviewer, TerminalReviewVerdict,
+};
+
+let evidence = TerminalRuleReviewer::new("evidence", "v1", |request| {
+    if request.candidate.text().contains("Evidence:") {
+        Ok(TerminalReviewVerdict::approve())
+    } else {
+        TerminalReviewVerdict::repair(serde_json::json!({
+            "code": "missing_evidence"
+        }))
+    }
+})?;
+
+let mut gate = CompositeTerminalReviewer::new(
+    "answer-gate",
+    "v1",
+    CompositeTerminalReviewMode::AllMustApprove,
+)?;
+gate.push("evidence", evidence)?;
+gate.push("logic", logic_reviewer)?;
+```
+
+Checkpointed execution persists the candidate as `TerminalReviewReady` before
+review begins and marks it `TerminalReviewInFlight` before invoking the
+reviewer. A ready candidate resumes without regeneration; an interrupted
+review requires explicit `ResumePolicy::RetryInterruptedTurn`, while the
+default rejects the ambiguous retry. Review repair counts remain available
+through `outcome.terminal_review_repairs()`. Each checkpoint also binds the
+reviewer name, caller-managed version, and SHA-256 configuration fingerprint;
+recovery rejects a changed rubric, reviewer model, rule version, composition
+mode, composition membership, review policy, or delegated reviewer
+capabilities. Internal review additionally persists `TurnReviewReady`,
+`TurnReviewInFlight`, and `TurnReviewApproved`: after approval, a crash resumes
+the exact durable Tool plan without regenerating or re-reviewing it, while
+explicit retry authority remains required because a Tool may have started.
+Internal repair counts are available through `outcome.turn_review_repairs()`.
+Review requests are capped at 1 MiB,
+feedback at 64 KiB, and reviewer execution-error text at 4 KiB. Feedback is
+delimiter-escaped before it re-enters the generator transcript.
+
 For an OpenAI-compatible endpoint that has only verified non-strict schema
 support, keep the same local typed validation and repair boundary while
 disabling only provider enforcement:
@@ -1632,6 +1748,50 @@ let workflow = Workflow::builder("reviewed-answer")
     )
     .build()?;
 ```
+
+Runifold includes reusable reviewers for deterministic rules, strict
+structured Reviewer Agents, and sequential composition:
+
+```rust,ignore
+use runifold::{
+    AgentReviewer, CompositeReviewMode, CompositeReviewer, ReviewRubric,
+    RuleReviewer, WorkflowReviewVerdict,
+};
+
+let rules = RuleReviewer::new("required-evidence", |request| {
+    let has_evidence = request.candidate["input"]
+        .as_str()
+        .is_some_and(|candidate| candidate.contains("Evidence:"));
+    if has_evidence {
+        Ok(WorkflowReviewVerdict::approve())
+    } else {
+        WorkflowReviewVerdict::repair(serde_json::json!({
+            "code": "missing_evidence",
+            "instruction": "Add an explicit evidence section."
+        }))
+    }
+})?;
+
+let logic = AgentReviewer::new(
+    reviewer_agent,
+    ReviewRubric::new(
+        "analysis-correctness",
+        "v1",
+        "Check that every conclusion follows from stated evidence.",
+    )?,
+)?;
+
+let mut reviewer = CompositeReviewer::new(CompositeReviewMode::AllMustApprove);
+reviewer.push("rules", rules)?;
+reviewer.push("logic", logic)?;
+```
+
+`AgentReviewer` places only the application-owned rubric in its trusted system
+instruction. The original input and candidate remain untrusted JSON data, and
+the Reviewer Agent must return a locally validated `approve`, `repair`, or
+`reject` decision. `AllMustApprove` runs every reviewer, rejects immediately,
+and deterministically merges repair feedback in registration order;
+`FirstFailure` short-circuits on the first repair or rejection.
 
 The first generation receives the ordinary workflow input. A repair verdict
 persists the rejected candidate and structured feedback, then supplies a

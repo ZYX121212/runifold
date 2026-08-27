@@ -116,6 +116,31 @@ impl Agent {
     ) -> Result<Option<AgentOutcome>, AgentError> {
         let failure = match self.completion_validator.validate(&response) {
             Ok(()) => {
+                if self.terminal_review.is_some() {
+                    let attempt =
+                        progress
+                            .terminal_review_repairs
+                            .checked_add(1)
+                            .ok_or_else(|| {
+                                AgentError::Protocol("terminal review counter overflow".into())
+                            })?;
+                    save_checkpoint(
+                        checkpoint,
+                        &self.checkpoint_state(
+                            progress,
+                            run,
+                            AgentCheckpointPhase::TerminalReviewReady {
+                                response: Box::new(response.clone()),
+                                attempt,
+                            },
+                        ),
+                    )?;
+                    return self
+                        .review_terminal_candidate(
+                            response, attempt, run, progress, checkpoint, &context,
+                        )
+                        .await;
+                }
                 return self
                     .accept_terminal_candidate(response, run, progress, checkpoint, &context);
             }
@@ -187,7 +212,7 @@ impl Agent {
         Ok(None)
     }
 
-    fn accept_terminal_candidate(
+    pub(super) fn accept_terminal_candidate(
         &self,
         response: ModelResponse,
         run: &RunContext,

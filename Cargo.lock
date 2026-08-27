@@ -2789,7 +2789,7 @@ dependencies = [
 
 [[package]]
 name = "runifold"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2829,7 +2829,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-agent"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-core",
  "futures-executor",
@@ -2844,12 +2844,13 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror",
 ]
 
 [[package]]
 name = "runifold-cli"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2864,7 +2865,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-core"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "event-listener",
  "futures-executor",
@@ -2878,7 +2879,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-effect"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2890,7 +2891,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-eval-cli"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2905,7 +2906,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-macros"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2914,7 +2915,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-mcp"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "async-stream",
  "axum",
@@ -2940,7 +2941,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-model"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -2958,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-observability-otel"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "async-stream",
  "futures-util",
@@ -2978,7 +2979,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-ops"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "runifold-core",
  "serde",
@@ -2988,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-provider-testkit"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -3001,7 +3002,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-providers"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "async-stream",
  "aws-sdk-bedrockruntime",
@@ -3036,7 +3037,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-retrieval"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -3048,7 +3049,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-retrieval-pgvector"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-timer",
  "futures-util",
@@ -3063,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-retrieval-qdrant"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-util",
  "reqwest",
@@ -3081,7 +3082,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-retrieval-text"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "runifold-retrieval",
  "serde",
@@ -3091,7 +3092,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-store-postgres"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-util",
  "pgvector",
@@ -3117,7 +3118,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-store-sqlite"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-executor",
  "runifold-agent",
@@ -3138,7 +3139,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-testkit"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-core",
  "futures-executor",
@@ -3154,7 +3155,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-tool"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -3169,7 +3170,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-workflow"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "futures-executor",
  "futures-timer",
@@ -3178,6 +3179,7 @@ dependencies = [
  "runifold-core",
  "runifold-model",
  "runifold-testkit",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "thiserror",

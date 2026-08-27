@@ -28,6 +28,8 @@ pub(super) fn terminal_event(
                 "tool_calls": outcome.tool_calls,
                 "delegations": outcome.delegations,
                 "terminal_repairs": outcome.terminal_repairs(),
+                "turn_review_repairs": outcome.turn_review_repairs(),
+                "terminal_review_repairs": outcome.terminal_review_repairs(),
                 "usage": outcome.usage,
             }),
         }),

@@ -370,20 +370,8 @@ impl Agent {
                     .map_err(AgentConversationError::Run)?;
                 return Err(AgentConversationError::Run(error));
             }
-            if let AgentCheckpointPhase::TurnInFlight { turn } = state.phase {
-                if policy == ResumePolicy::RejectAmbiguous {
-                    return Err(AgentConversationError::Run(
-                        AgentError::AmbiguousCheckpoint { turn },
-                    ));
-                }
-                validate_usage_floor(state.usage, run.budget().usage())
-                    .map_err(AgentConversationError::Run)?;
-                state.usage = run.budget().usage();
-                state.phase = AgentCheckpointPhase::ReadyForTurn;
-            } else {
-                validate_exact_usage(state.usage, run.budget().usage())
-                    .map_err(AgentConversationError::Run)?;
-            }
+            Self::prepare_resume_state(&mut state, run, policy)
+                .map_err(AgentConversationError::Run)?;
             let mut cursor = CheckpointCursor::loaded(&checkpoint, envelope);
             let outcome = self
                 .execute_state(
@@ -443,16 +431,7 @@ impl Agent {
                 validate_exact_usage(state.usage, run.budget().usage())?;
                 return Err(error);
             }
-            if let AgentCheckpointPhase::TurnInFlight { turn } = state.phase {
-                if policy == ResumePolicy::RejectAmbiguous {
-                    return Err(AgentError::AmbiguousCheckpoint { turn });
-                }
-                validate_usage_floor(state.usage, run.budget().usage())?;
-                state.usage = run.budget().usage();
-                state.phase = AgentCheckpointPhase::ReadyForTurn;
-            } else {
-                validate_exact_usage(state.usage, run.budget().usage())?;
-            }
+            Self::prepare_resume_state(&mut state, run, policy)?;
             let mut cursor = CheckpointCursor::loaded(checkpoint, envelope);
             self.execute_state(
                 state,
@@ -486,6 +465,33 @@ impl Agent {
             tool_calls: 0,
             delegations: 0,
             usage: Usage::default(),
+            turn_reviewer: self
+                .turn_review
+                .as_ref()
+                .map(|review| review.descriptor.clone()),
+            turn_review_policy: self.turn_review.as_ref().map(|review| review.policy),
+            turn_reviewer_capabilities: self.turn_review.as_ref().map_or_else(Vec::new, |review| {
+                review
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.id)
+                    .collect()
+            }),
+            terminal_reviewer: self
+                .terminal_review
+                .as_ref()
+                .map(|review| review.descriptor.clone()),
+            terminal_review_policy: self.terminal_review.as_ref().map(|review| review.policy),
+            terminal_reviewer_capabilities: self.terminal_review.as_ref().map_or_else(
+                Vec::new,
+                |review| {
+                    review
+                        .capabilities
+                        .iter()
+                        .map(|capability| capability.id)
+                        .collect()
+                },
+            ),
             phase: AgentCheckpointPhase::ReadyForTurn,
             durable_conversation: None,
         }
@@ -560,54 +566,33 @@ impl Agent {
         persist_terminal_checkpoint: bool,
     ) -> Result<AgentOutcome, AgentError> {
         self.validate_config()?;
-        let mut progress = AgentProgress::from(state);
+        let completion_context = TerminalCompletionContext {
+            caused_by,
+            observer,
+            persist_terminal_checkpoint,
+        };
+        let (mut progress, resumed, mut approved_response) = self
+            .prepare_run_loop_progress(state, run, &mut checkpoint, &completion_context)
+            .await?;
+        if let Some(outcome) = resumed {
+            return Ok(outcome);
+        }
 
         loop {
             Self::check_lifecycle(run)?;
-            let tool_choice = self.next_tool_choice(&progress, run)?;
-            let requires_tool = matches!(tool_choice, ToolChoice::Required);
-            save_checkpoint(
-                &mut checkpoint,
-                &self.checkpoint_state(
-                    &progress,
+            let Some((response, requires_tool)) = self
+                .next_reviewed_response(
+                    approved_response.take(),
+                    &mut progress,
                     run,
-                    AgentCheckpointPhase::TurnInFlight {
-                        turn: progress.turns + 1,
-                    },
-                ),
-            )?;
-            consume_budget(
-                run,
-                Usage {
-                    turns: 1,
-                    ..Usage::default()
-                },
-                caused_by,
-            )?;
-            progress.turns += 1;
-            emit_agent_event(
-                observer,
-                AgentStreamEvent::TurnStarted {
-                    turn: progress.turns,
-                },
-            )
-            .await;
-            emit_usage(observer, run).await;
-            self.record_turn_started(run, progress.turns, caused_by)?;
-
-            let response = self
-                .invoke_model(
-                    &progress.transcript,
-                    run,
-                    progress.turns,
-                    tool_choice,
-                    caused_by,
-                    observer,
+                    &mut checkpoint,
+                    &completion_context,
                 )
-                .await?;
-
+                .await?
+            else {
+                continue;
+            };
             let calls = tool_calls_from(&response.content);
-            validate_tool_call_completion(&calls, &response.finish_reason)?;
             if calls.is_empty() {
                 if self.continue_provider_turn(
                     response.clone(),
@@ -662,6 +647,111 @@ impl Agent {
                 &self.checkpoint_state(&progress, run, AgentCheckpointPhase::ReadyForTurn),
             )?;
         }
+    }
+
+    async fn next_reviewed_response(
+        &self,
+        approved_response: Option<ModelResponse>,
+        progress: &mut AgentProgress,
+        run: &RunContext,
+        checkpoint: &mut Option<&mut CheckpointCursor>,
+        context: &TerminalCompletionContext<'_>,
+    ) -> Result<Option<(ModelResponse, bool)>, AgentError> {
+        let (response, requires_tool, already_reviewed) = if let Some(response) = approved_response
+        {
+            let requires_tool =
+                self.successful_local_tool_calls(progress)? < self.min_successful_tool_calls;
+            (response, requires_tool, true)
+        } else {
+            let tool_choice = self
+                .begin_turn(
+                    progress,
+                    run,
+                    checkpoint,
+                    context.caused_by,
+                    context.observer,
+                )
+                .await?;
+            let requires_tool = matches!(tool_choice, ToolChoice::Required);
+            let response = self
+                .invoke_model(
+                    &progress.transcript,
+                    run,
+                    progress.turns,
+                    tool_choice,
+                    context.caused_by,
+                    context.observer,
+                )
+                .await?;
+            (response, requires_tool, false)
+        };
+
+        let calls = tool_calls_from(&response.content);
+        validate_tool_call_completion(&calls, &response.finish_reason)?;
+        if already_reviewed
+            || !self
+                .turn_review
+                .as_ref()
+                .is_some_and(|review| review.policy.scope().includes(&response))
+        {
+            return Ok(Some((response, requires_tool)));
+        }
+
+        save_checkpoint(
+            checkpoint,
+            &self.checkpoint_state(
+                progress,
+                run,
+                AgentCheckpointPhase::TurnReviewReady {
+                    response: Box::new(response.clone()),
+                    turn: progress.turns,
+                },
+            ),
+        )?;
+        let response = self
+            .review_turn_candidate(response, run, progress, checkpoint, context)
+            .await?;
+        Ok(response.map(|response| (response, requires_tool)))
+    }
+
+    async fn begin_turn(
+        &self,
+        progress: &mut AgentProgress,
+        run: &RunContext,
+        checkpoint: &mut Option<&mut CheckpointCursor>,
+        caused_by: Option<EventId>,
+        observer: &dyn AgentObserver,
+    ) -> Result<ToolChoice, AgentError> {
+        let tool_choice = self.next_tool_choice(progress, run)?;
+        save_checkpoint(
+            checkpoint,
+            &self.checkpoint_state(
+                progress,
+                run,
+                AgentCheckpointPhase::TurnInFlight {
+                    turn: progress.turns + 1,
+                },
+            ),
+        )?;
+        consume_budget(
+            run,
+            Usage {
+                turns: 1,
+                ..Usage::default()
+            },
+            caused_by,
+        )?;
+        progress.turns += 1;
+        emit_agent_event(
+            observer,
+            AgentStreamEvent::TurnStarted {
+                turn: progress.turns,
+            },
+        )
+        .await;
+        emit_usage(observer, run).await;
+        self.record_turn_started(run, progress.turns, caused_by)?;
+        Ok(tool_choice)
     }
 
     fn record_turn_started(
@@ -823,12 +913,150 @@ impl Agent {
     }
 
     fn validate_checkpoint_identity(&self, state: &AgentCheckpointState) -> Result<(), AgentError> {
-        if state.agent != self.name || state.model != self.model_ref {
+        let terminal_reviewer = self
+            .terminal_review
+            .as_ref()
+            .map(|review| &review.descriptor);
+        let turn_reviewer = self.turn_review.as_ref().map(|review| &review.descriptor);
+        let terminal_review_policy = self.terminal_review.as_ref().map(|review| review.policy);
+        let turn_review_policy = self.turn_review.as_ref().map(|review| review.policy);
+        let terminal_reviewer_capabilities =
+            self.terminal_review
+                .as_ref()
+                .map_or_else(Vec::new, |review| {
+                    review
+                        .capabilities
+                        .iter()
+                        .map(|capability| capability.id)
+                        .collect()
+                });
+        let turn_reviewer_capabilities =
+            self.turn_review.as_ref().map_or_else(Vec::new, |review| {
+                review
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.id)
+                    .collect()
+            });
+        if state.agent != self.name
+            || state.model != self.model_ref
+            || state.terminal_reviewer.as_ref() != terminal_reviewer
+            || state.turn_reviewer.as_ref() != turn_reviewer
+            || state.terminal_review_policy != terminal_review_policy
+            || state.turn_review_policy != turn_review_policy
+            || state.terminal_reviewer_capabilities != terminal_reviewer_capabilities
+            || state.turn_reviewer_capabilities != turn_reviewer_capabilities
+        {
             return Err(runifold_core::CheckpointError::new(
                 runifold_core::CheckpointErrorKind::InvalidPayload,
-                "checkpoint Agent or model identity does not match",
+                "checkpoint Agent, model, reviewer identity, policy, or reviewer capabilities do not match",
             )
             .into());
+        }
+        Ok(())
+    }
+
+    async fn prepare_run_loop_progress(
+        &self,
+        state: AgentCheckpointState,
+        run: &RunContext,
+        checkpoint: &mut Option<&mut CheckpointCursor>,
+        context: &TerminalCompletionContext<'_>,
+    ) -> Result<(AgentProgress, Option<AgentOutcome>, Option<ModelResponse>), AgentError> {
+        enum Pending {
+            Terminal(ModelResponse, u32),
+            Turn(ModelResponse, u32),
+            Approved(ModelResponse, u32),
+        }
+
+        let pending = match &state.phase {
+            AgentCheckpointPhase::TerminalReviewReady { response, attempt } => {
+                Some(Pending::Terminal(response.as_ref().clone(), *attempt))
+            }
+            AgentCheckpointPhase::TurnReviewReady { response, turn } => {
+                Some(Pending::Turn(response.as_ref().clone(), *turn))
+            }
+            AgentCheckpointPhase::TurnReviewApproved { response, turn } => {
+                Some(Pending::Approved(response.as_ref().clone(), *turn))
+            }
+            AgentCheckpointPhase::ReadyForTurn => None,
+            _ => {
+                return Err(checkpoint_payload_error(
+                    "checkpoint phase is not ready for Agent execution",
+                ));
+            }
+        };
+        let mut progress = AgentProgress::from(state);
+        let mut outcome = None;
+        let mut approved_response = None;
+        match pending {
+            Some(Pending::Terminal(response, attempt)) => {
+                outcome = self
+                    .review_terminal_candidate(
+                        response,
+                        attempt,
+                        run,
+                        &mut progress,
+                        checkpoint,
+                        context,
+                    )
+                    .await?;
+            }
+            Some(Pending::Turn(response, turn)) => {
+                validate_review_turn(turn, progress.turns)?;
+                approved_response = self
+                    .review_turn_candidate(response, run, &mut progress, checkpoint, context)
+                    .await?;
+            }
+            Some(Pending::Approved(response, turn)) => {
+                validate_review_turn(turn, progress.turns)?;
+                approved_response = Some(response);
+            }
+            None => {}
+        }
+        Ok((progress, outcome, approved_response))
+    }
+
+    fn prepare_resume_state(
+        state: &mut AgentCheckpointState,
+        run: &RunContext,
+        policy: ResumePolicy,
+    ) -> Result<(), AgentError> {
+        match state.phase.clone() {
+            AgentCheckpointPhase::TurnInFlight { turn } => {
+                if policy == ResumePolicy::RejectAmbiguous {
+                    return Err(AgentError::AmbiguousCheckpoint { turn });
+                }
+                validate_usage_floor(state.usage, run.budget().usage())?;
+                state.usage = run.budget().usage();
+                state.phase = AgentCheckpointPhase::ReadyForTurn;
+            }
+            AgentCheckpointPhase::TerminalReviewInFlight { response, attempt } => {
+                if policy == ResumePolicy::RejectAmbiguous {
+                    return Err(AgentError::AmbiguousTerminalReview { attempt });
+                }
+                validate_usage_floor(state.usage, run.budget().usage())?;
+                state.usage = run.budget().usage();
+                state.phase = AgentCheckpointPhase::TerminalReviewReady { response, attempt };
+            }
+            AgentCheckpointPhase::TurnReviewInFlight { response, turn } => {
+                if policy == ResumePolicy::RejectAmbiguous {
+                    return Err(AgentError::AmbiguousTurnReview { turn });
+                }
+                validate_usage_floor(state.usage, run.budget().usage())?;
+                state.usage = run.budget().usage();
+                state.phase = AgentCheckpointPhase::TurnReviewReady { response, turn };
+            }
+            AgentCheckpointPhase::TurnReviewApproved { ref response, turn }
+                if !tool_calls_from(&response.content).is_empty() =>
+            {
+                if policy == ResumePolicy::RejectAmbiguous {
+                    return Err(AgentError::AmbiguousCheckpoint { turn });
+                }
+                validate_usage_floor(state.usage, run.budget().usage())?;
+                state.usage = run.budget().usage();
+            }
+            _ => validate_exact_usage(state.usage, run.budget().usage())?,
         }
         Ok(())
     }
@@ -848,6 +1076,33 @@ impl Agent {
             tool_calls: progress.tool_calls,
             delegations: progress.delegations,
             usage: run.budget().usage(),
+            turn_reviewer: self
+                .turn_review
+                .as_ref()
+                .map(|review| review.descriptor.clone()),
+            turn_review_policy: self.turn_review.as_ref().map(|review| review.policy),
+            turn_reviewer_capabilities: self.turn_review.as_ref().map_or_else(Vec::new, |review| {
+                review
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.id)
+                    .collect()
+            }),
+            terminal_reviewer: self
+                .terminal_review
+                .as_ref()
+                .map(|review| review.descriptor.clone()),
+            terminal_review_policy: self.terminal_review.as_ref().map(|review| review.policy),
+            terminal_reviewer_capabilities: self.terminal_review.as_ref().map_or_else(
+                Vec::new,
+                |review| {
+                    review
+                        .capabilities
+                        .iter()
+                        .map(|capability| capability.id)
+                        .collect()
+                },
+            ),
             phase,
             durable_conversation: progress.durable_conversation.clone(),
         }
@@ -887,6 +1142,33 @@ impl Agent {
             tool_calls: outcome.tool_calls,
             delegations: outcome.delegations,
             usage: run.budget().usage(),
+            turn_reviewer: self
+                .turn_review
+                .as_ref()
+                .map(|review| review.descriptor.clone()),
+            turn_review_policy: self.turn_review.as_ref().map(|review| review.policy),
+            turn_reviewer_capabilities: self.turn_review.as_ref().map_or_else(Vec::new, |review| {
+                review
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.id)
+                    .collect()
+            }),
+            terminal_reviewer: self
+                .terminal_review
+                .as_ref()
+                .map(|review| review.descriptor.clone()),
+            terminal_review_policy: self.terminal_review.as_ref().map(|review| review.policy),
+            terminal_reviewer_capabilities: self.terminal_review.as_ref().map_or_else(
+                Vec::new,
+                |review| {
+                    review
+                        .capabilities
+                        .iter()
+                        .map(|capability| capability.id)
+                        .collect()
+                },
+            ),
             phase: AgentCheckpointPhase::Completed {
                 response: Box::new(outcome.response.clone()),
             },
@@ -1049,6 +1331,15 @@ fn validate_tool_call_completion(
 fn checkpoint_payload_error(message: &str) -> AgentError {
     runifold_core::CheckpointError::new(runifold_core::CheckpointErrorKind::InvalidPayload, message)
         .into()
+}
+
+fn validate_review_turn(expected: u32, actual: u32) -> Result<(), AgentError> {
+    if expected != actual {
+        return Err(checkpoint_payload_error(
+            "turn review checkpoint does not match the completed model turn count",
+        ));
+    }
+    Ok(())
 }
 
 fn cancelled_model_error() -> ModelError {

@@ -108,6 +108,12 @@ impl WorkflowReviewVerdict {
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WorkflowReviewError {
+    /// Reviewer construction or composition was invalid.
+    #[error("invalid workflow reviewer configuration: {0}")]
+    InvalidConfiguration(String),
+    /// A reviewer returned a structurally valid but semantically inconsistent decision.
+    #[error("invalid workflow review decision: {0}")]
+    InvalidDecision(String),
     /// Reviewer feedback exceeded the durable checkpoint limit.
     #[error("workflow review feedback exceeds the 1 MiB durable limit")]
     FeedbackTooLarge,
