@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://runifold-docs.hiayun.chatgpt.site/"><img src="https://img.shields.io/badge/docs-Runifold-dca282.svg" alt="Runifold technical documentation"></a>&nbsp;
   <a href="https://docs.rs/runifold/latest/runifold/"><img src="https://img.shields.io/badge/docs-API%20Reference-dca282.svg" alt="API reference"></a>&nbsp;
   <a href="https://crates.io/crates/runifold"><img src="https://img.shields.io/crates/v/runifold.svg?color=dca282" alt="crates.io version"></a>&nbsp;
   <a href="https://crates.io/crates/runifold"><img src="https://img.shields.io/crates/d/runifold.svg?color=dca282" alt="crates.io downloads"></a>&nbsp;
@@ -17,7 +18,9 @@
 </p>
 
 <p align="center">
-  <a href="https://docs.rs/runifold/latest/runifold/">Technical docs</a>
+  <a href="https://runifold-docs.hiayun.chatgpt.site/">Technical docs</a>
+  &nbsp;&bull;&nbsp;
+  <a href="https://docs.rs/runifold/latest/runifold/">API Reference</a>
   &nbsp;&bull;&nbsp;
   <a href="https://crates.io/crates/runifold">Crates.io</a>
   &nbsp;&bull;&nbsp;
@@ -205,7 +208,8 @@ reproduction. Browser deployments must also follow the documented
 
 ## Technical documentation
 
-- [API reference / Runifold technical site](https://docs.rs/runifold/latest/runifold/)
+- [Runifold technical site](https://runifold-docs.hiayun.chatgpt.site/)
+- [API reference](https://docs.rs/runifold/latest/runifold/)
 - [Project charter and architectural laws](docs/CHARTER.md)
 - [Provider support matrix](docs/PROVIDERS.md)
 - [Reliability evidence](docs/RELIABILITY.md)
