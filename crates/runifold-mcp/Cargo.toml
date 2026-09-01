@@ -24,10 +24,10 @@ base64 = "0.23.0"
 eventsource-stream.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
-runifold-core = { version = "0.9.0", path = "../runifold-core" }
-runifold-model = { version = "0.9.0", path = "../runifold-model" }
-runifold-tool = { version = "0.9.0", path = "../runifold-tool" }
-runifold-workflow = { version = "0.9.0", path = "../runifold-workflow", optional = true }
+runifold-core = { version = "0.9.1", path = "../runifold-core" }
+runifold-model = { version = "0.9.1", path = "../runifold-model" }
+runifold-tool = { version = "0.9.1", path = "../runifold-tool" }
+runifold-workflow = { version = "0.9.1", path = "../runifold-workflow", optional = true }
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

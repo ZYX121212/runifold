@@ -6,6 +6,14 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-01
+
+### Documentation
+
+- Redesigned the project README around a concise product overview, quickstart,
+  package-selection guide, Provider support, executable reliability claims,
+  and direct links to the Runifold API reference and technical documentation.
+
 ## [0.9.0] - 2026-08-27
 
 ### Added
@@ -695,6 +703,7 @@ This release contains pre-1.0 breaking API changes.
   security policy, CycloneDX SBOMs, package verification, and controlled
   crates.io publication.
 
-[Unreleased]: https://github.com/ZYX121212/runifold/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/ZYX121212/runifold/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/ZYX121212/runifold/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/ZYX121212/runifold/compare/v0.8.2...v0.9.0
 [0.1.0]: https://github.com/ZYX121212/runifold/releases/tag/v0.1.0
