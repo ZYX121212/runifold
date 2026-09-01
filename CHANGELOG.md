@@ -8,6 +8,11 @@ breaking changes require a minor-version increment.
 
 ## [0.9.1] - 2026-09-01
 
+### Fixed
+
+- Updated the locked `chacha20` dependency from the yanked 0.10.1 release to
+  0.10.2 so RustSec supply-chain policy checks pass for release builds.
+
 ### Documentation
 
 - Redesigned the project README around a concise product overview, quickstart,
