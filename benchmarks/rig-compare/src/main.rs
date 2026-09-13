@@ -40,6 +40,26 @@ struct RigTarget {
     model: openai::completion::CompletionModel,
 }
 
+struct BoundedTarget {
+    inner: Arc<dyn BenchmarkTarget>,
+    timeout: Duration,
+}
+
+impl BenchmarkTarget for BoundedTarget {
+    fn execute(&self) -> BenchmarkFuture<'_> {
+        Box::pin(async move {
+            let started = Instant::now();
+            match tokio::time::timeout(self.timeout, self.inner.execute()).await {
+                Ok(outcome) => outcome,
+                Err(_) => BenchmarkInvocation::failure(
+                    BenchmarkFailureKind::DeadlineExceeded,
+                    started.elapsed(),
+                ),
+            }
+        })
+    }
+}
+
 impl BenchmarkTarget for RigTarget {
     fn execute(&self) -> BenchmarkFuture<'_> {
         Box::pin(run_rig(self.model.clone()))
@@ -224,6 +244,7 @@ async fn main() -> Result<()> {
             "rounds": settings.rounds,
             "starting_order": settings.starting_order.as_str(),
             "order_strategy": "alternating",
+            "invocation_deadline_seconds": 30,
             "expected_output": EXPECTED_OUTPUT,
             "request": {
                 "model": MODEL,
@@ -289,6 +310,10 @@ async fn benchmark_framework(
     round: usize,
     order: ExecutionOrder,
 ) -> Result<ProviderBenchmarkReport> {
+    let target = Arc::new(BoundedTarget {
+        inner: target,
+        timeout: Duration::from_secs(30),
+    });
     benchmark(label, target, settings.plan(label, round, order))
         .await
         .with_context(|| format!("{label} benchmark failed"))
@@ -674,6 +699,28 @@ fn rust_version() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_stalled_framework_is_reported_as_a_deadline_failure() {
+        struct Stalled;
+        impl BenchmarkTarget for Stalled {
+            fn execute(&self) -> BenchmarkFuture<'_> {
+                Box::pin(std::future::pending())
+            }
+        }
+        let target = Arc::new(BoundedTarget {
+            inner: Arc::new(Stalled),
+            timeout: Duration::from_millis(1),
+        });
+        let report = benchmark("stalled", target, BenchmarkPlan::new(NonZeroUsize::MIN))
+            .await
+            .unwrap();
+        assert_eq!(report.failures, 1);
+        assert_eq!(
+            report.failure_counts[0].kind,
+            BenchmarkFailureKind::DeadlineExceeded
+        );
+    }
 
     #[test]
     fn median_handles_odd_even_and_empty_samples() {

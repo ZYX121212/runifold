@@ -64,3 +64,7 @@ latency/throughput bounds. Both passing and failing runs retain raw round
 artifacts. A confidence interval crossing a bound fails the gate; it is not
 evidence that all metrics outperform Rig. Preserve earlier failed runs when
 interpreting the release evidence.
+
+Each invocation has a symmetric 30-second deadline. A stalled framework records
+a deadline failure rather than waiting for the entire CI timeout. Repeating
+loopback servers reap completed handlers while accepting new requests.

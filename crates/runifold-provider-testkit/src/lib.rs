@@ -496,7 +496,7 @@ fn serve_repeating(
     stats: &Arc<ServerCounters>,
     shutdown: &AtomicBool,
 ) {
-    let mut workers = Vec::with_capacity(request_count);
+    let mut workers = Vec::new();
     for _ in 0..request_count {
         if shutdown.load(Ordering::Acquire) {
             break;
@@ -508,6 +508,9 @@ fn serve_repeating(
         if shutdown.load(Ordering::Acquire) {
             break;
         }
+        // Finished joinable threads retain resources until joined. Long paired
+        // benchmarks must retain only active handlers, not every past request.
+        reap_finished(&mut workers, failure);
         let exchange = exchange.clone();
         let observed = Arc::clone(observed);
         let failure = Arc::clone(failure);
@@ -519,6 +522,19 @@ fn serve_repeating(
     for worker in workers {
         if worker.join().is_err() {
             set_failure(failure, "cassette connection handler panicked");
+        }
+    }
+}
+
+fn reap_finished(workers: &mut Vec<JoinHandle<()>>, failure: &Mutex<Option<String>>) {
+    let mut index = 0;
+    while index < workers.len() {
+        if workers[index].is_finished() {
+            if workers.swap_remove(index).join().is_err() {
+                set_failure(failure, "cassette connection handler panicked");
+            }
+        } else {
+            index += 1;
         }
     }
 }
@@ -774,6 +790,28 @@ mod tests {
     use serde_json::json;
 
     use super::{CassetteServer, HttpExchange, ResponseChunk, ScriptedResponse, peer_closed};
+
+    #[test]
+    fn finished_handlers_are_reaped_while_a_peer_is_still_running() {
+        let (release, receive) = std::sync::mpsc::channel::<()>();
+        let active = std::thread::spawn(move || {
+            let _ = receive.recv();
+        });
+        let finished = std::thread::spawn(|| {});
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !finished.is_finished() {
+            assert!(std::time::Instant::now() < deadline, "worker must finish");
+            std::thread::yield_now();
+        }
+        let mut workers = vec![active, finished];
+        let failure = std::sync::Mutex::new(None);
+        super::reap_finished(&mut workers, &failure);
+        assert_eq!(workers.len(), 1, "completed handlers must not accumulate");
+        assert!(!workers[0].is_finished());
+        release.send(()).unwrap();
+        workers.pop().unwrap().join().unwrap();
+        assert!(failure.into_inner().unwrap().is_none());
+    }
 
     #[test]
     fn consumed_request_waits_for_writer_completion_and_wakes_all_waiters() {

@@ -34,6 +34,8 @@ breaking changes require a minor-version increment.
 
 - Added asynchronous deadline-bounded cassette completion waits and regression
   coverage for response-writer completion races in concurrent Provider tests.
+  Repeating cassettes now join finished handlers continuously so long benchmarks
+  do not retain one thread resource set per historical request.
 - Rechecked Effect lifecycle before dispatch, including after remote reconciliation.
 - Repaired standalone Rig source dependencies and refreshed its lockfile; both
   CI and release checks now compile and test the independent workspace.
