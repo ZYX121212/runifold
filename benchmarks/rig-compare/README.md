@@ -57,3 +57,10 @@ This loopback test isolates client-side serialization, HTTP transport, SSE
 decoding, stream lifecycle, and scheduler overhead. It is not evidence about
 real-provider latency, Agent quality, ecosystem breadth, or an overall
 framework winner.
+
+CI fixes the release comparison at 100 paired rounds of 1,000 requests (100
+warmups per framework per round) to narrow uncertainty near the unchanged 10%
+latency/throughput bounds. Both passing and failing runs retain raw round
+artifacts. A confidence interval crossing a bound fails the gate; it is not
+evidence that all metrics outperform Rig. Preserve earlier failed runs when
+interpreting the release evidence.

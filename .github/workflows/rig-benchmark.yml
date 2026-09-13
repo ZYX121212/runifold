@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 45
     env:
       CARGO_TERM_COLOR: always
-      RUNIFOLD_BENCH_ROUNDS: "20"
+      RUNIFOLD_BENCH_ROUNDS: "100"
       RUNIFOLD_BENCH_RUNS: "1000"
       RUNIFOLD_BENCH_WARMUP: "100"
       RUNIFOLD_BENCH_CONCURRENCY: "32"
@@ -40,6 +40,7 @@ jobs:
         run: cargo run --release --locked --manifest-path benchmarks/rig-compare/Cargo.toml
 
       - name: Upload raw rounds and aggregate confidence intervals
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: rig-comparison-${{ github.sha }}

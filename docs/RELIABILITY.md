@@ -32,7 +32,7 @@ responses are valuable, but they are not labelled as production verification.
 | AWS S3 IAM/KMS integration | Not yet verified | Planned |
 | Multi-hour network/database soak | Scheduled three-hour repetition of real PostgreSQL, SQLite Session, Effect, and Provider fault suites with credential-free evidence | Scheduled |
 | Browser Service Workers | Not yet verified | Planned |
-| Reproducible Rig framework benchmark | Scheduled 20×1000 paired rounds, alternating order, raw artifacts, bootstrap confidence intervals, and non-regression enforcement | Scheduled |
+| Reproducible Rig framework benchmark | Scheduled 100×1000 paired rounds, alternating order, raw artifacts, bootstrap confidence intervals, and non-regression enforcement | Scheduled |
 | Independent third-party reproduction | Requires an external maintainer to run and attest the public benchmark contract | External evidence required |
 
 ## Rich Tool and artifact evidence
