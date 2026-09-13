@@ -205,6 +205,8 @@ impl EffectExecutor {
         run: &RunContext,
         handler: &dyn EffectHandler,
     ) -> Result<EffectOutcome, EffectExecutorError> {
+        // Reconciliation may have awaited external work since the entry check.
+        preflight(&record.request, run)?;
         let started = record.next(EffectStatus::Started)?;
         self.store
             .compare_and_swap(&started, Some(record.revision))?;
@@ -215,6 +217,7 @@ impl EffectExecutor {
             }),
         )?;
 
+        preflight(&started.request, run)?;
         let context = EffectExecutionContext::for_run(run);
         let cancellation = context.cancellation().clone();
         let execution = handler.execute(&started.request, context);
@@ -701,6 +704,49 @@ mod tests {
 
         assert!(!outcome.replayed);
         assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cancellation_during_reconciliation_prevents_new_dispatch() {
+        struct CancelThenNotExecuted(runifold_core::CancellationToken);
+        impl EffectReconciler for CancelThenNotExecuted {
+            fn reconcile(
+                &self,
+                _: &EffectRequest,
+                _: EffectExecutionContext,
+            ) -> EffectFuture<'_, Result<EffectReconciliation, RunError>> {
+                Box::pin(async {
+                    self.0.cancel();
+                    Ok(EffectReconciliation::NotExecuted)
+                })
+            }
+        }
+        let capability = capability(EffectClass::NonIdempotentWrite);
+        let run = run_with(&capability, None);
+        let store = Arc::new(InMemoryEffectStore::new());
+        let request = request(
+            &capability,
+            Some("cancel-before-redispatch"),
+            json!({"publish": true}),
+        );
+        let prepared = EffectRecord::prepared(request.clone());
+        store.compare_and_swap(&prepared, None).unwrap();
+        store
+            .compare_and_swap(&prepared.next(EffectStatus::Started).unwrap(), Some(0))
+            .unwrap();
+        let handler = CountingHandler::new();
+        let error =
+            futures_executor::block_on(EffectExecutor::new(store.clone()).execute_reconciled(
+                request.clone(),
+                &run,
+                &handler,
+                &CancelThenNotExecuted(run.cancellation().clone()),
+                EffectRecoveryPolicy::RejectAmbiguous,
+            ))
+            .unwrap_err();
+        assert_eq!(error.kind, EffectExecutorErrorKind::Cancelled);
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(store.load(request.effect_id).unwrap().unwrap().revision, 1);
     }
 
     #[test]

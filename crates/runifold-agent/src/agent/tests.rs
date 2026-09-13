@@ -2881,3 +2881,169 @@ fn message_text(message: &runifold_model::Message) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+struct ConcurrentProbeTool {
+    descriptor: ToolDescriptor,
+    active: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+    trace: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Tool for ConcurrentProbeTool {
+    fn descriptor(&self) -> &ToolDescriptor {
+        &self.descriptor
+    }
+
+    fn invoke(
+        &self,
+        input: Value,
+        _context: ToolContext,
+    ) -> ToolFuture<'_, Result<ToolOutput, ToolError>> {
+        Box::pin(async move {
+            let id = input["id"].as_str().expect("test supplies id");
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(active, Ordering::SeqCst);
+            self.trace
+                .lock()
+                .expect("trace mutex")
+                .push(format!("start:{id}"));
+            let mut polls = input["polls"].as_u64().expect("test supplies polls");
+            futures_util::future::poll_fn(|context| {
+                if polls == 0 {
+                    return std::task::Poll::Ready(());
+                }
+                polls -= 1;
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            })
+            .await;
+            self.trace
+                .lock()
+                .expect("trace mutex")
+                .push(format!("end:{id}"));
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            if input["fail"] == true {
+                return Err(ToolError::local(ToolErrorKind::Execution, "probe failure"));
+            }
+            Ok(ToolOutput::model_visible(input))
+        })
+    }
+}
+
+fn verify_tool_concurrency(limit: usize, fail: bool, budget_limit: Option<u64>) {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "plan",
+        vec![
+            tool_call("slow", "read", json!({"id":"slow", "polls":4,"fail":fail})),
+            tool_call("fast", "read", json!({"id":"fast", "polls":1})),
+            tool_call("write", "write", json!({"id":"write", "polls":1})),
+            tool_call("last", "read", json!({"id":"last", "polls":1})),
+        ],
+        FinishReason::ToolCalls,
+    ));
+    model.enqueue(response_events(
+        "done",
+        vec![ContentPart::text("done")],
+        FinishReason::Stop,
+    ));
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let trace = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut registry = ToolRegistry::new();
+    let mut capabilities = CapabilitySet::new();
+    for (name, effect) in [
+        ("read", EffectClass::ReadOnly),
+        ("write", EffectClass::NonIdempotentWrite),
+    ] {
+        let mut descriptor = EchoTool::new().descriptor;
+        descriptor.name = name.into();
+        descriptor.effect = effect;
+        capabilities.grant(descriptor.capability());
+        registry
+            .register(Arc::new(ConcurrentProbeTool {
+                descriptor,
+                active: active.clone(),
+                peak: peak.clone(),
+                trace: trace.clone(),
+            }))
+            .expect("unique tools");
+    }
+    let agent = Agent::new(
+        "concurrency",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "script"),
+    )
+    .tools(registry)
+    .tool_concurrency(std::num::NonZeroUsize::new(limit).expect("positive limit"))
+    .with_config(AgentConfig {
+        tool_error_policy: ToolErrorPolicy::FailFast,
+        ..AgentConfig::default()
+    });
+    let run = RunContext::root(
+        BudgetTracker::new(Budget {
+            tool_calls: budget_limit,
+            ..Budget::default()
+        }),
+        capabilities,
+    );
+    let outcome = futures_executor::block_on(agent.run("go", &run));
+    let trace = trace.lock().expect("trace mutex");
+    assert_eq!(
+        active.load(Ordering::SeqCst),
+        0,
+        "all started calls drained"
+    );
+    assert!(peak.load(Ordering::SeqCst) <= limit);
+    if fail || budget_limit.is_some() {
+        assert!(outcome.is_err());
+        assert!(!trace.iter().any(|event| event == "start:write"));
+        assert_eq!(model.recorded_requests().len(), 1);
+        if let Some(maximum) = budget_limit {
+            assert!(run.budget().usage().tool_calls <= maximum);
+        }
+    } else {
+        let outcome = outcome.expect("execution succeeds");
+        assert_eq!(outcome.tool_calls, 4);
+        let position = |event: &str| {
+            trace
+                .iter()
+                .position(|item| item == event)
+                .expect("event recorded")
+        };
+        assert!(position("start:write") > position("end:slow"));
+        assert!(position("start:write") > position("end:fast"));
+        assert!(position("start:last") > position("end:write"));
+        let ids: Vec<_> = outcome
+            .transcript
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|part| match part {
+                ContentPart::ToolResult(result) => Some(result.call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, ["slow", "fast", "write", "last"]);
+        assert_eq!(peak.load(Ordering::SeqCst), limit.min(2));
+    }
+}
+
+#[test]
+fn bounded_tool_concurrency_preserves_order_and_write_barriers() {
+    verify_tool_concurrency(2, false, None);
+}
+
+#[test]
+fn serial_tool_configuration_keeps_one_active_call() {
+    verify_tool_concurrency(1, false, None);
+}
+
+#[test]
+fn concurrent_tool_failure_drains_siblings_before_returning() {
+    verify_tool_concurrency(2, true, None);
+}
+
+#[test]
+fn concurrent_tools_share_the_same_atomic_budget() {
+    verify_tool_concurrency(2, false, Some(1));
+}

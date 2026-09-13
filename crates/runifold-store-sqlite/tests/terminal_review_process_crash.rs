@@ -312,7 +312,10 @@ impl CountingTool {
     fn new(calls: Arc<std::sync::atomic::AtomicUsize>) -> Self {
         Self {
             descriptor: ToolDescriptor {
-                id: CapabilityId::new(),
+                // Persisted contracts require the same capability identity after restart.
+                id: CapabilityId::from_uuid(Uuid::from_u128(
+                    0x72d95f4b_b593_4c88_8fb7_6edc0bbc2d01,
+                )),
                 name: "count_once".into(),
                 version: "1".into(),
                 description: "count one test invocation".into(),

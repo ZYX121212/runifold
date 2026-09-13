@@ -1,7 +1,9 @@
 //! Multi-turn conversation, summary, and semantic-memory boundaries.
 
 mod durable;
+mod session;
 mod store;
+pub use session::{AgentSession, AgentSessionError};
 mod summarizer;
 
 pub use durable::{

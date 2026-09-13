@@ -13,6 +13,19 @@ artifacts, then publishing immutable versions to crates.io.
 - `cargo-semver-checks` is a release gate after the first release tag exists.
   Its output supplements review; it cannot prove all Rust API compatibility.
 
+## 0.10 release scope and Agent upgrades
+
+Read [the supported contracts and upgrade guide](RELEASE-0.10.md). Agent recovery
+now requires matching declarative definitions. Drain 0.9 Agent work with the
+original workers; keep their builds available for old checkpoints. Session
+admission schema 3 rejects earlier unpublished schemas 1/2. Never silently attach
+current definitions to old data or assume database rollback undoes external work.
+
+Before tagging, validate one candidate revision with CI, the reference application,
+the 180-minute soak and the standalone benchmark. Resolve failures rather than
+moving an already-published tag. Store the evidence links in the GitHub release
+notes, including any deliberately untested live-service boundaries.
+
 ## Workflow checkpoint compatibility
 
 Runifold 0.8 writes workflow checkpoint schema v5 and reads schemas v3 through

@@ -170,6 +170,23 @@ jobs:
       - name: Verify publish dependency order
         run: scripts/publish-crates.sh --list
 
+      - name: Verify standalone benchmark against current source
+        run: cargo test --manifest-path benchmarks/rig-compare/Cargo.toml --locked
+
+      - name: Verify durable publication reference application
+        env:
+          RUNIFOLD_EVIDENCE_REVISION: ${{ github.sha }}
+        run: |
+          cargo build -p runifold --example durable_publish --features sqlite-bundled --locked
+          python3 scripts/verify-durable-publish.py target/debug/examples/durable_publish
+
+      - name: Upload reference application evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: durable-publish-${{ github.sha }}
+          path: target/reliability-evidence/durable-publish.json
+          if-no-files-found: error
+
       - name: Assemble distributable packages
         run: cargo package --workspace --locked --no-verify
 

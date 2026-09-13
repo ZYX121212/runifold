@@ -1281,7 +1281,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-tungstenite 0.28.0",
+ "tokio-tungstenite",
  "tracing",
  "tracing-futures",
  "url",
@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-core"
-version = "0.5.4"
+version = "0.10.0"
 dependencies = [
  "event-listener",
  "serde",
@@ -1330,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-model"
-version = "0.5.4"
+version = "0.10.0"
 dependencies = [
  "async-stream",
  "base64",
@@ -1347,8 +1347,10 @@ dependencies = [
 
 [[package]]
 name = "runifold-provider-testkit"
-version = "0.5.4"
+version = "0.10.0"
 dependencies = [
+ "event-listener",
+ "futures-timer",
  "futures-util",
  "runifold-core",
  "runifold-model",
@@ -1359,16 +1361,14 @@ dependencies = [
 
 [[package]]
 name = "runifold-providers"
-version = "0.5.4"
+version = "0.10.0"
 dependencies = [
  "async-stream",
  "base64",
  "eventsource-stream",
- "futures-channel",
  "futures-timer",
  "futures-util",
  "httpdate",
- "js-sys",
  "reqwest",
  "runifold-core",
  "runifold-model",
@@ -1378,17 +1378,12 @@ dependencies = [
  "serde_json",
  "smallvec",
  "thiserror",
- "tokio",
- "tokio-tungstenite 0.27.0",
  "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
 name = "runifold-retrieval"
-version = "0.5.4"
+version = "0.10.0"
 dependencies = [
  "futures-util",
  "runifold-core",
@@ -1879,22 +1874,6 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "489a59b6730eda1b0171fcfda8b121f4bee2b35cba8645ca35c5f7ba3eb736c1"
-dependencies = [
- "futures-util",
- "log",
- "rustls",
- "rustls-pki-types",
- "tokio",
- "tokio-rustls",
- "tungstenite 0.27.0",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "tokio-tungstenite"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
@@ -1905,7 +1884,7 @@ dependencies = [
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
- "tungstenite 0.28.0",
+ "tungstenite",
  "webpki-roots 0.26.11",
 ]
 
@@ -2046,25 +2025,6 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
-
-[[package]]
-name = "tungstenite"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eadc29d668c91fcc564941132e17b28a7ceb2f3ebf0b9dae3e03fd7a6748eb0d"
-dependencies = [
- "bytes",
- "data-encoding",
- "http",
- "httparse",
- "log",
- "rand 0.9.5",
- "rustls",
- "rustls-pki-types",
- "sha1",
- "thiserror",
- "utf-8",
-]
 
 [[package]]
 name = "tungstenite"

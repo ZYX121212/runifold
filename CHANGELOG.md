@@ -6,6 +6,44 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-13
+
+### Added
+
+- Added `AgentSession` with persistent pre-execution conversation admission,
+  stable request replay, and explicit recovery after the prior owner exits.
+- Added durable conversation streaming and post-commit `ConversationCommitted`
+  events, including completed-checkpoint replay without model work.
+- Added opt-in bounded read-only tool concurrency with ordered results, serial
+  write barriers, sibling draining, and shared budget enforcement.
+- Added an executable offline SQLite session example.
+- Added opt-in checkpointed summary Agents to sessions, persisted batch progress,
+  summary commit acknowledgement recovery, shared-budget restoration, bounded
+  compaction across retries, and summary progress stream events.
+- Admission records now use schema 3 and bind the main Agent and Reviewer
+  definitions before the first execution checkpoint; occupied records from the earlier unreleased
+  session prototype must be drained with that build before upgrading.
+
+### Changed
+
+- **Breaking:** checkpoint recovery now requires a matching declarative
+  `AgentRecoveryContract`. Legacy checkpoints can be inspected but require the
+  previous worker version to finish. See RFC 0073 and the 0.10 upgrade guide.
+
+### Fixed
+
+- Added asynchronous deadline-bounded cassette completion waits and regression
+  coverage for response-writer completion races in concurrent Provider tests.
+- Rechecked Effect lifecycle before dispatch, including after remote reconciliation.
+- Repaired standalone Rig source dependencies and refreshed its lockfile; both
+  CI and release checks now compile and test the independent workspace.
+- Soak now exercises SQLite Session recovery and retains sanitized failure evidence.
+- Added an executable report-publication acceptance harness with forced process
+  kill, denied dispatch and receipt reconciliation without repeated effects.
+- Graduated from pre-alpha with documented supported contracts and migration
+  boundaries, retaining synchronized pre-1.0 SemVer across public crates.
+- The quickstart example now runs its async prompt and prints the result.
+
 ## [0.9.1] - 2026-09-01
 
 ### Fixed

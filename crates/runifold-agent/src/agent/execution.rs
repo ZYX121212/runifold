@@ -248,7 +248,44 @@ impl Agent {
         store: Arc<dyn DurableConversationStore>,
         request: DurableConversationRequest,
     ) -> AgentFuture<'a, Result<AgentConversationOutcome, AgentConversationError>> {
-        let input = input.into();
+        self.run_durable_conversation_observed(
+            input.into(),
+            run,
+            store,
+            request,
+            Arc::new(NoopObserver),
+        )
+    }
+
+    /// Streams a durable turn, reporting success only after its atomic commit.
+    /// Polling drives execution; dropping the stream stops local work.
+    pub fn stream_durable_conversation<'a>(
+        &'a self,
+        input: impl Into<String> + Send + 'a,
+        run: &'a RunContext,
+        store: Arc<dyn DurableConversationStore>,
+        request: DurableConversationRequest,
+    ) -> crate::DurableConversationEventStream<'a> {
+        let observer = Arc::new(BufferedObserver::durable());
+        let events = observer.events();
+        let execution = self.run_durable_conversation_observed(
+            input.into(),
+            run,
+            store,
+            request,
+            observer.clone(),
+        );
+        Self::durable_event_stream(execution, observer, events)
+    }
+
+    pub(crate) fn run_durable_conversation_observed<'a>(
+        &'a self,
+        input: String,
+        run: &'a RunContext,
+        store: Arc<dyn DurableConversationStore>,
+        request: DurableConversationRequest,
+        observer: Arc<dyn AgentObserver>,
+    ) -> AgentFuture<'a, Result<AgentConversationOutcome, AgentConversationError>> {
         Box::pin(async move {
             let DurableConversationRequest {
                 checkpoint_id,
@@ -312,14 +349,7 @@ impl Agent {
             let mut cursor = CheckpointCursor::create(&checkpoint, run, &state)
                 .map_err(AgentConversationError::Run)?;
             let outcome = self
-                .execute_state(
-                    state,
-                    run,
-                    Some(&mut cursor),
-                    Arc::new(NoopObserver),
-                    true,
-                    false,
-                )
+                .execute_state(state, run, Some(&mut cursor), observer, true, false)
                 .await
                 .map_err(AgentConversationError::Run)?;
             self.commit_durable_outcome(store.as_ref(), run, &cursor, durable, outcome)
@@ -334,6 +364,61 @@ impl Agent {
         checkpoint_id: CheckpointId,
         run: &'a RunContext,
         policy: ResumePolicy,
+    ) -> AgentFuture<'a, Result<AgentConversationOutcome, AgentConversationError>> {
+        self.resume_durable_conversation_observed(
+            store,
+            checkpoint_id,
+            run,
+            policy,
+            Arc::new(NoopObserver),
+        )
+    }
+
+    /// Streams checkpoint recovery, including an already committed result without rerunning it.
+    pub fn stream_resume_durable_conversation<'a>(
+        &'a self,
+        store: Arc<dyn DurableConversationStore>,
+        checkpoint_id: CheckpointId,
+        run: &'a RunContext,
+        policy: ResumePolicy,
+    ) -> crate::DurableConversationEventStream<'a> {
+        let observer = Arc::new(BufferedObserver::durable());
+        let events = observer.events();
+        let execution = self.resume_durable_conversation_observed(
+            store,
+            checkpoint_id,
+            run,
+            policy,
+            observer.clone(),
+        );
+        Self::durable_event_stream(execution, observer, events)
+    }
+
+    fn durable_event_stream(
+        execution: AgentFuture<'_, Result<AgentConversationOutcome, AgentConversationError>>,
+        observer: Arc<BufferedObserver>,
+        events: Arc<std::sync::Mutex<std::collections::VecDeque<AgentStreamEvent>>>,
+    ) -> crate::DurableConversationEventStream<'_> {
+        AgentEventStream::new(
+            Box::pin(async move {
+                let committed = execution.await?;
+                observer.emit(AgentStreamEvent::ConversationCommitted {
+                    outcome: committed.outcome.clone(),
+                    conversation_version: committed.conversation_version,
+                });
+                Ok(committed.outcome)
+            }),
+            events,
+        )
+    }
+
+    pub(crate) fn resume_durable_conversation_observed<'a>(
+        &'a self,
+        store: Arc<dyn DurableConversationStore>,
+        checkpoint_id: CheckpointId,
+        run: &'a RunContext,
+        policy: ResumePolicy,
+        observer: Arc<dyn AgentObserver>,
     ) -> AgentFuture<'a, Result<AgentConversationOutcome, AgentConversationError>> {
         Box::pin(async move {
             let checkpoint_store: Arc<dyn CheckpointStore> = store.clone();
@@ -374,14 +459,7 @@ impl Agent {
                 .map_err(AgentConversationError::Run)?;
             let mut cursor = CheckpointCursor::loaded(&checkpoint, envelope);
             let outcome = self
-                .execute_state(
-                    state,
-                    run,
-                    Some(&mut cursor),
-                    Arc::new(NoopObserver),
-                    false,
-                    false,
-                )
+                .execute_state(state, run, Some(&mut cursor), observer, false, false)
                 .await
                 .map_err(AgentConversationError::Run)?;
             self.commit_durable_outcome(store.as_ref(), run, &cursor, durable, outcome)
@@ -457,6 +535,7 @@ impl Agent {
         execution_id: String,
     ) -> AgentCheckpointState {
         AgentCheckpointState {
+            recovery_contract: Some(self.recovery_contract()),
             execution_id,
             agent: self.name.clone(),
             model: self.model_ref.clone(),
@@ -912,7 +991,53 @@ impl Agent {
         Ok(())
     }
 
+    /// Returns the declarative contract checked before checkpoint recovery.
+    /// Custom tools and child agents must maintain stable IDs and versions.
+    pub fn recovery_contract(&self) -> crate::AgentRecoveryContract {
+        crate::AgentRecoveryContract {
+            instructions: self.instructions.clone(),
+            context: if self.context.is_empty() {
+                Vec::new()
+            } else {
+                vec![super::retrieval::untrusted_context_message(&self.context)]
+            },
+            tools: self
+                .tools
+                .model_specs()
+                .iter()
+                .filter_map(|spec| self.tools.descriptor(&spec.name).cloned())
+                .collect(),
+            agents: self
+                .agents
+                .model_specs()
+                .iter()
+                .filter_map(|spec| self.agents.descriptor(&spec.name).cloned())
+                .collect(),
+            retrieval: self
+                .dynamic_context
+                .iter()
+                .map(|source| (source.retriever.descriptor().capability(), source.limit))
+                .collect(),
+            generation: self.generation.clone(),
+            output_format: self.output_format.clone(),
+            response_mode: self.response_mode,
+            provider_tools: self.provider_tools.clone(),
+            provider_options: self.provider_options.clone(),
+            config: self.config.clone(),
+            tool_concurrency: self.tool_concurrency,
+            min_successful_tool_calls: self.min_successful_tool_calls,
+            completion: self.completion_requirement,
+            retry_safe_effects: self.effect_recovery
+                == runifold_effect::EffectRecoveryPolicy::RetrySafe,
+        }
+    }
+
     fn validate_checkpoint_identity(&self, state: &AgentCheckpointState) -> Result<(), AgentError> {
+        if state.recovery_contract.as_ref() != Some(&self.recovery_contract()) {
+            return Err(checkpoint_payload_error(
+                "checkpoint execution contract is missing or differs from the configured Agent",
+            ));
+        }
         let terminal_reviewer = self
             .terminal_review
             .as_ref()
@@ -1068,6 +1193,7 @@ impl Agent {
         phase: AgentCheckpointPhase,
     ) -> AgentCheckpointState {
         AgentCheckpointState {
+            recovery_contract: Some(self.recovery_contract()),
             execution_id: progress.execution_id.clone(),
             agent: self.name.clone(),
             model: self.model_ref.clone(),
@@ -1134,6 +1260,7 @@ impl Agent {
             .cloned()
             .collect();
         let state = AgentCheckpointState {
+            recovery_contract: Some(self.recovery_contract()),
             execution_id: cursor.id().to_string(),
             agent: self.name.clone(),
             model: self.model_ref.clone(),

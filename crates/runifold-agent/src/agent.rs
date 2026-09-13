@@ -72,7 +72,7 @@ impl std::fmt::Debug for DynamicContext {
 }
 
 /// How the agent handles tool failures that are safe for model recovery.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum ToolErrorPolicy {
     /// Return safe execution failures to the model as failed tool results.
@@ -83,7 +83,7 @@ pub enum ToolErrorPolicy {
 }
 
 /// Local bounds and recovery behavior for an agent.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentConfig {
     /// Local turn bound in addition to the shared run budget.
     pub max_turns: u32,
@@ -117,6 +117,7 @@ pub struct Agent {
     pub(crate) effects: EffectExecutor,
     pub(crate) effect_recovery: EffectRecoveryPolicy,
     pub(crate) config: AgentConfig,
+    pub(crate) tool_concurrency: std::num::NonZeroUsize,
     pub(crate) min_successful_tool_calls: u32,
     pub(crate) output_format: OutputFormat,
     pub(crate) generation: GenerationOptions,
@@ -153,6 +154,7 @@ impl Agent {
             effects: EffectExecutor::new(Arc::new(InMemoryEffectStore::new())),
             effect_recovery: EffectRecoveryPolicy::RejectAmbiguous,
             config: AgentConfig::default(),
+            tool_concurrency: std::num::NonZeroUsize::MIN,
             min_successful_tool_calls: 0,
             output_format: OutputFormat::Text,
             generation: GenerationOptions::default(),
@@ -164,6 +166,15 @@ impl Agent {
             turn_review: None,
             terminal_review: None,
         }
+    }
+
+    /// Limits concurrent calls in each contiguous batch of read-only local tools.
+    /// Defaults to one. Writes, unknown tools, and child agents are serial barriers.
+    /// Results retain model order; started siblings are drained before an error returns.
+    #[must_use]
+    pub const fn tool_concurrency(mut self, limit: std::num::NonZeroUsize) -> Self {
+        self.tool_concurrency = limit;
+        self
     }
 
     /// Appends a system instruction.

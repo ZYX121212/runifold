@@ -205,6 +205,14 @@ pub enum CassetteError {
         /// Number of scripted exchanges.
         expected: usize,
     },
+    /// Handlers did not all finish successfully before the completion deadline.
+    #[error("cassette completed {completed} of {expected} responses before its deadline")]
+    CompletionTimeout {
+        /// Successfully written responses.
+        completed: usize,
+        /// Expected responses.
+        expected: usize,
+    },
 }
 
 /// A loopback server executing a fixed sequence of HTTP exchanges.
@@ -236,6 +244,7 @@ struct ServerCounters {
     completed: AtomicUsize,
     in_flight: AtomicUsize,
     max_in_flight: AtomicUsize,
+    changed: event_listener::Event,
 }
 
 impl CassetteServer {
@@ -349,6 +358,8 @@ impl CassetteServer {
     }
 
     /// Verifies that all exchanges matched and were consumed.
+    /// This snapshot does not wait for response writers. Use
+    /// [`Self::wait_until_finished`] before asserting completion counters.
     ///
     /// # Errors
     ///
@@ -374,6 +385,45 @@ impl CassetteServer {
             });
         }
         Ok(())
+    }
+
+    /// Waits asynchronously for all successful response writes, with a deadline.
+    /// Registering before reading the counter prevents missed completion wakes.
+    /// This does not block an async executor thread or stop the server on timeout.
+    ///
+    /// # Errors
+    /// Returns a recorded mismatch or a timeout if responses remain incomplete.
+    pub async fn wait_until_finished(
+        &self,
+        timeout: Duration,
+    ) -> Result<ServerStats, CassetteError> {
+        let completion = async {
+            loop {
+                let listener = self.stats.changed.listen();
+                let stats = self.stats();
+                if stats.completed == self.expected {
+                    self.assert_finished()?;
+                    return Ok(stats);
+                }
+                if let Some(message) = self
+                    .failure
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+                {
+                    return Err(CassetteError::RequestMismatch(message));
+                }
+                listener.await;
+            }
+        };
+        futures_util::pin_mut!(completion);
+        match futures_util::future::select(completion, futures_timer::Delay::new(timeout)).await {
+            futures_util::future::Either::Left((result, _)) => result,
+            futures_util::future::Either::Right(_) => Err(CassetteError::CompletionTimeout {
+                completed: self.stats().completed,
+                expected: self.expected,
+            }),
+        }
     }
 }
 
@@ -520,6 +570,7 @@ fn request_finished(stats: &ServerCounters, completed: bool) {
     if completed {
         stats.completed.fetch_add(1, Ordering::AcqRel);
     }
+    stats.changed.notify(usize::MAX);
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<ObservedRequest, CassetteError> {
@@ -723,6 +774,62 @@ mod tests {
     use serde_json::json;
 
     use super::{CassetteServer, HttpExchange, ResponseChunk, ScriptedResponse, peer_closed};
+
+    #[test]
+    fn consumed_request_waits_for_writer_completion_and_wakes_all_waiters() {
+        // Reproduce the window after a request is captured but before its writer
+        // publishes completion, without relying on thread scheduling or sleeps.
+        let mut server = CassetteServer::start(vec![]).unwrap();
+        server.expected = 1;
+        server
+            .observed
+            .lock()
+            .unwrap()
+            .push(super::ObservedRequest {
+                method: "POST".into(),
+                path: "/test".into(),
+                headers: std::collections::BTreeMap::new(),
+                body: vec![],
+            });
+        super::request_started(&server.stats);
+        server.assert_finished().unwrap();
+        futures_executor::block_on(async {
+            let first = server.wait_until_finished(std::time::Duration::from_secs(1));
+            let second = server.wait_until_finished(std::time::Duration::from_secs(1));
+            futures_util::pin_mut!(first, second);
+            assert!(futures_util::poll!(&mut first).is_pending());
+            assert!(futures_util::poll!(&mut second).is_pending());
+            super::request_finished(&server.stats, true);
+            assert_eq!(first.await.unwrap().completed, 1);
+            assert_eq!(second.await.unwrap().completed, 1);
+        });
+    }
+
+    #[test]
+    fn completion_wait_times_out_when_a_request_never_arrives() {
+        let server = CassetteServer::start_repeating(
+            HttpExchange::new("GET", "/", ScriptedResponse::ok(vec![])),
+            1,
+        )
+        .unwrap();
+        assert!(matches!(
+            futures_executor::block_on(server.wait_until_finished(std::time::Duration::ZERO)),
+            Err(super::CassetteError::CompletionTimeout {
+                completed: 0,
+                expected: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn completion_wait_preserves_recorded_failure() {
+        let server = CassetteServer::start(vec![]).unwrap();
+        super::set_failure(&server.failure, "script mismatch");
+        assert!(matches!(
+            futures_executor::block_on(server.wait_until_finished(std::time::Duration::ZERO)),
+            Err(super::CassetteError::RequestMismatch(_))
+        ));
+    }
 
     #[test]
     fn peer_close_is_tolerated_only_after_the_scripted_body() {

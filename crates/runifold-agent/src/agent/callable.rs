@@ -20,41 +20,83 @@ impl Agent {
         progress: &mut AgentProgress,
         observer: &dyn AgentObserver,
     ) -> Result<(), AgentError> {
-        for (call_index, call) in calls.into_iter().enumerate() {
+        let mut calls = calls.into_iter().enumerate().peekable();
+        while let Some(first) = calls.next() {
             Self::check_lifecycle(run)?;
-            let effect_key = format!(
-                "{}:agent:{}:turn:{}:call:{call_index}",
-                progress.execution_id, self.name, progress.turns
-            );
-            let context = CallableExecutionContext {
-                run,
-                caused_by,
-                effect_key: &effect_key,
-                turn: progress.turns,
-                observer,
-            };
-            let result = if self.agents.contains(&call.name) {
-                self.execute_delegation_call(&call, &mut progress.delegations, &context)
-                    .await?
-            } else {
-                self.execute_local_tool_call(&call, &mut progress.tool_calls, &context)
-                    .await?
-            };
-            let correlation_metadata = call
-                .metadata
-                .iter()
-                .filter(|(key, _)| key.ends_with(".caller"))
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect();
-            progress.transcript.push(tool_result_message(
-                call.id,
-                call.name,
-                result,
-                correlation_metadata,
-                &progress.execution_id,
-            )?);
+            let parallel = self.is_parallel_tool(&first.1);
+            let mut batch = vec![first];
+            while parallel
+                && batch.len() < self.tool_concurrency.get()
+                && calls
+                    .peek()
+                    .is_some_and(|(_, call)| self.is_parallel_tool(call))
+            {
+                if let Some(call) = calls.next() {
+                    batch.push(call);
+                }
+            }
+            let execution_id = &progress.execution_id;
+            let turn = progress.turns;
+            let results =
+                futures_util::future::join_all(batch.into_iter().map(|(index, call)| async move {
+                    let effect_key = format!(
+                        "{execution_id}:agent:{}:turn:{turn}:call:{index}",
+                        self.name
+                    );
+                    let context = CallableExecutionContext {
+                        run,
+                        caused_by,
+                        effect_key: &effect_key,
+                        turn,
+                        observer,
+                    };
+                    let mut tool_calls = 0;
+                    let mut delegations = 0;
+                    let result = match Self::check_lifecycle(run) {
+                        Err(error) => Err(error),
+                        Ok(()) if self.agents.contains(&call.name) => {
+                            self.execute_delegation_call(&call, &mut delegations, &context)
+                                .await
+                        }
+                        Ok(()) => {
+                            self.execute_local_tool_call(&call, &mut tool_calls, &context)
+                                .await
+                        }
+                    };
+                    (call, result, tool_calls, delegations)
+                }))
+                .await;
+            // Drain the whole started batch before propagating an error. No write
+            // barrier or subsequent batch starts after a sibling failure.
+            for (_, _, tools, delegations) in &results {
+                progress.tool_calls = progress.tool_calls.saturating_add(*tools);
+                progress.delegations = progress.delegations.saturating_add(*delegations);
+            }
+            for (call, result, _, _) in results {
+                let correlation_metadata = call
+                    .metadata
+                    .iter()
+                    .filter(|(key, _)| key.ends_with(".caller"))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                progress.transcript.push(tool_result_message(
+                    call.id,
+                    call.name,
+                    result?,
+                    correlation_metadata,
+                    &progress.execution_id,
+                )?);
+            }
         }
         Ok(())
+    }
+
+    fn is_parallel_tool(&self, call: &ToolCall) -> bool {
+        !self.agents.contains(&call.name)
+            && self
+                .tools
+                .descriptor(&call.name)
+                .is_some_and(|descriptor| descriptor.effect == runifold_core::EffectClass::ReadOnly)
     }
 
     async fn execute_delegation_call(

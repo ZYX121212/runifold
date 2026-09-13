@@ -148,9 +148,36 @@ pub struct DurableConversationCheckpoint {
     pub persisted_prefix_len: u64,
 }
 
+/// Declarative contracts bound to a resumable execution.
+///
+/// Custom implementations must update their descriptor versions when behavior
+/// changes. This snapshot does not identify compiled code or middleware closures.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AgentRecoveryContract {
+    pub(crate) instructions: Vec<Message>,
+    pub(crate) context: Vec<Message>,
+    pub(crate) tools: Vec<runifold_tool::ToolDescriptor>,
+    pub(crate) agents: Vec<crate::AgentDescriptor>,
+    pub(crate) retrieval: Vec<(runifold_core::CapabilityDescriptor, usize)>,
+    pub(crate) generation: runifold_model::GenerationOptions,
+    pub(crate) output_format: runifold_model::OutputFormat,
+    pub(crate) response_mode: runifold_model::ResponseMode,
+    pub(crate) provider_tools: Vec<runifold_model::ProviderToolSpec>,
+    pub(crate) provider_options: std::collections::BTreeMap<String, Value>,
+    pub(crate) config: crate::AgentConfig,
+    pub(crate) tool_concurrency: std::num::NonZeroUsize,
+    pub(crate) min_successful_tool_calls: u32,
+    pub(crate) completion: crate::CompletionRequirement,
+    pub(crate) retry_safe_effects: bool,
+}
+
 /// Versioned Agent state stored in a domain-neutral checkpoint envelope.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AgentCheckpointState {
+    /// Declarative execution contract. Legacy checkpoints without this field
+    /// can be inspected but cannot be resumed automatically.
+    #[serde(default)]
+    pub recovery_contract: Option<AgentRecoveryContract>,
     /// Stable logical execution identity used for callable idempotency.
     pub execution_id: String,
     /// Agent identity expected during recovery.

@@ -236,6 +236,13 @@ impl AgentBuilder {
         self
     }
 
+    /// Bounds concurrent read-only local tools; defaults to one.
+    #[must_use]
+    pub const fn tool_concurrency(mut self, limit: std::num::NonZeroUsize) -> Self {
+        self.agent.tool_concurrency = limit;
+        self
+    }
+
     /// Sets the local model-turn limit.
     #[must_use]
     pub const fn max_turns(mut self, max_turns: u32) -> Self {

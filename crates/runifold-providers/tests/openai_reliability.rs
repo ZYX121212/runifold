@@ -60,9 +60,12 @@ async fn one_client_isolates_16_concurrent_responses_streams() {
         join_all((0..16).map(|_| client.invoke(request(), ModelCallContext::new()))).await;
 
     assert!(results.iter().all(Result::is_ok));
-    server.assert_finished().unwrap();
-    assert_eq!(server.stats().completed, 16);
-    assert!(server.stats().max_in_flight > 1);
+    let stats = server
+        .wait_until_finished(Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(stats.completed, 16);
+    assert!(stats.max_in_flight > 1);
 }
 
 #[tokio::test]

@@ -16,6 +16,8 @@ responses are valuable, but they are not labelled as production verification.
 | External Effect outcome reconciliation | Uncertain handler failures remain `Started`; completed, proven-not-executed, unresolved, and lookup-failure branches are fail-closed contracts | Mandatory |
 | SQLite WorkflowStore recovery | Forced worker kill, fenced lease takeover, budget adoption, HITL, history, and fork survive reopen | Mandatory |
 | SQLite concurrent workflow claim | Independent connections produce exactly one fenced winner | Mandatory |
+| SQLite Session admission and summaries | Request replay, cross-connection admission, dropped-stream recovery, pre-checkpoint definition binding and checkpointed summary faults | Mandatory |
+| Durable publication reference | Separate local publisher, forced process kill before Effect acknowledgement, revoked grants and receipt reconciliation without republication | Mandatory |
 | SQLite durable Agent conversation | Transcript and terminal checkpoint commit atomically; reopen resumes without another model call | Mandatory |
 | Rich Tool results and durable artifacts | Dedicated reproducible gate covering schema/size enforcement, Agent and MCP lossless round trip, Provider projections, scoped SQLite lifecycle, and real PostgreSQL scope/concurrent-idempotency/expiry/delete checks | Mandatory |
 | PostgreSQL durable Agent conversation and Effect store | Real PostgreSQL transaction proves transcript/checkpoint atomicity, rollback on stale checkpoint, reconnect replay, Effect CAS, and idempotency conflict | Mandatory |
@@ -28,7 +30,7 @@ responses are valuable, but they are not labelled as production verification.
 | OpenAI Realtime ephemeral credential rotation | Two live `/v1/realtime/client_secrets` requests, distinct secret/session assertions, bounded TTL, and credential-free evidence | Manual opt-in |
 | Ark strict structured Responses, hosted/function tools, and delivery modes | Two live Ark requests plus content-free evidence | Manual opt-in |
 | AWS S3 IAM/KMS integration | Not yet verified | Planned |
-| Multi-hour network/database soak | Scheduled three-hour repetition of real PostgreSQL, Effect, and Provider fault suites with credential-free evidence | Scheduled |
+| Multi-hour network/database soak | Scheduled three-hour repetition of real PostgreSQL, SQLite Session, Effect, and Provider fault suites with credential-free evidence | Scheduled |
 | Browser Service Workers | Not yet verified | Planned |
 | Reproducible Rig framework benchmark | Scheduled 20×1000 paired rounds, alternating order, raw artifacts, bootstrap confidence intervals, and non-regression enforcement | Scheduled |
 | Independent third-party reproduction | Requires an external maintainer to run and attest the public benchmark contract | External evidence required |

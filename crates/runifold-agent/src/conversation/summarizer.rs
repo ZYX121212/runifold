@@ -143,16 +143,20 @@ impl ConversationSummarizer for Agent {
                 .await
                 .map_err(ConversationSummarizerError::Run)?
                 .into_text();
-            let output = output.trim();
-            if output.is_empty() || output.len() > MAX_SUMMARIZER_OUTPUT_BYTES {
-                return Err(ConversationSummarizerError::InvalidOutput);
-            }
-            Ok(output.to_owned())
+            validate_summary_output(&output)
         })
     }
 }
 
-fn summary_prompt(
+pub(super) fn validate_summary_output(output: &str) -> Result<String, ConversationSummarizerError> {
+    let output = output.trim();
+    if output.is_empty() || output.len() > MAX_SUMMARIZER_OUTPUT_BYTES {
+        return Err(ConversationSummarizerError::InvalidOutput);
+    }
+    Ok(output.to_owned())
+}
+
+pub(super) fn summary_prompt(
     request: &ConversationSummaryRequest,
 ) -> Result<String, ConversationSummarizerError> {
     let mut prompt = String::from(

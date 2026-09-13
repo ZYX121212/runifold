@@ -17,23 +17,24 @@ mod terminal_review;
 pub use agent::{Agent, AgentConfig, AgentFuture, ToolErrorPolicy};
 pub use builder::{AgentBuildError, AgentBuilder, AgentPromptError};
 pub use checkpoint::{
-    AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, DurableConversationCheckpoint,
-    ResumePolicy,
+    AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, AgentRecoveryContract,
+    DurableConversationCheckpoint, ResumePolicy,
 };
 pub use completion::{
     CompletionRequirement, TerminalRequirementFailure, TerminalRequirementFailureKind,
 };
 pub use conversation::{
-    AgentConversationError, AgentConversationOutcome, AutomaticConversationSummary,
-    ConversationAppend, ConversationContextPolicy, ConversationCreateOutcome, ConversationId,
-    ConversationSequence, ConversationStore, ConversationStoreError, ConversationStoreErrorKind,
-    ConversationStoreFuture, ConversationSummarizer, ConversationSummarizerError,
-    ConversationSummarizerFuture, ConversationSummary, ConversationSummaryBatch,
-    ConversationSummaryCommit, ConversationSummaryPassLimit, ConversationSummaryRequest,
-    ConversationTranscriptEntry, ConversationVersion, ConversationView, ConversationWindow,
-    DurableConversationCommit, DurableConversationRequest, DurableConversationStore,
-    InMemoryConversationStore, MemoryNamespace, SemanticMemory, SemanticMemoryId,
-    SemanticMemoryQuery, SemanticMemorySearchOutcome, SemanticMemorySource, SemanticMemoryUpsert,
+    AgentConversationError, AgentConversationOutcome, AgentSession, AgentSessionError,
+    AutomaticConversationSummary, ConversationAppend, ConversationContextPolicy,
+    ConversationCreateOutcome, ConversationId, ConversationSequence, ConversationStore,
+    ConversationStoreError, ConversationStoreErrorKind, ConversationStoreFuture,
+    ConversationSummarizer, ConversationSummarizerError, ConversationSummarizerFuture,
+    ConversationSummary, ConversationSummaryBatch, ConversationSummaryCommit,
+    ConversationSummaryPassLimit, ConversationSummaryRequest, ConversationTranscriptEntry,
+    ConversationVersion, ConversationView, ConversationWindow, DurableConversationCommit,
+    DurableConversationRequest, DurableConversationStore, InMemoryConversationStore,
+    MemoryNamespace, SemanticMemory, SemanticMemoryId, SemanticMemoryQuery,
+    SemanticMemorySearchOutcome, SemanticMemorySource, SemanticMemoryUpsert,
     SemanticMemoryUpsertOutcome,
 };
 pub use descriptor::AgentDescriptor;
@@ -46,7 +47,9 @@ pub use middleware::{
     GatewayPolicy, PolicyMiddleware,
 };
 pub use outcome::{AgentOutcome, StructuredAgentOutcome};
-pub use stream::{AgentEventStream, AgentStreamEvent, CallableKind};
+pub use stream::{
+    AgentEventStream, AgentStreamEvent, CallableKind, DurableConversationEventStream,
+};
 pub use structured::{StructuredAgent, StructuredAgentError};
 pub use terminal_review::{
     CompositeTerminalReviewMode, CompositeTerminalReviewer, TerminalReviewError,

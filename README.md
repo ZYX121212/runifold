@@ -31,10 +31,11 @@
   <a href="https://github.com/ZYX121212/runifold/blob/main/CHANGELOG.md">Changelog</a>
 </p>
 
-> [!WARNING]
-> Runifold is pre-alpha. Public APIs may change before 1.0; breaking changes are
-> documented in the [changelog](CHANGELOG.md) and released with a new minor
-> version.
+> [!NOTE]
+> Runifold 0.10 is a maintained release for production integration. Read the
+> [supported contracts and upgrade guide](docs/RELEASE-0.10.md) before deploying.
+> Before 1.0, incompatible changes require a new minor version and migration
+> notes; patch releases preserve public contracts.
 
 ## Contents
 
@@ -257,3 +258,21 @@ Issues and proposals are welcome in the
 
 Licensed under either [Apache License 2.0](LICENSE-APACHE) or
 [MIT](LICENSE-MIT), at your option.
+
+### Durable Agent sessions
+
+Use `AgentSession` for stable request replay and persistent admission before
+model/tool execution. Durable streams report `ConversationCommitted` after the
+transaction succeeds. Add `with_summary_agent` for checkpointed automatic history
+compaction under the same budget. Try the credential-free example:
+
+```sh
+cargo run -p runifold --example durable_session --features sqlite-bundled -- /tmp/runifold-session.sqlite
+```
+
+See [session and recovery semantics](docs/rfcs/0073-production-agent-sessions.md)
+for deployment compatibility, explicit recovery, concurrency, and current limits.
+
+The [durable publication reference](docs/RELEASE-0.10.md#executable-reference-application)
+exercises report review, external receipt reconciliation, revoked authority and
+forced-process-kill recovery with real SQLite persistence.

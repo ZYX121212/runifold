@@ -4,6 +4,9 @@ This standalone, unpublished release-mode tool compares both frameworks through
 the same `runifold-provider-testkit` benchmark contract and loopback provider
 cassette. Its independent workspace and lockfile prevent Rig's dependencies
 from changing Runifold's public dependency graph or MSRV.
+Runifold dependencies are path-only: this benchmark measures the checked-out
+source, while `rig-core` is pinned. Both lockfiles must be refreshed when release
+dependencies change. CI and the release gate compile and test this workspace.
 
 Run the default comparison:
 

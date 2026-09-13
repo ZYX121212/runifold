@@ -14,6 +14,8 @@ async fn prompt() -> anyhow::Result<String> {
         .await?)
 }
 
-fn main() {
-    let _ = prompt;
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    println!("{}", prompt().await?);
+    Ok(())
 }

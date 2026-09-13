@@ -38,7 +38,13 @@ cargo test --workspace --all-targets --locked
 cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
+cargo build -p runifold --example durable_publish --features sqlite-bundled --locked
+python3 scripts/verify-durable-publish.py target/debug/examples/durable_publish
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+
+# This independent workspace must continue compiling against the current source.
+cargo check --manifest-path benchmarks/rig-compare/Cargo.toml --all-targets --locked
+cargo test --manifest-path benchmarks/rig-compare/Cargo.toml --locked
 
 escaped_msrv_toolchain="${msrv_toolchain//./\\.}"
 if ! rustup toolchain list | awk '{print $1}' |

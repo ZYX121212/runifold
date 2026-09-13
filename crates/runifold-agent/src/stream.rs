@@ -12,7 +12,8 @@ use runifold_model::{ModelStreamEvent, ToolCall};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AgentError, AgentFuture, AgentOutcome, TerminalRequirementFailure, TerminalReviewVerdictKind,
+    AgentConversationError, AgentError, AgentFuture, AgentOutcome, ConversationVersion,
+    TerminalRequirementFailure, TerminalReviewVerdictKind,
 };
 
 /// The callable boundary represented by an Agent stream event.
@@ -85,6 +86,27 @@ pub enum AgentStreamEvent {
         /// Complete canonical outcome.
         outcome: AgentOutcome,
     },
+    /// A checkpointed summary batch is about to run or resume.
+    ConversationSummaryStarted {
+        /// Stable summary Agent checkpoint identity.
+        checkpoint_id: runifold_core::CheckpointId,
+        /// Last transcript entry included in this batch.
+        through_sequence: crate::ConversationSequence,
+    },
+    /// A summary batch and its session progress have been persisted.
+    ConversationSummaryCommitted {
+        /// Last transcript entry covered by the committed summary.
+        through_sequence: crate::ConversationSequence,
+        /// Shared cumulative resource usage including summary generation.
+        usage: Usage,
+    },
+    /// The terminal checkpoint and conversation transcript committed atomically.
+    ConversationCommitted {
+        /// Complete canonical outcome.
+        outcome: AgentOutcome,
+        /// Committed transcript version.
+        conversation_version: ConversationVersion,
+    },
     /// An invalid terminal candidate scheduled a bounded repair turn.
     TerminalRepairScheduled {
         /// One-based repair attempt number.
@@ -147,10 +169,18 @@ impl AgentObserver for NoopObserver {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BufferedObserver {
+    suppress_completed: bool,
     events: Arc<Mutex<VecDeque<AgentStreamEvent>>>,
 }
 
 impl BufferedObserver {
+    pub(crate) fn durable() -> Self {
+        Self {
+            suppress_completed: true,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn events(&self) -> Arc<Mutex<VecDeque<AgentStreamEvent>>> {
         self.events.clone()
     }
@@ -158,6 +188,9 @@ impl BufferedObserver {
 
 impl AgentObserver for BufferedObserver {
     fn emit(&self, event: AgentStreamEvent) {
+        if self.suppress_completed && matches!(event, AgentStreamEvent::Completed { .. }) {
+            return;
+        }
         self.events
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -202,16 +235,16 @@ impl Future for YieldOnce {
 
 /// A borrow-scoped stream that drives the canonical Agent loop when polled.
 #[must_use = "streams do nothing unless polled"]
-pub struct AgentEventStream<'a> {
-    execution: Option<AgentFuture<'a, Result<AgentOutcome, AgentError>>>,
+pub struct AgentEventStream<'a, E = AgentError> {
+    execution: Option<AgentFuture<'a, Result<AgentOutcome, E>>>,
     events: Arc<Mutex<VecDeque<AgentStreamEvent>>>,
-    failure: Option<AgentError>,
+    failure: Option<E>,
     finished: bool,
 }
 
-impl<'a> AgentEventStream<'a> {
+impl<'a, E> AgentEventStream<'a, E> {
     pub(crate) fn new(
-        execution: AgentFuture<'a, Result<AgentOutcome, AgentError>>,
+        execution: AgentFuture<'a, Result<AgentOutcome, E>>,
         events: Arc<Mutex<VecDeque<AgentStreamEvent>>>,
     ) -> Self {
         Self {
@@ -233,8 +266,8 @@ impl<'a> AgentEventStream<'a> {
     }
 }
 
-impl Stream for AgentEventStream<'_> {
-    type Item = Result<AgentStreamEvent, AgentError>;
+impl<E: Unpin> Stream for AgentEventStream<'_, E> {
+    type Item = Result<AgentStreamEvent, E>;
 
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
@@ -274,7 +307,7 @@ impl Stream for AgentEventStream<'_> {
     }
 }
 
-impl std::fmt::Debug for AgentEventStream<'_> {
+impl<E> std::fmt::Debug for AgentEventStream<'_, E> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("AgentEventStream")
@@ -285,3 +318,8 @@ impl std::fmt::Debug for AgentEventStream<'_> {
             .finish()
     }
 }
+
+/// A poll-driven durable conversation stream. Dropping it stops local execution;
+/// remote work already dispatched may remain ambiguous and requires recovery.
+/// Success is reported only by [`AgentStreamEvent::ConversationCommitted`].
+pub type DurableConversationEventStream<'a> = AgentEventStream<'a, AgentConversationError>;
