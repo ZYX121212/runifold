@@ -67,6 +67,28 @@ impl PostgresWorkflowStore {
                 WHERE task.tenant_id = tenant.tenant_id
                   AND task.state NOT IN ('completed', 'failed', 'cancelled')
             );
+            -- Lock acquisition and the count must be separate SPI statements.
+            -- VOLATILE gives the count a fresh READ COMMITTED snapshot after
+            -- acquiring the lock, even if the outer claim began before a peer
+            -- committed its lease. An inline subquery would keep the old snapshot.
+            CREATE OR REPLACE FUNCTION {table}_claim_allowed(target_tenant TEXT)
+            RETURNS BOOLEAN LANGUAGE plpgsql VOLATILE AS $$
+            BEGIN
+                IF NOT pg_try_advisory_xact_lock(hashtextextended(target_tenant, 0)) THEN
+                    RETURN FALSE;
+                END IF;
+                RETURN COALESCE((
+                    SELECT (
+                        SELECT COUNT(*) FROM {table} AS active
+                        WHERE active.tenant_id = target_tenant
+                          AND active.state = 'leased'
+                          AND active.lease_expires_at > clock_timestamp()
+                    ) < tenant.max_concurrent_leases
+                    FROM {table}_tenants AS tenant
+                    WHERE tenant.tenant_id = target_tenant
+                ), FALSE);
+            END;
+            $$;
             "
         )
     }

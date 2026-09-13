@@ -153,9 +153,20 @@ async fn container_connection_url(container: &ContainerAsync<GenericImage>) -> S
     } else {
         host.as_str()
     };
-    let port = container
-        .get_host_port_ipv4(POSTGRES_PORT.tcp())
-        .await
-        .expect("test database port must be mapped");
+    // Database health and host-port publication are separate readiness conditions.
+    // Wait for a visible binding within the same bounded readiness budget.
+    let deadline = Instant::now() + READY_TIMEOUT;
+    let port = loop {
+        match container.get_host_port_ipv4(POSTGRES_PORT.tcp()).await {
+            Ok(port) => break port,
+            Err(error) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "test database port did not become mapped: {error}"
+                );
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+    };
     format!("postgres://postgres:{POSTGRES_PASSWORD}@{host}:{port}/{POSTGRES_DATABASE}")
 }

@@ -20,6 +20,8 @@ now requires matching declarative definitions. Drain 0.9 Agent work with the
 original workers; keep their builds available for old checkpoints. Session
 admission schema 3 rejects earlier unpublished schemas 1/2. Never silently attach
 current definitions to old data or assume database rollback undoes external work.
+Stop older PostgreSQL workflow workers and run `PostgresWorkflowStore::ensure_schema`
+to install the fresh-snapshot tenant lease gate before starting 0.10 workers.
 
 Before tagging, validate one candidate revision with CI, the reference application,
 the 180-minute soak and the standalone benchmark. Resolve failures rather than

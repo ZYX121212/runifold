@@ -54,7 +54,11 @@ operation already accepted by another system.
   untouched old work to its compatible deployment; use a forward fix for advanced
   work. Restoring a database snapshot requires independent reconciliation of
   external effects and may otherwise duplicate operations.
-- Workflow schema v5 and its existing v3/v4 reader compatibility are unchanged.
+- Stop older PostgreSQL workflow workers and run
+  `PostgresWorkflowStore::ensure_schema` before 0.10 workers start. This installs
+  the lease-admission helper that reads a fresh snapshot after the tenant lock.
+  Older claim SQL retains a concurrency race and must not share the worker pool.
+- Workflow checkpoint schema v5 and its existing v3/v4 reader compatibility are unchanged.
   The older v0.7/v0.8 mixed-worker restriction in `RELEASING.md` still applies.
 
 For an occupied Session: first stop or fence its owner, inspect the active request

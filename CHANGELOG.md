@@ -37,6 +37,10 @@ breaking changes require a minor-version increment.
   Repeating cassettes now join finished handlers continuously so long benchmarks
   do not retain one thread resource set per historical request.
 - Rechecked Effect lifecycle before dispatch, including after remote reconciliation.
+- Fixed PostgreSQL tenant lease admission using a fresh snapshot after acquiring
+  the tenant lock; concurrent claims can no longer share a stale active-lease
+  count. Added an orchestrated old-snapshot regression and repeated two-connection
+  claims. Run `PostgresWorkflowStore::ensure_schema` before starting 0.10 workers.
 - Repaired standalone Rig source dependencies and refreshed its lockfile; both
   CI and release checks now compile and test the independent workspace.
 - Soak now exercises SQLite Session recovery and retains sanitized failure evidence.

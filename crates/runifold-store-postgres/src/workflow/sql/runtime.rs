@@ -36,13 +36,7 @@ impl PostgresWorkflowStore {
                         )
                     )
                 )
-                  AND pg_try_advisory_xact_lock(hashtextextended(task.tenant_id, 0)) AND (
-                    SELECT COUNT(*)
-                    FROM {table} AS active
-                    WHERE active.tenant_id = task.tenant_id
-                      AND active.state = 'leased'
-                      AND active.lease_expires_at > clock_timestamp()
-                  ) < tenant.max_concurrent_leases
+                  AND {table}_claim_allowed(task.tenant_id)
                 ORDER BY
                     tenant.last_claim_sequence ASC,
                     task.priority DESC,

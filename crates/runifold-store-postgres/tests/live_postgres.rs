@@ -169,7 +169,7 @@ async fn drop_schema(client: &tokio_postgres::Client, table: &str) {
                 {table}_b_audit_projection, {table}_b_audit, \
                 {table}_budgets, {table}, {table}_tenants; \
              DROP SEQUENCE {table}_claim_seq, {table}_b_audit_seq; \
-             DROP FUNCTION {table}_capture_checkpoint()"
+             DROP FUNCTION {table}_capture_checkpoint(), {table}_claim_allowed(TEXT)"
         ))
         .await
         .unwrap();
@@ -789,28 +789,49 @@ async fn assert_concurrent_tenant_limits(
         )
         .await
         .unwrap();
-    for name in ["lease-left", "lease-right"] {
-        first
-            .enqueue(
-                WorkflowTask::new(name, 1, json!(null))
-                    .unwrap()
-                    .with_tenant(lease_tenant.clone()),
+    for _ in 0..64 {
+        for name in ["lease-left", "lease-right"] {
+            first
+                .enqueue(
+                    WorkflowTask::new(name, 1, json!(null))
+                        .unwrap()
+                        .with_tenant(lease_tenant.clone()),
+                )
+                .await
+                .unwrap();
+        }
+        let (left, right) = tokio::join!(
+            first.claim(
+                WorkerId::parse("concurrent-tenant-worker-a").unwrap(),
+                lease_duration,
+            ),
+            second.claim(
+                WorkerId::parse("concurrent-tenant-worker-b").unwrap(),
+                lease_duration,
+            ),
+        );
+        let claims = [left.unwrap(), right.unwrap()];
+        assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
+        // Drain both tasks before the next concurrent round.
+        for claim in claims.into_iter().flatten() {
+            first
+                .finish(claim.lease, WorkflowDisposition::Completed)
+                .await
+                .unwrap();
+        }
+        let remaining = first
+            .claim(
+                WorkerId::parse("lease-round-cleanup").unwrap(),
+                lease_duration,
             )
+            .await
+            .unwrap()
+            .unwrap();
+        first
+            .finish(remaining.lease, WorkflowDisposition::Completed)
             .await
             .unwrap();
     }
-    let (left, right) = tokio::join!(
-        first.claim(
-            WorkerId::parse("concurrent-tenant-worker-a").unwrap(),
-            lease_duration,
-        ),
-        second.claim(
-            WorkerId::parse("concurrent-tenant-worker-b").unwrap(),
-            lease_duration,
-        ),
-    );
-    let claims = [left.unwrap(), right.unwrap()];
-    assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
 }
 
 async fn assert_tenant_admission(store: &PostgresWorkflowStore, lease_duration: LeaseDuration) {
@@ -1181,4 +1202,109 @@ async fn force_expiration(
         )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn lease_admission_refreshes_snapshot_after_tenant_lock() {
+    let database = PostgresTestContext::start("RUNIFOLD_TEST_POSTGRES_URL").await;
+    let url = database.connection_url();
+    let table = format!("rf_snapshot_{}", Uuid::now_v7().simple());
+    let store = PostgresWorkflowStore::connect(url, &table).await.unwrap();
+    store.ensure_schema().await.unwrap();
+    let tenant = WorkflowTenantId::parse("snapshot-tenant").unwrap();
+    store
+        .set_tenant_policy(tenant.clone(), WorkflowTenantPolicy::new(2, 1).unwrap())
+        .await
+        .unwrap();
+    for name in ["first", "second"] {
+        store
+            .enqueue(
+                WorkflowTask::new(name, 1, json!(null))
+                    .unwrap()
+                    .with_tenant(tenant.clone()),
+            )
+            .await
+            .unwrap();
+    }
+    let (admin, connection) = tokio_postgres::connect(url, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let (waiter, connection) = tokio_postgres::connect(url, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let pid: i32 = waiter
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let barrier = Uuid::now_v7().to_string();
+    admin
+        .query_one(
+            "SELECT pg_advisory_lock(hashtextextended($1, 123))",
+            &[&barrier],
+        )
+        .await
+        .unwrap();
+    let statement = format!(
+        "WITH gate AS MATERIALIZED (SELECT pg_advisory_xact_lock(hashtextextended($1, 123)))
+         SELECT {table}_claim_allowed($2),
+            (SELECT COUNT(*) FROM {table} WHERE tenant_id = $2 AND state = 'leased')
+         FROM gate"
+    );
+    let barrier_copy = barrier.clone();
+    let tenant_copy = tenant.clone();
+    let waiting = tokio::spawn(async move {
+        waiter
+            .query_one(&statement, &[&barrier_copy, &tenant_copy.as_str()])
+            .await
+            .unwrap()
+    });
+    // Observe the actual database lock wait, not an assumed scheduling delay.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let blocked: bool = admin.query_one(
+                "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid = $1 AND locktype = 'advisory' AND NOT granted)", &[&pid]
+            ).await.unwrap().get(0);
+            if blocked { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("second statement must establish its snapshot and block");
+    store
+        .claim(
+            WorkerId::parse("snapshot-owner").unwrap(),
+            LeaseDuration::new(Duration::from_secs(30)).unwrap(),
+        )
+        .await
+        .unwrap()
+        .expect("first lease commits after the second statement starts");
+    admin
+        .query_one(
+            "SELECT pg_advisory_unlock(hashtextextended($1, 123))",
+            &[&barrier],
+        )
+        .await
+        .unwrap();
+    let row = waiting.await.unwrap();
+    assert_eq!(
+        row.get::<_, i64>(1),
+        0,
+        "outer statement deliberately retains the pre-claim snapshot"
+    );
+    assert!(
+        !row.get::<_, bool>(0),
+        "admission must see the committed lease despite the old outer snapshot"
+    );
+    assert!(
+        store
+            .claim(
+                WorkerId::parse("denied-owner").unwrap(),
+                LeaseDuration::new(Duration::from_secs(30)).unwrap()
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop_schema(&admin, &table).await;
 }

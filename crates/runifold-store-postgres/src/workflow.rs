@@ -704,8 +704,7 @@ mod tests {
 
         assert!(claim.contains("FROM runifold_workflows"));
         assert!(claim.contains("FOR UPDATE OF task, tenant SKIP LOCKED"));
-        assert!(claim.contains("tenant.max_concurrent_leases"));
-        assert!(claim.contains("pg_try_advisory_xact_lock"));
+        assert!(claim.contains("runifold_workflows_claim_allowed(task.tenant_id)"));
         assert!(claim.contains("nextval('runifold_workflows_claim_seq')"));
         assert!(claim.contains("UPDATE runifold_workflows AS task"));
         assert!(heartbeat.contains("UPDATE runifold_workflows"));
