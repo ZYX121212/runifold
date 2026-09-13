@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "runifold": [
+      "cargo test -p runifold --features sqlite-bundled --locked"
+    ],
+    "runifold-core": [
+      "cargo test -p runifold-core --locked"
+    ],
+    "runifold-model": [
+      "cargo test -p runifold-model --locked"
+    ],
+    "runifold-agent": [
+      "cargo test -p runifold-agent --locked"
+    ],
+    "runifold-tool": [
+      "cargo test -p runifold-tool --locked"
+    ],
+    "runifold-macros": [
+      "cargo test -p runifold --test typed_tool_macro --locked"
+    ],
+    "runifold-effect": [
+      "cargo test -p runifold-effect --locked"
+    ],
+    "runifold-workflow": [
+      "cargo test -p runifold-workflow --locked"
+    ],
+    "runifold-providers": [
+      "cargo test -p runifold-providers --all-features --locked"
+    ],
+    "runifold-provider-testkit": [
+      "cargo test -p runifold-provider-testkit --locked"
+    ],
+    "runifold-mcp": [
+      "cargo test -p runifold-mcp --locked"
+    ],
+    "runifold-retrieval": [
+      "cargo test -p runifold-retrieval --locked"
+    ],
+    "runifold-retrieval-text": [
+      "cargo test -p runifold-retrieval-text --locked"
+    ],
+    "runifold-retrieval-qdrant": [
+      "cargo test -p runifold-retrieval-qdrant --locked"
+    ],
+    "runifold-retrieval-pgvector": [
+      "cargo test -p runifold-retrieval-pgvector --locked"
+    ],
+    "runifold-store-sqlite": [
+      "cargo test -p runifold-store-sqlite --features bundled --locked"
+    ],
+    "runifold-store-postgres": [
+      "cargo test -p runifold-store-postgres --locked"
+    ],
+    "runifold-observability-otel": [
+      "cargo test -p runifold-observability-otel --locked"
+    ],
+    "runifold-ops": [
+      "cargo test -p runifold-ops --locked"
+    ],
+    "runifold-cli": [
+      "cargo test -p runifold-cli --locked"
+    ],
+    "runifold-testkit": [
+      "cargo test -p runifold-testkit --locked"
+    ],
+    "runifold-eval-cli": [
+      "cargo test -p runifold-eval-cli --locked"
+    ]
+  },
+  "global_files": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rustfmt.toml",
+    "deny.toml"
+  ],
+  "global_prefixes": [
+    "ai/",
+    ".github/workflows/",
+    "scripts/"
+  ],
+  "knowledge_prefixes": [
+    "docs/ai/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".cursor/",
+    ".github/instructions/",
+    ".github/copilot-instructions.md",
+    "runifold.ai.json",
+    "runifold.manifest.json"
+  ]
+}

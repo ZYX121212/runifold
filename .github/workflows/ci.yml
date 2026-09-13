@@ -17,6 +17,38 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  ai-dx:
+    name: AI development contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Verify knowledge, schema, fingerprints and architecture
+        run: |
+          python3 scripts/ai-knowledge.py --check
+          python3 scripts/test-ai-system.py
+          python3 scripts/ai-check.py --json
+
+      - name: Verify CLI and public diagnostic contracts
+        run: |
+          cargo test -p runifold-cli --locked
+          cargo test -p runifold --test ai_api_contract --locked
+
+      - name: Execute canonical recipe validation
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import shlex
+          import subprocess
+          manifest = json.load(open("runifold.ai.json"))
+          commands = sorted({command for recipe in manifest["recipes"].values() for command in recipe["validation"]})
+          for command in commands:
+              print(command, flush=True)
+              subprocess.run(shlex.split(command), check=True)
+          PYTHON
+
   feature-contracts:
     name: Feature contract (${{ matrix.name }})
     runs-on: ubuntu-latest

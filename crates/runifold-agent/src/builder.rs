@@ -48,6 +48,13 @@ pub enum AgentBuildError {
     Retrieval(#[from] RetrievalError),
 }
 
+impl AgentBuildError {
+    /// Returns the stable build diagnostic code.
+    pub const fn diagnostic_code(&self) -> &'static str {
+        "RF-AGENT-001"
+    }
+}
+
 /// Failure while building and immediately prompting an Agent.
 #[derive(Debug, Error)]
 #[non_exhaustive]

@@ -1,0 +1,682 @@
+{
+  "schema_version": 1,
+  "diagnostics": [
+    {
+      "code": "RF-TOOL-001",
+      "title": "NotFound",
+      "meaning": "ToolError reports NotFound.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::NotFound",
+      "causes": [
+        "The NotFound boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Register the named Tool on the Agent builder or ToolRegistry; check the model-facing name.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-002",
+      "title": "InvalidInput",
+      "meaning": "ToolError reports InvalidInput.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::InvalidInput",
+      "causes": [
+        "The InvalidInput boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Validate arguments against the Tool input schema and fix the caller.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-003",
+      "title": "CapabilityDenied",
+      "meaning": "ToolError reports CapabilityDenied.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::CapabilityDenied",
+      "causes": [
+        "The CapabilityDenied boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Register the Tool and explicitly grant its capability to the current RunContext or child grant.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-004",
+      "title": "Cancelled",
+      "meaning": "ToolError reports Cancelled.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::Cancelled",
+      "causes": [
+        "The Cancelled boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Honor cancellation; start new work only when the caller requests it.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-005",
+      "title": "DeadlineExceeded",
+      "meaning": "ToolError reports DeadlineExceeded.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::DeadlineExceeded",
+      "causes": [
+        "The DeadlineExceeded boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect deadline and retry safety before starting another invocation.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-006",
+      "title": "Execution",
+      "meaning": "ToolError reports Execution.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::Execution",
+      "causes": [
+        "The Execution boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect the safe typed application cause; do not blindly retry a write.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-007",
+      "title": "InvalidOutput",
+      "meaning": "ToolError reports InvalidOutput.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::InvalidOutput",
+      "causes": [
+        "The InvalidOutput boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Return the declared output shape and preserve rich content through ToolOutput.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-001",
+      "title": "CapabilityDenied",
+      "meaning": "EffectExecutorError reports CapabilityDenied.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::CapabilityDenied",
+      "causes": [
+        "The CapabilityDenied boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Grant only the effect capability intended for this Run.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-002",
+      "title": "IdempotencyConflict",
+      "meaning": "EffectExecutorError reports IdempotencyConflict.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::IdempotencyConflict",
+      "causes": [
+        "The IdempotencyConflict boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Reuse an idempotency key only for identical logical work; inspect persisted input and identity.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-003",
+      "title": "Ambiguous",
+      "meaning": "EffectExecutorError reports Ambiguous.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Ambiguous",
+      "causes": [
+        "The Ambiguous boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Reconcile the external receipt; retry only under an explicit recovery policy with evidence of safety.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-004",
+      "title": "Store",
+      "meaning": "EffectExecutorError reports Store.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Store",
+      "causes": [
+        "The Store boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Restore durable store availability and inspect the last persisted effect state before recovery.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-005",
+      "title": "Observability",
+      "meaning": "EffectExecutorError reports Observability.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Observability",
+      "causes": [
+        "The Observability boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Restore journal availability; preserve fail-closed execution.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-006",
+      "title": "Handler",
+      "meaning": "EffectExecutorError reports Handler.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Handler",
+      "causes": [
+        "The Handler boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect the typed handler cause and retry safety before deciding to repeat work.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-007",
+      "title": "Cancelled",
+      "meaning": "EffectExecutorError reports Cancelled.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Cancelled",
+      "causes": [
+        "The Cancelled boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Honor cancellation and preserve any ambiguous external effect record.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-008",
+      "title": "DeadlineExceeded",
+      "meaning": "EffectExecutorError reports DeadlineExceeded.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::DeadlineExceeded",
+      "causes": [
+        "The DeadlineExceeded boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect external outcome and deadline before recovery.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-009",
+      "title": "Protocol",
+      "meaning": "EffectExecutorError reports Protocol.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Protocol",
+      "causes": [
+        "The Protocol boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect persisted effect state/version; do not overwrite evidence to force progress.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-010",
+      "title": "Reconciliation",
+      "meaning": "EffectExecutorError reports Reconciliation.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Reconciliation",
+      "causes": [
+        "The Reconciliation boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Restore receipt lookup and reconcile again without repeating the external write.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-001",
+      "title": "InvalidRequest",
+      "meaning": "ModelError reports InvalidRequest.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::InvalidRequest",
+      "causes": [
+        "The InvalidRequest boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Correct the canonical request according to the selected API and schema.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-002",
+      "title": "UnsupportedFeature",
+      "meaning": "ModelError reports UnsupportedFeature.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::UnsupportedFeature",
+      "causes": [
+        "The UnsupportedFeature boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Select a model with verified support or explicitly choose visible degradation; never guess support.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-003",
+      "title": "Transport",
+      "meaning": "ModelError reports Transport.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::Transport",
+      "causes": [
+        "The Transport boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect endpoint and retry safety; account for visible output and external work before retrying.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-004",
+      "title": "Protocol",
+      "meaning": "ModelError reports Protocol.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::Protocol",
+      "causes": [
+        "The Protocol boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect a redacted wire cassette and adapter version; fix projection without losing semantics.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-005",
+      "title": "StreamState",
+      "meaning": "ModelError reports StreamState.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::StreamState",
+      "causes": [
+        "The StreamState boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Require a valid started/content/terminal lifecycle; do not fabricate successful completion.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-006",
+      "title": "MalformedToolArguments",
+      "meaning": "ModelError reports MalformedToolArguments.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::MalformedToolArguments",
+      "causes": [
+        "The MalformedToolArguments boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Validate complete JSON arguments; do not execute partially parsed input.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-007",
+      "title": "Provider",
+      "meaning": "ModelError reports Provider.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::Provider",
+      "causes": [
+        "The Provider boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect the safe provider category and rate-limit metadata before applying explicit retry policy.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-008",
+      "title": "Cancelled",
+      "meaning": "ModelError reports Cancelled.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::Cancelled",
+      "causes": [
+        "The Cancelled boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Honor caller cancellation.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-009",
+      "title": "DeadlineExceeded",
+      "meaning": "ModelError reports DeadlineExceeded.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::DeadlineExceeded",
+      "causes": [
+        "The DeadlineExceeded boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect upstream latency and remaining deadline before any retry.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-001",
+      "aliases": [
+        "runifold.invalid_input"
+      ],
+      "title": "invalid_input",
+      "meaning": "Run-level invalid_input failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Validate configuration and request data.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-002",
+      "aliases": [
+        "runifold.capability_denied"
+      ],
+      "title": "capability_denied",
+      "meaning": "Run-level capability_denied failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Grant only the intended capability.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-003",
+      "aliases": [
+        "runifold.budget_exceeded"
+      ],
+      "title": "budget_exceeded",
+      "meaning": "Run-level budget_exceeded failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Reduce work or deliberately adjust the shared budget.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-004",
+      "aliases": [
+        "runifold.deadline_exceeded"
+      ],
+      "title": "deadline_exceeded",
+      "meaning": "Run-level deadline_exceeded failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Inspect the effective deadline and external outcome.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-005",
+      "aliases": [
+        "runifold.cancelled"
+      ],
+      "title": "cancelled",
+      "meaning": "Run-level cancelled failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Honor caller cancellation.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-006",
+      "aliases": [
+        "runifold.transport"
+      ],
+      "title": "transport",
+      "meaning": "Run-level transport failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Inspect retry safety before retrying.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-007",
+      "aliases": [
+        "runifold.protocol"
+      ],
+      "title": "protocol",
+      "meaning": "Run-level protocol failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Inspect the canonical protocol boundary.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-008",
+      "aliases": [
+        "runifold.invocation"
+      ],
+      "title": "invocation",
+      "meaning": "Run-level invocation failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Inspect the typed component cause.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-AGENT-001",
+      "title": "Invalid Agent configuration",
+      "meaning": "Invalid Agent configuration.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Check Agent name, turn bound and callable registration before build.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AGENT-002",
+      "title": "Reviewer authority escalation",
+      "meaning": "Reviewer authority escalation.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Attenuate reviewer capabilities to an explicit subset of the parent.",
+      "recipe": "add-reviewer",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AGENT-003",
+      "title": "Ambiguous checkpoint",
+      "meaning": "Ambiguous checkpoint.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Inspect durable execution evidence and select explicit safe resume policy.",
+      "recipe": "durable-conversation",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-DOC-001",
+      "title": "Stale knowledge",
+      "meaning": "Stale knowledge.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Run python3 scripts/ai-knowledge.py --write and inspect the generated diff.",
+      "recipe": "public-api-change",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-CARGO-001",
+      "title": "Cargo metadata unavailable",
+      "meaning": "Cargo metadata unavailable.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Verify the manifest path, Cargo and offline dependencies; inspect cargo metadata diagnostics locally.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-CARGO-002",
+      "title": "Runifold not detected",
+      "meaning": "Runifold not detected.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Select the correct Cargo manifest or add the intended Runifold dependency.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-VERSION-001",
+      "title": "Knowledge version mismatch",
+      "meaning": "Knowledge version mismatch.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Use a CLI and recipes matching the application release family.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-FEATURE-001",
+      "title": "Feature absent from knowledge",
+      "meaning": "Feature absent from knowledge.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Inspect the actual dependency source and version before changing its features.",
+      "recipe": "add-provider",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-CHECK-001",
+      "title": "Validation planning failed",
+      "meaning": "The selected source workspace or Git base could not be inspected.",
+      "causes": [
+        "The working directory is not a Runifold source workspace, the base does not resolve, or required tooling is unavailable."
+      ],
+      "canonical_fix": "Select --root and --base explicitly; install Git and Python 3.11+.",
+      "recipe": "modify-agent-loop",
+      "validation": [
+        "python3 scripts/test-ai-system.py"
+      ]
+    },
+    {
+      "code": "RF-AI-TASK-001",
+      "title": "Unknown task",
+      "meaning": "The requested recipe is not in this knowledge version.",
+      "causes": [
+        "Task ID spelling or knowledge version differs."
+      ],
+      "canonical_fix": "Run runifold ai context and choose a listed task.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-DIAGNOSTIC-001",
+      "title": "Unknown diagnostic",
+      "meaning": "The requested code is absent from this knowledge version.",
+      "causes": [
+        "The code is misspelled or belongs to a different release or extension."
+      ],
+      "canonical_fix": "Use documentation for the producing library version; do not guess a repair from an unrelated code.",
+      "recipe": "public-api-change",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    }
+  ]
+}

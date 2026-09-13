@@ -1,0 +1,2041 @@
+{
+  "schema_version": 1,
+  "project": "runifold",
+  "version": "0.10.1",
+  "rust_version": "1.88",
+  "generated_by": "python3 scripts/ai-knowledge.py --write",
+  "architecture": {
+    "execution": [
+      "runifold-agent",
+      "runifold-effect",
+      "runifold-macros",
+      "runifold-tool",
+      "runifold-workflow"
+    ],
+    "facade": [
+      "runifold"
+    ],
+    "kernel": [
+      "runifold-core"
+    ],
+    "testing": [
+      "runifold-eval-cli",
+      "runifold-provider-testkit",
+      "runifold-testkit"
+    ],
+    "model": [
+      "runifold-model"
+    ],
+    "protocols": [
+      "runifold-mcp"
+    ],
+    "observability": [
+      "runifold-observability-otel"
+    ],
+    "operations": [
+      "runifold-ops",
+      "runifold-cli"
+    ],
+    "providers": [
+      "runifold-providers"
+    ],
+    "retrieval": [
+      "runifold-retrieval",
+      "runifold-retrieval-pgvector",
+      "runifold-retrieval-qdrant",
+      "runifold-retrieval-text"
+    ],
+    "persistence": [
+      "runifold-store-postgres",
+      "runifold-store-sqlite"
+    ]
+  },
+  "crates": {
+    "runifold-agent": {
+      "path": "crates/runifold-agent",
+      "owns": "Canonical model/callable loop, review, structured completion and sessions",
+      "does_not_own": "HTTP transports and database implementations",
+      "entry": "crates/runifold-agent/src/agent/execution.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-effect": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ],
+        "runifold-retrieval": [
+          "normal"
+        ],
+        "runifold-tool": [
+          "normal"
+        ],
+        "runifold-testkit": [
+          "dev"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-agent --locked"
+      ]
+    },
+    "runifold": {
+      "path": "crates/runifold",
+      "owns": "Public re-exports, ProviderRuntime and ergonomic composition",
+      "does_not_own": "Transport wire formats and a second execution loop",
+      "entry": "crates/runifold/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-agent": [
+          "normal"
+        ],
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-effect": [
+          "normal"
+        ],
+        "runifold-mcp": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ],
+        "runifold-macros": [
+          "normal"
+        ],
+        "runifold-observability-otel": [
+          "normal"
+        ],
+        "runifold-retrieval": [
+          "normal"
+        ],
+        "runifold-retrieval-pgvector": [
+          "normal"
+        ],
+        "runifold-retrieval-qdrant": [
+          "normal"
+        ],
+        "runifold-store-sqlite": [
+          "normal"
+        ],
+        "runifold-tool": [
+          "normal"
+        ],
+        "runifold-workflow": [
+          "normal"
+        ],
+        "runifold-store-postgres": [
+          "normal"
+        ],
+        "runifold-providers": [
+          "dev"
+        ],
+        "runifold-testkit": [
+          "cfg(not(target_arch = \"wasm32\")):dev-dependencies"
+        ]
+      },
+      "features": {
+        "default": [
+          "runtime"
+        ],
+        "runtime": [
+          "dep:runifold-agent",
+          "dep:runifold-effect",
+          "dep:runifold-macros",
+          "dep:runifold-retrieval",
+          "dep:runifold-tool",
+          "dep:runifold-workflow",
+          "dep:schemars",
+          "dep:serde_json"
+        ],
+        "otel": [
+          "dep:runifold-observability-otel"
+        ],
+        "mcp": [
+          "runtime",
+          "dep:runifold-mcp"
+        ],
+        "sqlite": [
+          "runtime",
+          "dep:runifold-store-sqlite"
+        ],
+        "sqlite-bundled": [
+          "sqlite",
+          "runifold-store-sqlite/bundled"
+        ],
+        "qdrant": [
+          "runtime",
+          "dep:runifold-retrieval-qdrant"
+        ],
+        "pgvector": [
+          "runtime",
+          "dep:runifold-retrieval-pgvector"
+        ],
+        "workflow-postgres": [
+          "runtime",
+          "dep:runifold-store-postgres"
+        ],
+        "archive-s3": [
+          "runtime",
+          "dep:reqwest",
+          "dep:sha2",
+          "dep:base64",
+          "dep:serde_json",
+          "dep:time",
+          "dep:hmac",
+          "dep:secrecy"
+        ]
+      },
+      "validation": [
+        "cargo test -p runifold --features sqlite-bundled --locked"
+      ]
+    },
+    "runifold-core": {
+      "path": "crates/runifold-core",
+      "owns": "Run identity, authority, budgets, cancellation, events and checkpoints",
+      "does_not_own": "Provider, protocol, storage backend and application policy implementations",
+      "entry": "crates/runifold-core/src/context.rs",
+      "workspace_dependencies": {},
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    "runifold-effect": {
+      "path": "crates/runifold-effect",
+      "owns": "Write-ahead effects, stable replay identity and explicit recovery",
+      "does_not_own": "Vendor-specific business handlers and guaranteed remote exactly-once delivery",
+      "entry": "crates/runifold-effect/src/executor.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    "runifold-eval-cli": {
+      "path": "crates/runifold-eval-cli",
+      "owns": "Evaluation CLI and CI regression gates",
+      "does_not_own": "Application Agent policy",
+      "entry": "crates/runifold-eval-cli/src/main.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-testkit": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-eval-cli --locked"
+      ]
+    },
+    "runifold-model": {
+      "path": "crates/runifold-model",
+      "owns": "Provider-neutral content, model invocation, streams, routing and retry contracts",
+      "does_not_own": "Vendor wire types and Agent tool loops",
+      "entry": "crates/runifold-model/src/invocation.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    "runifold-macros": {
+      "path": "crates/runifold-macros",
+      "owns": "Typed Tool attribute expansion",
+      "does_not_own": "Runtime policy and execution",
+      "entry": "crates/runifold-macros/src/lib.rs",
+      "workspace_dependencies": {},
+      "features": {},
+      "validation": [
+        "cargo test -p runifold --test typed_tool_macro --locked"
+      ]
+    },
+    "runifold-mcp": {
+      "path": "crates/runifold-mcp",
+      "owns": "MCP client/server protocol and runtime adapters",
+      "does_not_own": "Changes to core authority or model IR for MCP wire formats",
+      "entry": "crates/runifold-mcp/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ],
+        "runifold-tool": [
+          "normal"
+        ],
+        "runifold-workflow": [
+          "normal"
+        ],
+        "runifold-store-sqlite": [
+          "dev"
+        ],
+        "runifold-testkit": [
+          "dev"
+        ]
+      },
+      "features": {
+        "workflow-tasks": [
+          "dep:runifold-workflow",
+          "dep:uuid"
+        ]
+      },
+      "validation": [
+        "cargo test -p runifold-mcp --locked"
+      ]
+    },
+    "runifold-observability-otel": {
+      "path": "crates/runifold-observability-otel",
+      "owns": "Optional OpenTelemetry projection of canonical observations",
+      "does_not_own": "Core event semantics or default prompt capture",
+      "entry": "crates/runifold-observability-otel/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ],
+        "runifold-workflow": [
+          "normal"
+        ],
+        "runifold-testkit": [
+          "dev"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-observability-otel --locked"
+      ]
+    },
+    "runifold-ops": {
+      "path": "crates/runifold-ops",
+      "owns": "Read-only execution inspection, evidence and value-free diffs",
+      "does_not_own": "Executing replayed model calls or external writes",
+      "entry": "crates/runifold-ops/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-ops --locked"
+      ]
+    },
+    "runifold-cli": {
+      "path": "crates/runifold-cli",
+      "owns": "Operational commands and AI development context/diagnostics",
+      "does_not_own": "Runtime implementation or executing suggested repairs",
+      "entry": "crates/runifold-cli/src/main.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-ops": [
+          "normal"
+        ],
+        "runifold-store-postgres": [
+          "normal"
+        ],
+        "runifold-store-sqlite": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    "runifold-providers": {
+      "path": "crates/runifold-providers",
+      "owns": "Feature-gated vendor transports and canonical protocol projection",
+      "does_not_own": "Kernel semantics and hidden Agent loops",
+      "entry": "crates/runifold-providers/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ],
+        "runifold-retrieval": [
+          "normal"
+        ],
+        "runifold-provider-testkit": [
+          "dev"
+        ]
+      },
+      "features": {
+        "default": [],
+        "anthropic": [
+          "dep:eventsource-stream",
+          "dep:httpdate"
+        ],
+        "bedrock": [
+          "dep:aws-sdk-bedrockruntime",
+          "dep:aws-smithy-types"
+        ],
+        "cohere": [
+          "dep:runifold-retrieval"
+        ],
+        "gemini": [
+          "dep:eventsource-stream",
+          "dep:runifold-retrieval"
+        ],
+        "ollama": [
+          "dep:runifold-retrieval"
+        ],
+        "openai": [
+          "dep:eventsource-stream",
+          "dep:httpdate",
+          "dep:runifold-retrieval"
+        ],
+        "openai-realtime": [
+          "openai",
+          "dep:futures-channel",
+          "dep:js-sys",
+          "dep:tokio",
+          "dep:tokio-tungstenite",
+          "dep:wasm-bindgen",
+          "dep:wasm-bindgen-futures",
+          "dep:web-sys"
+        ]
+      },
+      "validation": [
+        "cargo test -p runifold-providers --all-features --locked"
+      ]
+    },
+    "runifold-provider-testkit": {
+      "path": "crates/runifold-provider-testkit",
+      "owns": "Loopback protocol cassettes, conformance and benchmark contracts",
+      "does_not_own": "Production provider transports",
+      "entry": "crates/runifold-provider-testkit/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-provider-testkit --locked"
+      ]
+    },
+    "runifold-retrieval": {
+      "path": "crates/runifold-retrieval",
+      "owns": "Provider-neutral retrieval, documents and semantic-memory contracts",
+      "does_not_own": "A mandatory vector database or opinionated RAG application",
+      "entry": "crates/runifold-retrieval/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-retrieval --locked"
+      ]
+    },
+    "runifold-retrieval-pgvector": {
+      "path": "crates/runifold-retrieval-pgvector",
+      "owns": "PostgreSQL vector retrieval adapter",
+      "does_not_own": "Agent conversation persistence",
+      "entry": "crates/runifold-retrieval-pgvector/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-retrieval": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-retrieval-pgvector --locked"
+      ]
+    },
+    "runifold-retrieval-qdrant": {
+      "path": "crates/runifold-retrieval-qdrant",
+      "owns": "Qdrant retrieval adapter",
+      "does_not_own": "Provider-neutral retrieval policy",
+      "entry": "crates/runifold-retrieval-qdrant/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-retrieval": [
+          "normal"
+        ],
+        "runifold-provider-testkit": [
+          "dev"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-retrieval-qdrant --locked"
+      ]
+    },
+    "runifold-retrieval-text": {
+      "path": "crates/runifold-retrieval-text",
+      "owns": "Local text retrieval adapter",
+      "does_not_own": "Model execution and remote vector stores",
+      "entry": "crates/runifold-retrieval-text/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-retrieval": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-retrieval-text --locked"
+      ]
+    },
+    "runifold-store-postgres": {
+      "path": "crates/runifold-store-postgres",
+      "owns": "PostgreSQL implementations of durable runtime stores",
+      "does_not_own": "Application-owned authorization policy",
+      "entry": "crates/runifold-store-postgres/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-agent": [
+          "normal"
+        ],
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-effect": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ],
+        "runifold-ops": [
+          "normal"
+        ],
+        "runifold-retrieval": [
+          "normal"
+        ],
+        "runifold-workflow": [
+          "normal"
+        ],
+        "runifold-mcp": [
+          "dev"
+        ],
+        "runifold-tool": [
+          "dev"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-store-postgres --locked"
+      ]
+    },
+    "runifold-store-sqlite": {
+      "path": "crates/runifold-store-sqlite",
+      "owns": "SQLite implementations of durable runtime stores",
+      "does_not_own": "A separate execution model or implicit unsafe recovery",
+      "entry": "crates/runifold-store-sqlite/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-agent": [
+          "normal"
+        ],
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-effect": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ],
+        "runifold-ops": [
+          "normal"
+        ],
+        "runifold-workflow": [
+          "normal"
+        ],
+        "runifold-testkit": [
+          "dev"
+        ],
+        "runifold-tool": [
+          "dev"
+        ]
+      },
+      "features": {
+        "default": [],
+        "bundled": [
+          "rusqlite/bundled"
+        ]
+      },
+      "validation": [
+        "cargo test -p runifold-store-sqlite --features bundled --locked"
+      ]
+    },
+    "runifold-testkit": {
+      "path": "crates/runifold-testkit",
+      "owns": "Deterministic models, fault injection and offline evaluation",
+      "does_not_own": "Production transport",
+      "entry": "crates/runifold-testkit/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ],
+        "runifold-retrieval": [
+          "normal"
+        ],
+        "runifold-tool": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-testkit --locked"
+      ]
+    },
+    "runifold-tool": {
+      "path": "crates/runifold-tool",
+      "owns": "Typed tool descriptors, registry, input validation and safe errors",
+      "does_not_own": "Agent orchestration and vendor protocols",
+      "entry": "crates/runifold-tool/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    "runifold-workflow": {
+      "path": "crates/runifold-workflow",
+      "owns": "Deterministic composition, durable steps, workers, leases, timers and signals",
+      "does_not_own": "Provider transport and business-specific workflows",
+      "entry": "crates/runifold-workflow/src/lib.rs",
+      "workspace_dependencies": {
+        "runifold-agent": [
+          "normal"
+        ],
+        "runifold-core": [
+          "normal"
+        ],
+        "runifold-model": [
+          "normal"
+        ],
+        "runifold-testkit": [
+          "dev"
+        ]
+      },
+      "features": {},
+      "validation": [
+        "cargo test -p runifold-workflow --locked"
+      ]
+    }
+  },
+  "laws": [
+    {
+      "id": "RF-LAW-001",
+      "title": "Provider and protocol isolation",
+      "check": "forbidden_dependency",
+      "scope": [
+        "runifold-core"
+      ],
+      "forbid": [
+        "runifold-model",
+        "runifold-agent",
+        "runifold-providers",
+        "runifold-mcp",
+        "runifold-observability-otel",
+        "runifold-store-sqlite",
+        "runifold-store-postgres",
+        "reqwest",
+        "hyper"
+      ],
+      "dependency_kinds": [
+        "normal",
+        "build"
+      ],
+      "severity": "error"
+    },
+    {
+      "id": "RF-LAW-002",
+      "title": "One canonical execution path",
+      "check": "review_and_tests",
+      "scope": [
+        "runifold",
+        "runifold-agent"
+      ],
+      "evidence": [
+        "cargo test -p runifold-agent --locked"
+      ]
+    },
+    {
+      "id": "RF-LAW-003",
+      "title": "Child authority cannot amplify",
+      "check": "review_and_tests",
+      "scope": [
+        "runifold-core",
+        "runifold-agent"
+      ],
+      "evidence": [
+        "cargo test -p runifold-agent authority --locked"
+      ]
+    },
+    {
+      "id": "RF-LAW-004",
+      "title": "Visible output and effects constrain retry safety",
+      "check": "review_and_tests",
+      "scope": [
+        "runifold-model",
+        "runifold-effect"
+      ],
+      "evidence": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "id": "RF-LAW-005",
+      "title": "History, journal and memory remain distinct",
+      "check": "review_and_tests",
+      "scope": [
+        "runifold-agent",
+        "runifold-retrieval"
+      ],
+      "evidence": [
+        "cargo test -p runifold-agent conversation --locked"
+      ]
+    }
+  ],
+  "recommended_api": {
+    "provider_agent": "ProviderModelExt -> ProviderRuntime -> AgentBuilder -> Agent",
+    "explicit_execution": "Agent::run(input, &RunContext)",
+    "offline_testing": "ScriptedModel -> Agent::builder",
+    "durable_conversation": "AgentSession::run(request_id, input, &RunContext)"
+  },
+  "recipes": {
+    "create-agent": {
+      "title": "Create an Agent",
+      "audience": "application",
+      "api": "ProviderModelExt \u2192 ProviderRuntime \u2192 AgentBuilder \u2192 Agent",
+      "requirements": [
+        "runifold with runtime (default)",
+        "runifold-providers with openai",
+        "tokio with macros and rt-multi-thread",
+        "anyhow",
+        "OPENAI_API_KEY only when running, not compiling"
+      ],
+      "validation": [
+        "cargo check -p runifold --example quickstart --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::ProviderRuntime",
+        "runifold::ProviderRuntime::agent",
+        "runifold::AgentBuilder"
+      ],
+      "runtime_path": "ProviderRuntime \u2192 AgentBuilder \u2192 Agent \u2192 canonical execute_state \u2192 model/callables \u2192 validated outcome",
+      "path": "docs/ai/recipes/create-agent.md",
+      "source": "crates/runifold/examples/quickstart.rs",
+      "related": [
+        "docs/rfcs/0053-provider-runtime-contract.md",
+        "crates/runifold/src/lib.rs"
+      ],
+      "source_sha256": "91158dd54cdd7d7bd9264de62c66dd7743f19dfb43f25193864e139c74c8de9e"
+    },
+    "add-tool": {
+      "title": "Add a typed Tool",
+      "audience": "application",
+      "api": "#[runifold::tool] \u2192 generated <name>_tool() \u2192 AgentBuilder::tool",
+      "requirements": [
+        "runifold with runtime",
+        "serde with derive",
+        "serde_json for JSON invocation",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running"
+      ],
+      "validation": [
+        "cargo test -p runifold --test typed_tool_macro --locked",
+        "cargo check -p runifold --example ai_tool --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-tool",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::AgentBuilder",
+        "runifold::ToolRegistry",
+        "runifold::ToolContext",
+        "runifold::tool"
+      ],
+      "runtime_path": "Agent callable preflight \u2192 EffectExecutor \u2192 ToolRegistry::invoke \u2192 Tool::invoke \u2192 output validation \u2192 canonical transcript",
+      "path": "docs/ai/recipes/add-tool.md",
+      "source": "crates/runifold/tests/typed_tool_macro.rs",
+      "related": [
+        "docs/rfcs/0016-typed-function-tools.md",
+        "docs/rfcs/0017-tool-state-and-errors.md"
+      ],
+      "source_sha256": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be"
+    },
+    "structured-output": {
+      "title": "Return typed structured output",
+      "audience": "application",
+      "api": "AgentBuilder::build_structured::<T> \u2192 StructuredAgent<T>::run",
+      "requirements": [
+        "runifold with runtime",
+        "serde with derive",
+        "runifold-testkit and futures-executor for the offline test",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running"
+      ],
+      "validation": [
+        "cargo test -p runifold-agent structured::tests --locked",
+        "cargo check -p runifold --example ai_structured --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::AgentBuilder",
+        "runifold::StructuredAgent"
+      ],
+      "runtime_path": "Canonical Agent loop \u2192 candidate \u2192 local completion validation / bounded repair \u2192 typed outcome",
+      "path": "docs/ai/recipes/structured-output.md",
+      "source": "crates/runifold-agent/src/structured.rs",
+      "related": [
+        "docs/rfcs/0019-typed-structured-output.md",
+        "crates/runifold-agent/src/completion.rs"
+      ],
+      "source_sha256": "4ec453cfc042ed3dbc3b11306378c22da94de6b8a35a83762d9690c195153421"
+    },
+    "stream-agent": {
+      "title": "Stream an Agent",
+      "audience": "application",
+      "api": "Agent::stream \u2192 AgentStreamEvent",
+      "requirements": [
+        "runifold with runtime",
+        "futures-util for StreamExt",
+        "runifold-testkit and futures-executor for the offline test",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running",
+        "futures-util for StreamExt"
+      ],
+      "validation": [
+        "cargo test -p runifold-agent streaming_ --locked",
+        "cargo check -p runifold --example ai_stream --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent",
+        "runifold::RunContext",
+        "runifold::AgentStreamEvent"
+      ],
+      "runtime_path": "Agent::stream \u2192 canonical Agent engine \u2192 buffered observer \u2192 model/callable/usage events \u2192 Completed or Err",
+      "path": "docs/ai/recipes/stream-agent.md",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "related": [
+        "docs/rfcs/0018-agent-streaming.md",
+        "crates/runifold-agent/src/stream.rs"
+      ],
+      "source_sha256": "6011d917d0f3e9e01f84cff691939b7781640bbbf741cd6a637dbd902fd7cf66"
+    },
+    "durable-conversation": {
+      "title": "Persist a conversation and replay a request",
+      "audience": "application",
+      "api": "AgentSession::new \u2192 AgentSession::run",
+      "requirements": [
+        "runifold with sqlite-bundled",
+        "runifold-testkit",
+        "tokio",
+        "anyhow",
+        "No vendor credentials required"
+      ],
+      "validation": [
+        "cargo check -p runifold --example durable_session --features sqlite-bundled --locked",
+        "cargo test -p runifold-agent conversation --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::AgentSession",
+        "runifold::RunContext"
+      ],
+      "runtime_path": "AgentSession admission \u2192 stable request/checkpoint identity \u2192 canonical Agent/effects \u2192 conversation commit \u2192 request replay",
+      "path": "docs/ai/recipes/durable-conversation.md",
+      "source": "crates/runifold/examples/durable_session.rs",
+      "related": [
+        "docs/rfcs/0073-production-agent-sessions.md",
+        "crates/runifold/examples/durable_publish.rs"
+      ],
+      "source_sha256": "a01aeba65e572f317095fe158815c6b5c54ff86f9a1a040903f5d18262210942"
+    },
+    "add-provider": {
+      "title": "Add a Provider adapter",
+      "audience": "contributor",
+      "api": "ProviderModel + Model; canonical ModelRequest/ModelStreamEvent",
+      "requirements": [
+        "Contributor workspace",
+        "Use the new feature in place of anthropic in validation once implemented"
+      ],
+      "validation": [
+        "cargo test -p runifold-providers --no-default-features --features anthropic --locked",
+        "cargo check -p runifold-providers --no-default-features --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-providers/**"
+      ],
+      "validation_profile": "runifold-providers",
+      "difficulty": "advanced",
+      "uses": [],
+      "runtime_path": "ModelRequest \u2192 adapter wire projection \u2192 transport \u2192 canonical stream accumulator \u2192 ModelResponse",
+      "path": "docs/ai/recipes/add-provider.md",
+      "source": "crates/runifold-providers/src/lib.rs",
+      "related": [
+        "docs/PROVIDERS.md",
+        "docs/rfcs/0052-provider-crate-topology.md",
+        "crates/runifold-providers/src/anthropic.rs",
+        "crates/runifold-model/src/invocation.rs"
+      ],
+      "source_sha256": "5344f9460784a48c5ad8edb2c44572a7d05b558b939e14c9dcd5894858acb8d1"
+    },
+    "add-reviewer": {
+      "title": "Review an Agent answer before completion",
+      "audience": "application",
+      "api": "TerminalRuleReviewer + TerminalReviewPolicy",
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline test",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running"
+      ],
+      "validation": [
+        "cargo test -p runifold-agent terminal_review --locked",
+        "cargo check -p runifold --example ai_reviewer --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::TerminalRuleReviewer",
+        "runifold::AgentBuilder"
+      ],
+      "runtime_path": "Candidate \u2192 local terminal validation \u2192 attenuated reviewer \u2192 approve / bounded repair / reject \u2192 completion commit",
+      "path": "docs/ai/recipes/add-reviewer.md",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "related": [
+        "crates/runifold-agent/src/terminal_review.rs",
+        "crates/runifold-agent/src/agent/review.rs"
+      ],
+      "source_sha256": "6011d917d0f3e9e01f84cff691939b7781640bbbf741cd6a637dbd902fd7cf66"
+    },
+    "add-effect": {
+      "title": "Add recoverable external work",
+      "audience": "application",
+      "api": "Tool effect descriptor; EffectExecutor for low-level effect orchestration",
+      "requirements": [
+        "runifold with runtime; sqlite-bundled for durable publication",
+        "Low-level example uses runifold-effect test helpers"
+      ],
+      "validation": [
+        "cargo test -p runifold-effect --locked",
+        "cargo check -p runifold --example durable_publish --features sqlite-bundled --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-effect",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::EffectExecutor"
+      ],
+      "runtime_path": "Capability preflight \u2192 stable effect identity \u2192 persisted Started \u2192 handler / reconciliation \u2192 persisted Completed \u2192 replay",
+      "path": "docs/ai/recipes/add-effect.md",
+      "source": "crates/runifold-effect/src/executor.rs",
+      "related": [
+        "docs/rfcs/0013-agent-callable-effects.md",
+        "crates/runifold/examples/durable_publish.rs",
+        "crates/runifold-effect/src/handler.rs"
+      ],
+      "source_sha256": "b22f27e7e6736ff615b9eae24c6bf41781183bea494a9a07866af6f35f331cc3"
+    },
+    "add-workflow-step": {
+      "title": "Compose workflow steps",
+      "audience": "application",
+      "api": "Workflow::builder \u2192 agent \u2192 build",
+      "requirements": [
+        "runifold with runtime",
+        "runifold-providers with openai",
+        "anyhow",
+        "OPENAI_API_KEY only to run the assembly example"
+      ],
+      "validation": [
+        "cargo check -p runifold --example workflow_chain --locked",
+        "cargo test -p runifold-workflow --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-workflow",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent"
+      ],
+      "runtime_path": "Workflow definition \u2192 durable worker / step execution \u2192 explicit child authority \u2192 canonical Agent \u2192 persisted step progress",
+      "path": "docs/ai/recipes/add-workflow-step.md",
+      "source": "crates/runifold/examples/workflow_chain.rs",
+      "related": [
+        "docs/rfcs/0023-durable-workflow-orchestration.md",
+        "docs/rfcs/0044-workflow-worker-runtime.md"
+      ],
+      "source_sha256": "12f5ddfc7875587674b52f52dd85a463322e475dcbb71abdf611709598a52a9d"
+    },
+    "test-provider": {
+      "title": "Test a Provider offline",
+      "audience": "contributor",
+      "api": "CassetteServer + HttpExchange + verify_success / verify_error",
+      "requirements": [
+        "runifold-providers with anthropic",
+        "runifold-provider-testkit",
+        "tokio",
+        "serde_json",
+        "Local loopback sockets; no vendor credentials"
+      ],
+      "validation": [
+        "cargo test -p runifold-providers --no-default-features --features anthropic --test anthropic_http_cassette --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-providers/**"
+      ],
+      "validation_profile": "runifold-providers",
+      "difficulty": "advanced",
+      "uses": [],
+      "runtime_path": "CassetteServer expected request \u2192 real loopback transport \u2192 adapter \u2192 canonical success/error conformance checks",
+      "path": "docs/ai/recipes/test-provider.md",
+      "source": "crates/runifold-providers/tests/anthropic_http_cassette.rs",
+      "related": [
+        "crates/runifold-provider-testkit/src/conformance.rs",
+        "docs/rfcs/0028-provider-transport-reliability.md"
+      ],
+      "source_sha256": "015dbb5b77ca26a5e7c5158aebb72d5d0601f04dab8a2ee7fcbe8a5373a1b53f"
+    },
+    "conversation": {
+      "title": "Use conversation history",
+      "audience": "application",
+      "api": "Agent::run_conversation",
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline source test"
+      ],
+      "validation": [
+        "cargo test -p runifold-agent --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent"
+      ],
+      "runtime_path": "Load conversation \u2192 bounded context selection \u2192 canonical Agent run \u2192 optimistic atomic transcript append",
+      "path": "docs/ai/recipes/conversation.md",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "related": [
+        "crates/runifold-agent/src/conversation.rs",
+        "docs/ai/recipes/durable-conversation.md"
+      ],
+      "source_sha256": "6011d917d0f3e9e01f84cff691939b7781640bbbf741cd6a637dbd902fd7cf66"
+    },
+    "add-retriever": {
+      "title": "Add retrieval context",
+      "audience": "application",
+      "api": "AgentBuilder::dynamic_context \u2192 Retriever",
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline source test",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running"
+      ],
+      "validation": [
+        "cargo test -p runifold-agent --locked",
+        "cargo check -p runifold --example ai_retrieval --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent",
+        "runifold::Retriever"
+      ],
+      "runtime_path": "Agent context preparation \u2192 retrieval capability check \u2192 Retriever::retrieve \u2192 untrusted user context \u2192 model invocation",
+      "path": "docs/ai/recipes/add-retriever.md",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "related": [
+        "crates/runifold-agent/src/builder.rs",
+        "docs/rfcs/0040-provider-neutral-retrieval.md"
+      ],
+      "source_sha256": "6011d917d0f3e9e01f84cff691939b7781640bbbf741cd6a637dbd902fd7cf66"
+    },
+    "modify-agent-loop": {
+      "title": "Modify the canonical Agent loop",
+      "audience": "contributor",
+      "api": "agent/execution.rs \u2192 review \u2192 callable \u2192 completion",
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline source test"
+      ],
+      "validation": [
+        "cargo test -p runifold-agent --locked",
+        "cargo test -p runifold-effect --locked",
+        "cargo test -p runifold-tool --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::Agent"
+      ],
+      "runtime_path": "Initial state \u2192 canonical execute_state \u2192 model \u2192 turn review \u2192 callable effects \u2192 completion / terminal review",
+      "path": "docs/ai/recipes/modify-agent-loop.md",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "related": [
+        "crates/runifold-agent/src/agent/execution.rs",
+        "crates/runifold-agent/src/agent/callable.rs",
+        "crates/runifold-agent/src/agent/completion.rs"
+      ],
+      "source_sha256": "6011d917d0f3e9e01f84cff691939b7781640bbbf741cd6a637dbd902fd7cf66"
+    },
+    "public-api-change": {
+      "title": "Change a public API",
+      "audience": "contributor",
+      "api": "Owning crate export \u2192 facade export \u2192 executable contract",
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline source test"
+      ],
+      "validation": [
+        "cargo test -p runifold-agent --locked",
+        "cargo check -p runifold --all-features --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::Agent"
+      ],
+      "runtime_path": "Public caller \u2192 owning crate API \u2192 existing canonical implementation; facade re-exports preserve that path",
+      "path": "docs/ai/recipes/public-api-change.md",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "related": [
+        "docs/RELEASING.md",
+        "scripts/semver-check.sh",
+        "crates/runifold/src/lib.rs"
+      ],
+      "source_sha256": "6011d917d0f3e9e01f84cff691939b7781640bbbf741cd6a637dbd902fd7cf66"
+    }
+  },
+  "validation": {
+    "knowledge": [
+      "python3 scripts/ai-knowledge.py --check"
+    ],
+    "workspace": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+      "cargo test --workspace --all-features --locked"
+    ]
+  },
+  "canonical_paths": {
+    "agent_execution": "runifold-agent::Agent::run",
+    "tool_execution": "runifold-tool::ToolRegistry",
+    "effect_execution": "runifold-effect::EffectExecutor"
+  },
+  "validation_profiles": {
+    "runifold": [
+      "cargo test -p runifold --features sqlite-bundled --locked"
+    ],
+    "runifold-core": [
+      "cargo test -p runifold-core --locked"
+    ],
+    "runifold-model": [
+      "cargo test -p runifold-model --locked"
+    ],
+    "runifold-agent": [
+      "cargo test -p runifold-agent --locked"
+    ],
+    "runifold-tool": [
+      "cargo test -p runifold-tool --locked"
+    ],
+    "runifold-macros": [
+      "cargo test -p runifold --test typed_tool_macro --locked"
+    ],
+    "runifold-effect": [
+      "cargo test -p runifold-effect --locked"
+    ],
+    "runifold-workflow": [
+      "cargo test -p runifold-workflow --locked"
+    ],
+    "runifold-providers": [
+      "cargo test -p runifold-providers --all-features --locked"
+    ],
+    "runifold-provider-testkit": [
+      "cargo test -p runifold-provider-testkit --locked"
+    ],
+    "runifold-mcp": [
+      "cargo test -p runifold-mcp --locked"
+    ],
+    "runifold-retrieval": [
+      "cargo test -p runifold-retrieval --locked"
+    ],
+    "runifold-retrieval-text": [
+      "cargo test -p runifold-retrieval-text --locked"
+    ],
+    "runifold-retrieval-qdrant": [
+      "cargo test -p runifold-retrieval-qdrant --locked"
+    ],
+    "runifold-retrieval-pgvector": [
+      "cargo test -p runifold-retrieval-pgvector --locked"
+    ],
+    "runifold-store-sqlite": [
+      "cargo test -p runifold-store-sqlite --features bundled --locked"
+    ],
+    "runifold-store-postgres": [
+      "cargo test -p runifold-store-postgres --locked"
+    ],
+    "runifold-observability-otel": [
+      "cargo test -p runifold-observability-otel --locked"
+    ],
+    "runifold-ops": [
+      "cargo test -p runifold-ops --locked"
+    ],
+    "runifold-cli": [
+      "cargo test -p runifold-cli --locked"
+    ],
+    "runifold-testkit": [
+      "cargo test -p runifold-testkit --locked"
+    ],
+    "runifold-eval-cli": [
+      "cargo test -p runifold-eval-cli --locked"
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "RF-TOOL-001",
+      "title": "NotFound",
+      "meaning": "ToolError reports NotFound.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::NotFound",
+      "causes": [
+        "The NotFound boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Register the named Tool on the Agent builder or ToolRegistry; check the model-facing name.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-002",
+      "title": "InvalidInput",
+      "meaning": "ToolError reports InvalidInput.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::InvalidInput",
+      "causes": [
+        "The InvalidInput boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Validate arguments against the Tool input schema and fix the caller.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-003",
+      "title": "CapabilityDenied",
+      "meaning": "ToolError reports CapabilityDenied.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::CapabilityDenied",
+      "causes": [
+        "The CapabilityDenied boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Register the Tool and explicitly grant its capability to the current RunContext or child grant.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-004",
+      "title": "Cancelled",
+      "meaning": "ToolError reports Cancelled.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::Cancelled",
+      "causes": [
+        "The Cancelled boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Honor cancellation; start new work only when the caller requests it.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-005",
+      "title": "DeadlineExceeded",
+      "meaning": "ToolError reports DeadlineExceeded.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::DeadlineExceeded",
+      "causes": [
+        "The DeadlineExceeded boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect deadline and retry safety before starting another invocation.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-006",
+      "title": "Execution",
+      "meaning": "ToolError reports Execution.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::Execution",
+      "causes": [
+        "The Execution boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect the safe typed application cause; do not blindly retry a write.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-TOOL-007",
+      "title": "InvalidOutput",
+      "meaning": "ToolError reports InvalidOutput.",
+      "source": "crates/runifold-tool/src/error.rs",
+      "symbol": "ToolErrorKind::InvalidOutput",
+      "causes": [
+        "The InvalidOutput boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Return the declared output shape and preserve rich content through ToolOutput.",
+      "recipe": "add-tool",
+      "validation": [
+        "cargo test -p runifold-tool --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-001",
+      "title": "CapabilityDenied",
+      "meaning": "EffectExecutorError reports CapabilityDenied.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::CapabilityDenied",
+      "causes": [
+        "The CapabilityDenied boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Grant only the effect capability intended for this Run.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-002",
+      "title": "IdempotencyConflict",
+      "meaning": "EffectExecutorError reports IdempotencyConflict.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::IdempotencyConflict",
+      "causes": [
+        "The IdempotencyConflict boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Reuse an idempotency key only for identical logical work; inspect persisted input and identity.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-003",
+      "title": "Ambiguous",
+      "meaning": "EffectExecutorError reports Ambiguous.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Ambiguous",
+      "causes": [
+        "The Ambiguous boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Reconcile the external receipt; retry only under an explicit recovery policy with evidence of safety.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-004",
+      "title": "Store",
+      "meaning": "EffectExecutorError reports Store.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Store",
+      "causes": [
+        "The Store boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Restore durable store availability and inspect the last persisted effect state before recovery.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-005",
+      "title": "Observability",
+      "meaning": "EffectExecutorError reports Observability.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Observability",
+      "causes": [
+        "The Observability boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Restore journal availability; preserve fail-closed execution.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-006",
+      "title": "Handler",
+      "meaning": "EffectExecutorError reports Handler.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Handler",
+      "causes": [
+        "The Handler boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect the typed handler cause and retry safety before deciding to repeat work.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-007",
+      "title": "Cancelled",
+      "meaning": "EffectExecutorError reports Cancelled.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Cancelled",
+      "causes": [
+        "The Cancelled boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Honor cancellation and preserve any ambiguous external effect record.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-008",
+      "title": "DeadlineExceeded",
+      "meaning": "EffectExecutorError reports DeadlineExceeded.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::DeadlineExceeded",
+      "causes": [
+        "The DeadlineExceeded boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect external outcome and deadline before recovery.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-009",
+      "title": "Protocol",
+      "meaning": "EffectExecutorError reports Protocol.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Protocol",
+      "causes": [
+        "The Protocol boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect persisted effect state/version; do not overwrite evidence to force progress.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-EFFECT-010",
+      "title": "Reconciliation",
+      "meaning": "EffectExecutorError reports Reconciliation.",
+      "source": "crates/runifold-effect/src/error.rs",
+      "symbol": "EffectExecutorErrorKind::Reconciliation",
+      "causes": [
+        "The Reconciliation boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Restore receipt lookup and reconcile again without repeating the external write.",
+      "recipe": "add-effect",
+      "validation": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-001",
+      "title": "InvalidRequest",
+      "meaning": "ModelError reports InvalidRequest.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::InvalidRequest",
+      "causes": [
+        "The InvalidRequest boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Correct the canonical request according to the selected API and schema.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-002",
+      "title": "UnsupportedFeature",
+      "meaning": "ModelError reports UnsupportedFeature.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::UnsupportedFeature",
+      "causes": [
+        "The UnsupportedFeature boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Select a model with verified support or explicitly choose visible degradation; never guess support.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-003",
+      "title": "Transport",
+      "meaning": "ModelError reports Transport.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::Transport",
+      "causes": [
+        "The Transport boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect endpoint and retry safety; account for visible output and external work before retrying.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-004",
+      "title": "Protocol",
+      "meaning": "ModelError reports Protocol.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::Protocol",
+      "causes": [
+        "The Protocol boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect a redacted wire cassette and adapter version; fix projection without losing semantics.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-005",
+      "title": "StreamState",
+      "meaning": "ModelError reports StreamState.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::StreamState",
+      "causes": [
+        "The StreamState boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Require a valid started/content/terminal lifecycle; do not fabricate successful completion.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-006",
+      "title": "MalformedToolArguments",
+      "meaning": "ModelError reports MalformedToolArguments.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::MalformedToolArguments",
+      "causes": [
+        "The MalformedToolArguments boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Validate complete JSON arguments; do not execute partially parsed input.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-007",
+      "title": "Provider",
+      "meaning": "ModelError reports Provider.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::Provider",
+      "causes": [
+        "The Provider boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect the safe provider category and rate-limit metadata before applying explicit retry policy.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-008",
+      "title": "Cancelled",
+      "meaning": "ModelError reports Cancelled.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::Cancelled",
+      "causes": [
+        "The Cancelled boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Honor caller cancellation.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-009",
+      "title": "DeadlineExceeded",
+      "meaning": "ModelError reports DeadlineExceeded.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::DeadlineExceeded",
+      "causes": [
+        "The DeadlineExceeded boundary rejected the operation; inspect the safe typed error and execution state."
+      ],
+      "canonical_fix": "Inspect upstream latency and remaining deadline before any retry.",
+      "recipe": "test-provider",
+      "validation": [
+        "cargo test -p runifold-model --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-001",
+      "aliases": [
+        "runifold.invalid_input"
+      ],
+      "title": "invalid_input",
+      "meaning": "Run-level invalid_input failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Validate configuration and request data.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-002",
+      "aliases": [
+        "runifold.capability_denied"
+      ],
+      "title": "capability_denied",
+      "meaning": "Run-level capability_denied failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Grant only the intended capability.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-003",
+      "aliases": [
+        "runifold.budget_exceeded"
+      ],
+      "title": "budget_exceeded",
+      "meaning": "Run-level budget_exceeded failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Reduce work or deliberately adjust the shared budget.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-004",
+      "aliases": [
+        "runifold.deadline_exceeded"
+      ],
+      "title": "deadline_exceeded",
+      "meaning": "Run-level deadline_exceeded failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Inspect the effective deadline and external outcome.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-005",
+      "aliases": [
+        "runifold.cancelled"
+      ],
+      "title": "cancelled",
+      "meaning": "Run-level cancelled failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Honor caller cancellation.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-006",
+      "aliases": [
+        "runifold.transport"
+      ],
+      "title": "transport",
+      "meaning": "Run-level transport failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Inspect retry safety before retrying.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-007",
+      "aliases": [
+        "runifold.protocol"
+      ],
+      "title": "protocol",
+      "meaning": "Run-level protocol failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Inspect the canonical protocol boundary.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-RUN-008",
+      "aliases": [
+        "runifold.invocation"
+      ],
+      "title": "invocation",
+      "meaning": "Run-level invocation failure.",
+      "source": "crates/runifold-core/src/error.rs",
+      "symbol": "RunErrorKind",
+      "causes": [
+        "Inspect the existing RunError kind, safe message and retry safety."
+      ],
+      "canonical_fix": "Inspect the typed component cause.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-core --locked"
+      ]
+    },
+    {
+      "code": "RF-AGENT-001",
+      "title": "Invalid Agent configuration",
+      "meaning": "Invalid Agent configuration.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Check Agent name, turn bound and callable registration before build.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AGENT-002",
+      "title": "Reviewer authority escalation",
+      "meaning": "Reviewer authority escalation.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Attenuate reviewer capabilities to an explicit subset of the parent.",
+      "recipe": "add-reviewer",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AGENT-003",
+      "title": "Ambiguous checkpoint",
+      "meaning": "Ambiguous checkpoint.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Inspect durable execution evidence and select explicit safe resume policy.",
+      "recipe": "durable-conversation",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-DOC-001",
+      "title": "Stale knowledge",
+      "meaning": "Stale knowledge.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Run python3 scripts/ai-knowledge.py --write and inspect the generated diff.",
+      "recipe": "public-api-change",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-CARGO-001",
+      "title": "Cargo metadata unavailable",
+      "meaning": "Cargo metadata unavailable.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Verify the manifest path, Cargo and offline dependencies; inspect cargo metadata diagnostics locally.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-CARGO-002",
+      "title": "Runifold not detected",
+      "meaning": "Runifold not detected.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Select the correct Cargo manifest or add the intended Runifold dependency.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-VERSION-001",
+      "title": "Knowledge version mismatch",
+      "meaning": "Knowledge version mismatch.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Use a CLI and recipes matching the application release family.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-FEATURE-001",
+      "title": "Feature absent from knowledge",
+      "meaning": "Feature absent from knowledge.",
+      "causes": [
+        "Inspect the reported source evidence; this diagnostic does not authorize a retry or permission increase."
+      ],
+      "canonical_fix": "Inspect the actual dependency source and version before changing its features.",
+      "recipe": "add-provider",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-CHECK-001",
+      "title": "Validation planning failed",
+      "meaning": "The selected source workspace or Git base could not be inspected.",
+      "causes": [
+        "The working directory is not a Runifold source workspace, the base does not resolve, or required tooling is unavailable."
+      ],
+      "canonical_fix": "Select --root and --base explicitly; install Git and Python 3.11+.",
+      "recipe": "modify-agent-loop",
+      "validation": [
+        "python3 scripts/test-ai-system.py"
+      ]
+    },
+    {
+      "code": "RF-AI-TASK-001",
+      "title": "Unknown task",
+      "meaning": "The requested recipe is not in this knowledge version.",
+      "causes": [
+        "Task ID spelling or knowledge version differs."
+      ],
+      "canonical_fix": "Run runifold ai context and choose a listed task.",
+      "recipe": "create-agent",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-DIAGNOSTIC-001",
+      "title": "Unknown diagnostic",
+      "meaning": "The requested code is absent from this knowledge version.",
+      "causes": [
+        "The code is misspelled or belongs to a different release or extension."
+      ],
+      "canonical_fix": "Use documentation for the producing library version; do not guess a repair from an unrelated code.",
+      "recipe": "public-api-change",
+      "validation": [
+        "cargo test -p runifold-cli --locked"
+      ]
+    }
+  ],
+  "knowledge_priority": [
+    "current source and compiler",
+    "machine architectural rules",
+    "nearest scoped guide",
+    "root guide",
+    "current-version recipe",
+    "rustdoc",
+    "RFC rationale",
+    "historical migration docs"
+  ],
+  "api_index": "docs/ai/api-index.json",
+  "freshness": {
+    "algorithm": "sha256",
+    "inputs": {
+      "AGENTS.md": "b6d53481b80e9b150b4b3f8d28dee1890a017d2599d3b2c1909915803941c676",
+      "Cargo.toml": "2f331f71a6a52e95afe1cf20763f96efa6f10f7e383207c59dc0e88b0af93cfc",
+      "ai/architecture.json": "b76f844d22f9b5020b79ad402d9d2985bb732e13958322cf4e778713b2212343",
+      "ai/diagnostics.json": "350aca8f7a3ed38532f291764ecac5b1074eb0014c27ffc3d74d15516a4a4c97",
+      "ai/schemas/runifold-ai.schema.json": "acac3f6396e0f24809d4ee26501c3aaa54421857c296b6a7c2dc195e26aaee60",
+      "ai/validation.json": "ba19551e6bb98b5e176af0ade0e15a8d5395db021d17cda45f39f51e131701bb",
+      "crates/runifold-agent/Cargo.toml": "510abb25d496fed8dd5116559cb9a35700de4f89ef74a9f8cc33317e124673ec",
+      "crates/runifold-agent/src/agent.rs": "669e4061d8efb53e360043c12ef890f21b2cf62637142af40dd9d78f47544f46",
+      "crates/runifold-agent/src/agent/callable.rs": "cd6e105c01b2dec2e5ae3b41a9746edfba730ab46242df9f5d2647ca0baf5c2b",
+      "crates/runifold-agent/src/agent/completion.rs": "1a91725214f1e502902a1a2ede6ca5c8f3714202e3f96bc13f2033f23b743e29",
+      "crates/runifold-agent/src/agent/execution.rs": "5a6efbdf6c4412bb96d4d2ff4378bcf13a7a3e8bcdacab5d840d6c0ad061a819",
+      "crates/runifold-agent/src/agent/review.rs": "81c0c4d2c6d22699b586609d4ce3b9c6f995e15682bd2c350dbf1f936cc145bb",
+      "crates/runifold-agent/src/agent/tests.rs": "6011d917d0f3e9e01f84cff691939b7781640bbbf741cd6a637dbd902fd7cf66",
+      "crates/runifold-agent/src/builder.rs": "3a7376c286c76d7231565171cb1f652ca9981fb51f74410fa42ec33d05bf63be",
+      "crates/runifold-agent/src/completion.rs": "916d182744f008ef4fbfae5456e7e3ddef3ea21481fea854c45f211215bad0c9",
+      "crates/runifold-agent/src/conversation.rs": "bc646724e24877e884973c5b758efe3e51b2fddc51ff137415bd47117e78e9c1",
+      "crates/runifold-agent/src/conversation/session.rs": "14275cfc566327e9af3e82290769261f01a70e37452c53e6c7c64fe6f9ebf52c",
+      "crates/runifold-agent/src/stream.rs": "01c0f875329ad64d731787eab2579e8222b05e2c48844e2927a9164836561ef2",
+      "crates/runifold-agent/src/structured.rs": "4ec453cfc042ed3dbc3b11306378c22da94de6b8a35a83762d9690c195153421",
+      "crates/runifold-agent/src/terminal_review.rs": "b978dad7a359ce4fbac87ef5b15396a18bc722c80cc9698c8de604a39d05028f",
+      "crates/runifold-cli/Cargo.toml": "776674cc38edee9c6f9ae1d42bc14fc55c2fba76affc2ded4ad9c71910d73d10",
+      "crates/runifold-core/Cargo.toml": "7ce8ea845fc8096c087c902e00d3062934f7657c284de29c640f348ac3899fee",
+      "crates/runifold-core/src/context.rs": "dbb6f38e6787ed5c5fc6ff39af880cc62ca57ece4b033d69edf8843603ff3a42",
+      "crates/runifold-core/src/error.rs": "9088290cf826956607b87a17797d38339ca831ad920b2df187330d3d99e3d82c",
+      "crates/runifold-effect/Cargo.toml": "e8c712303ef5d9afa92dd74eee81d5987114ec8014ee37c4d1524a6e4edebbdf",
+      "crates/runifold-effect/src/error.rs": "d3dfeb760919d455d73cd1fc6ab41eff4e14331994ebafdebc4df3a563e49572",
+      "crates/runifold-effect/src/executor.rs": "b22f27e7e6736ff615b9eae24c6bf41781183bea494a9a07866af6f35f331cc3",
+      "crates/runifold-effect/src/handler.rs": "1f0dd64f309146622cf503d0b6cc49e8e744aceb589750d8f3ba00c73b7b0c11",
+      "crates/runifold-eval-cli/Cargo.toml": "79feb007fad377773474af1d1e7972bdba5c8554de27b885297f875aff6ac34d",
+      "crates/runifold-macros/Cargo.toml": "f70455b858a7124a116a12434faa4a99fc256589193586bef1ce9f55dfbd7ac5",
+      "crates/runifold-macros/src/lib.rs": "6dedc818ba245c9908b9d92805a94b1c75c0d3373077dece1b0947b8d2dc4d10",
+      "crates/runifold-mcp/Cargo.toml": "25fcd29c6ae5efc90079f012ec86aa00b60b13ea63224eb0986484031938c609",
+      "crates/runifold-model/Cargo.toml": "85914e4ba2fdc916f3e9678f72b67747f04a2557ebcd9a132dc3e053e392f88d",
+      "crates/runifold-model/src/error.rs": "79c3004614031163feb9ba29cc3f0d9b4151634d6d951ff08f0f3d77fdeab011",
+      "crates/runifold-model/src/invocation.rs": "b3aa8c3011c817e79a96e2a2b5db1b65f3807b86c54b07db45a70b0bc08e32a5",
+      "crates/runifold-observability-otel/Cargo.toml": "ae87fdba18d6ff79e1be94056fd825de37a9eb35c97ac9ee437e198516ea21a4",
+      "crates/runifold-ops/Cargo.toml": "919f145025f4c38b9c5545c4c421f15f11a1626bfebb2974dccc799243df0c8a",
+      "crates/runifold-provider-testkit/Cargo.toml": "f3a898126af5cee123bfcc60be112d6df94b8466661bd71468fe540e3c814aa5",
+      "crates/runifold-provider-testkit/src/conformance.rs": "1656a086c91028c9cc0d1e78d2bdbec498833d50804b4d9a6cdcc254cd3239f3",
+      "crates/runifold-providers/Cargo.toml": "bea223c651cf977b4e14e603ea43b51f49455c9acdf7c60f57888d3caefc9a57",
+      "crates/runifold-providers/src/anthropic.rs": "9745d39be70afd199b8ee303d7993e0ad9100b99f6d51497dcc4c53ac66d4865",
+      "crates/runifold-providers/src/lib.rs": "5344f9460784a48c5ad8edb2c44572a7d05b558b939e14c9dcd5894858acb8d1",
+      "crates/runifold-providers/tests/anthropic_http_cassette.rs": "015dbb5b77ca26a5e7c5158aebb72d5d0601f04dab8a2ee7fcbe8a5373a1b53f",
+      "crates/runifold-retrieval-pgvector/Cargo.toml": "706f76e14f30aafec86f3a3218f396531b9b1d72940ad38ff2b261c26e016418",
+      "crates/runifold-retrieval-qdrant/Cargo.toml": "dde355fe3742ab09eda8da6fc6c4daacf9f224874388eb5c6cfb1bbf7e4f0b38",
+      "crates/runifold-retrieval-text/Cargo.toml": "9d56fb9745b1326b48309a0ad687b7560e82969900770190106a5fe2c8819ca3",
+      "crates/runifold-retrieval/Cargo.toml": "f2d849527b0fe1c20d0c6e49334f03c8321b9f2f805e38eca579eebc8156ec1e",
+      "crates/runifold-retrieval/src/retriever.rs": "39e7c94105b142231d0a6749a82f9b24c2c8acc53c378c4880f8a8b9fe768259",
+      "crates/runifold-store-postgres/Cargo.toml": "e1cc4dc627c0d57b4a035286a8ffa26e81c5f7c86a4909c6781ae068160e17fc",
+      "crates/runifold-store-sqlite/Cargo.toml": "5d68c4b16fc7779f09d3d546e65ece3ee1d602695d4f1e1484523574e8d936dd",
+      "crates/runifold-testkit/Cargo.toml": "8513274b4e545ad7c51220417434ba7fe5c11cbdb80c50aa20c19bd13fb5753d",
+      "crates/runifold-tool/Cargo.toml": "469ab923ddfe99c264cdc00410c5a064bcc19d866f01425eafd3bf82b5e6a8ab",
+      "crates/runifold-tool/src/context.rs": "745e3ff5f02022efd7a7dd46814e39cc281f8b592e537d504610aa2032f83d31",
+      "crates/runifold-tool/src/error.rs": "7f1704a0de3628b4e52cbf78d210b4e1ed4b584f9e74f51e5bf1a6dc5ad7251a",
+      "crates/runifold-tool/src/registry.rs": "4bd49d13c9716848b76a9f2bf1b239753df8ba96dcdad0d3e930f8878a272588",
+      "crates/runifold-workflow/Cargo.toml": "867809da9aac25caae43f90740b9db415c7857c08adb64607014cc276dfec7a2",
+      "crates/runifold/Cargo.toml": "7f775017eb7476c9d9a23c0fe315ec64cc165de0a073eb460d08a9d72e0b71a4",
+      "crates/runifold/examples/ai_retrieval.rs": "37db3138beed08432b9e5bc7c550f319b54296fc4dba85146813de1e605ca48f",
+      "crates/runifold/examples/ai_reviewer.rs": "7e6da57c73dc8e623a10d350cd88f6d4b1adace786337363125610aa6d3f7148",
+      "crates/runifold/examples/ai_stream.rs": "382ef803cb3c770341bfc05da45d273b154f9c5d6880031297c3c751e35644d3",
+      "crates/runifold/examples/ai_structured.rs": "5c863394b6c0bcdfdfb2fb1a5aa070fd501c6e0bed316d0fa8c1cf6769e3652b",
+      "crates/runifold/examples/ai_tool.rs": "b4b439c7ca643c52ab8698ed8285b92900d621aee6d386fe9426dfef3c708f4f",
+      "crates/runifold/examples/durable_publish.rs": "420dca347e0bca597052fe4442d02f801fc9dff1a7340eeed0a4b40e15540721",
+      "crates/runifold/examples/durable_session.rs": "a01aeba65e572f317095fe158815c6b5c54ff86f9a1a040903f5d18262210942",
+      "crates/runifold/examples/quickstart.rs": "91158dd54cdd7d7bd9264de62c66dd7743f19dfb43f25193864e139c74c8de9e",
+      "crates/runifold/examples/workflow_chain.rs": "12f5ddfc7875587674b52f52dd85a463322e475dcbb71abdf611709598a52a9d",
+      "crates/runifold/src/lib.rs": "1ef613764ad47719fe48c51617c081fd312ab147379cc949f115e407ff28f82d",
+      "crates/runifold/tests/ai_api_contract.rs": "351d7f34961f30622599243b68e555cd72e80c176cd0ce6588e19f05740e42e6",
+      "crates/runifold/tests/typed_tool_macro.rs": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be",
+      "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
+      "docs/PROVIDERS.md": "4e102030f683c692784fd8c6460d275bd182ae6b9c063d85dc2e07595c7329be",
+      "docs/RELEASING.md": "edf993da8c83ccc6f7885d14e014a649fdcc99cb01a7bd70840269956f76fb83",
+      "docs/ai/catalog.json": "2aef16cfc2673f5bc383bfd942c80fbf8d57d01e46a288da6a027052ef4096f2",
+      "docs/rfcs/0013-agent-callable-effects.md": "ee1dd43df9d5859e93a5b5f93dd01f6634b5e5e4dcbb07c16d887f4a5d89ef17",
+      "docs/rfcs/0016-typed-function-tools.md": "5de77af96529a348709b4e271fedc10d3280bd53723a8a48e7ed9250fa6f2599",
+      "docs/rfcs/0017-tool-state-and-errors.md": "c1844189849fa7a8dc4b35739e7097416ba10584b2fe4a7878379e2bf2f4ce76",
+      "docs/rfcs/0018-agent-streaming.md": "4922198b27b230b7fbc6463ab574c411d31276a38bba3c55e18b50d7b73631c0",
+      "docs/rfcs/0019-typed-structured-output.md": "b299e78a3c6987fc1532dcf00c4c22a1fad2b8f3e5fda8c8d905e7dd5ff9a7cd",
+      "docs/rfcs/0023-durable-workflow-orchestration.md": "3ef841447a34f832c9063bfa187db9be00a4b165082794cc316d8804fcb7d4bc",
+      "docs/rfcs/0028-provider-transport-reliability.md": "01878d445fbe4d232927197d2e2e3181753cbb4b4067778f5cb453dd3a1711e9",
+      "docs/rfcs/0040-provider-neutral-retrieval.md": "1fbcc64930b3e4a45daae8300b50b4c009ef27bb99c25a1e4e9beaa6dd47a785",
+      "docs/rfcs/0044-workflow-worker-runtime.md": "701ab268b81177c53de1432fd123318412e6d62fb7036d10adc666484185e929",
+      "docs/rfcs/0052-provider-crate-topology.md": "49a8e7cdb891523c86a0266bacb3ab83acbded197a6871df1c9b068082af234d",
+      "docs/rfcs/0053-provider-runtime-contract.md": "42dd423be48a7db697ad7209c78877beab2d6fede87e946769e49a3b8b651424",
+      "docs/rfcs/0073-production-agent-sessions.md": "f65fa4aa23c567e7b80981fe42a04cde7b167dbf99d6fdbb1a34c3343c16f6ed",
+      "scripts/ai-check.py": "0eed3e3cc4db13cc0c51983690d5949260e0f9b9b80ce18e4e376f29567bb89d",
+      "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
+      "scripts/semver-check.sh": "5b96ed39779dff7383e07c20fad7726ae727290c42343ecf11d38dae5b10117a"
+    },
+    "digest": "d48110c85bf3f2563dd6bd1c6e9e00dfeb1fe3310f1fb10cd127ba9c5be4a776"
+  }
+}

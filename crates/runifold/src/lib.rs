@@ -326,7 +326,11 @@ impl ProviderRuntime {
         })
     }
 
-    /// Starts an Agent using the fully composed model runtime.
+    /// Preferred application-level entry point for a provider-backed Agent.
+    ///
+    /// Construct this runtime once at startup and clone it into request handlers.
+    /// Use `Agent::builder` for explicit custom Model injection or offline tests.
+    #[doc(alias = "create agent")]
     pub fn agent(&self, name: impl Into<String>) -> AgentBuilder {
         Agent::builder(name, self.model.clone(), self.model_ref.clone())
     }

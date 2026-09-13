@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "path": "crates/runifold-core/src/context.rs",
+  "find": "cancellation: self.cancellation.child_token(),",
+  "replace": "cancellation: CancellationToken::new(),",
+  "expected_matches": 1
+}

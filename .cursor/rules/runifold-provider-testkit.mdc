@@ -1,0 +1,8 @@
+---
+description: "Runifold runifold-provider-testkit boundaries"
+globs: "crates/runifold-provider-testkit/**"
+alwaysApply: false
+---
+<!-- Generated from canonical crate guide. -->
+Read AGENTS.md and crates/runifold-provider-testkit/AGENTS.md.
+Use docs/ai/recipes for the current task; run the local validation profile.

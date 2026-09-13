@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Runifold AI Development Contract",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project",
+    "version",
+    "rust_version",
+    "crates",
+    "laws",
+    "recipes",
+    "canonical_paths",
+    "validation_profiles",
+    "freshness",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "project": {
+      "const": "runifold"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rust_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "crates": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "path",
+          "owns",
+          "does_not_own",
+          "entry",
+          "workspace_dependencies",
+          "features",
+          "validation"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owns": {
+            "type": "string",
+            "minLength": 1
+          },
+          "does_not_own": {
+            "type": "string",
+            "minLength": 1
+          },
+          "entry": {
+            "type": "string",
+            "minLength": 1
+          },
+          "workspace_dependencies": {
+            "type": "object"
+          },
+          "features": {
+            "type": "object"
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "laws": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "check",
+          "scope"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "check": {
+            "enum": [
+              "forbidden_dependency",
+              "review_and_tests"
+            ]
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "recipes": {
+      "type": "object",
+      "minProperties": 12,
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "path",
+          "source",
+          "api",
+          "validation",
+          "uses",
+          "applies_to"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "api": {
+            "type": "string",
+            "minLength": 1
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "uses": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "applies_to": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "canonical_paths": {
+      "type": "object",
+      "required": [
+        "agent_execution",
+        "tool_execution",
+        "effect_execution"
+      ],
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "validation_profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "code",
+          "title",
+          "meaning",
+          "causes",
+          "canonical_fix",
+          "recipe",
+          "validation"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "meaning": {
+            "type": "string",
+            "minLength": 1
+          },
+          "causes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "canonical_fix": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recipe": {
+            "type": "string",
+            "minLength": 1
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "inputs",
+        "digest"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

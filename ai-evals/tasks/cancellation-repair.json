@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "cancellation-repair",
+  "prompt": "A prepared fixture broke parent-to-child cancellation propagation. Repair it without weakening existing tests. Add a regression for a grandchild and demonstrate child cancellation does not cancel its parent.",
+  "expected_paths": [
+    "crates/runifold-core/"
+  ],
+  "validation": [
+    [
+      "cargo",
+      "test",
+      "-p",
+      "runifold-core",
+      "--locked"
+    ]
+  ],
+  "review_rubric": [
+    "Restores transitive parent cancellation.",
+    "Preserves child-to-parent isolation.",
+    "Does not replace or weaken original cancellation assertions."
+  ],
+  "baseline": "Operator must pin a commit; no default baseline or claimed result.",
+  "fixture": "fixtures/cancellation.json"
+}

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "version": "0.10.1",
+  "symbols": {
+    "runifold::ProviderRuntime": {
+      "source": "crates/runifold/src/lib.rs",
+      "declaration": "pub struct ProviderRuntime",
+      "source_sha256": "1ef613764ad47719fe48c51617c081fd312ab147379cc949f115e407ff28f82d",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ProviderRuntime::agent": {
+      "source": "crates/runifold/src/lib.rs",
+      "declaration": "pub fn agent(&self, name: impl Into<String>) -> AgentBuilder",
+      "source_sha256": "1ef613764ad47719fe48c51617c081fd312ab147379cc949f115e407ff28f82d",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::Agent": {
+      "source": "crates/runifold-agent/src/agent.rs",
+      "declaration": "pub struct Agent",
+      "source_sha256": "669e4061d8efb53e360043c12ef890f21b2cf62637142af40dd9d78f47544f46",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::AgentBuilder": {
+      "source": "crates/runifold-agent/src/builder.rs",
+      "declaration": "pub struct AgentBuilder",
+      "source_sha256": "3a7376c286c76d7231565171cb1f652ca9981fb51f74410fa42ec33d05bf63be",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ToolRegistry": {
+      "source": "crates/runifold-tool/src/registry.rs",
+      "declaration": "pub struct ToolRegistry",
+      "source_sha256": "4bd49d13c9716848b76a9f2bf1b239753df8ba96dcdad0d3e930f8878a272588",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ToolContext": {
+      "source": "crates/runifold-tool/src/context.rs",
+      "declaration": "pub struct ToolContext",
+      "source_sha256": "745e3ff5f02022efd7a7dd46814e39cc281f8b592e537d504610aa2032f83d31",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::AgentSession": {
+      "source": "crates/runifold-agent/src/conversation/session.rs",
+      "declaration": "pub struct AgentSession",
+      "source_sha256": "14275cfc566327e9af3e82290769261f01a70e37452c53e6c7c64fe6f9ebf52c",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::RunContext": {
+      "source": "crates/runifold-core/src/context.rs",
+      "declaration": "pub struct RunContext",
+      "source_sha256": "dbb6f38e6787ed5c5fc6ff39af880cc62ca57ece4b033d69edf8843603ff3a42",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::EffectExecutor": {
+      "source": "crates/runifold-effect/src/executor.rs",
+      "declaration": "pub struct EffectExecutor",
+      "source_sha256": "b22f27e7e6736ff615b9eae24c6bf41781183bea494a9a07866af6f35f331cc3",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::TerminalRuleReviewer": {
+      "source": "crates/runifold-agent/src/terminal_review.rs",
+      "declaration": "pub struct TerminalRuleReviewer",
+      "source_sha256": "b978dad7a359ce4fbac87ef5b15396a18bc722c80cc9698c8de604a39d05028f",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::tool": {
+      "source": "crates/runifold-macros/src/lib.rs",
+      "declaration": "pub fn tool(attributes: TokenStream, item: TokenStream) -> TokenStream",
+      "source_sha256": "6dedc818ba245c9908b9d92805a94b1c75c0d3373077dece1b0947b8d2dc4d10",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/typed_tool_macro.rs"
+    },
+    "runifold::StructuredAgent": {
+      "source": "crates/runifold-agent/src/structured.rs",
+      "declaration": "pub struct StructuredAgent<T>",
+      "source_sha256": "4ec453cfc042ed3dbc3b11306378c22da94de6b8a35a83762d9690c195153421",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::AgentStreamEvent": {
+      "source": "crates/runifold-agent/src/stream.rs",
+      "declaration": "pub enum AgentStreamEvent",
+      "source_sha256": "01c0f875329ad64d731787eab2579e8222b05e2c48844e2927a9164836561ef2",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::Retriever": {
+      "source": "crates/runifold-retrieval/src/retriever.rs",
+      "declaration": "pub trait Retriever: Send + Sync",
+      "source_sha256": "39e7c94105b142231d0a6749a82f9b24c2c8acc53c378c4880f8a8b9fe768259",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    }
+  }
+}

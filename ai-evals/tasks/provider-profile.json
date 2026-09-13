@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "provider-profile",
+  "prompt": "Add an OpenAI-compatible profile named example_gateway using an application-supplied base URL. Reuse the compatible transport, preserve distinct provider identity, and test an offline request. Do not add a crate.",
+  "expected_paths": [
+    "crates/runifold-providers/",
+    "docs/PROVIDERS.md"
+  ],
+  "validation": [
+    [
+      "cargo",
+      "test",
+      "-p",
+      "runifold-providers",
+      "--no-default-features",
+      "--features",
+      "openai",
+      "--locked"
+    ]
+  ],
+  "review_rubric": [
+    "Reuses compatible transport and keeps wire types outside core.",
+    "No unnecessary crate or duplicate transport.",
+    "A task-specific cassette verifies profile identity and request projection."
+  ],
+  "baseline": "Operator must pin a commit; no default baseline or claimed result.",
+  "fixture": null
+}

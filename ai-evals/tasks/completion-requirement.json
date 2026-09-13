@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "completion-requirement",
+  "prompt": "Add an opt-in completion requirement that rejects whitespace-only final text with a clear typed failure. Preserve existing defaults and test normal, streaming and durable completion behavior.",
+  "expected_paths": [
+    "crates/runifold-agent/"
+  ],
+  "validation": [
+    [
+      "cargo",
+      "test",
+      "-p",
+      "runifold-agent",
+      "--locked"
+    ]
+  ],
+  "review_rubric": [
+    "One canonical completion boundary.",
+    "New behavior is opt-in and normal/stream/durable paths agree.",
+    "No effect reexecution during repair."
+  ],
+  "baseline": "Operator must pin a commit; no default baseline or claimed result.",
+  "fixture": null
+}

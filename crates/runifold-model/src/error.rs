@@ -46,6 +46,24 @@ pub struct ModelError {
 }
 
 impl ModelError {
+    /// Returns a stable diagnostic identifier without exposing error payloads.
+    ///
+    /// Resolve causes and corrective actions with `runifold ai explain <code>`.
+    /// This does not change the error's retry safety, Display or serialization.
+    pub const fn diagnostic_code(&self) -> &'static str {
+        match self.kind {
+            ModelErrorKind::InvalidRequest => "RF-PROVIDER-001",
+            ModelErrorKind::UnsupportedFeature => "RF-PROVIDER-002",
+            ModelErrorKind::Transport => "RF-PROVIDER-003",
+            ModelErrorKind::Protocol => "RF-PROVIDER-004",
+            ModelErrorKind::StreamState => "RF-PROVIDER-005",
+            ModelErrorKind::MalformedToolArguments => "RF-PROVIDER-006",
+            ModelErrorKind::Provider => "RF-PROVIDER-007",
+            ModelErrorKind::Cancelled => "RF-PROVIDER-008",
+            ModelErrorKind::DeadlineExceeded => "RF-PROVIDER-009",
+        }
+    }
+
     /// Creates a non-retryable local validation or state error.
     pub fn local(kind: ModelErrorKind, message: impl Into<String>) -> Self {
         Self {

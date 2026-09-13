@@ -160,6 +160,32 @@ pub enum AgentError {
 }
 
 impl AgentError {
+    /// Returns a stable diagnostic code; nested failures retain their own code.
+    /// Resolve it with `runifold ai explain <code>`.
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::Model(error) => error.diagnostic_code(),
+            Self::Tool(error) => error.diagnostic_code(),
+            Self::Effect(error) => error.diagnostic_code(),
+            Self::InvalidConfig(_) => "RF-AGENT-001",
+            Self::TerminalReviewAuthorityEscalation { .. }
+            | Self::TurnReviewAuthorityEscalation { .. } => "RF-AGENT-002",
+            Self::AmbiguousCheckpoint { .. }
+            | Self::AmbiguousTerminalReview { .. }
+            | Self::AmbiguousTurnReview { .. } => "RF-AGENT-003",
+            _ => match self.run_error_kind() {
+                RunErrorKind::InvalidInput => "runifold.invalid_input",
+                RunErrorKind::CapabilityDenied => "runifold.capability_denied",
+                RunErrorKind::BudgetExceeded => "runifold.budget_exceeded",
+                RunErrorKind::DeadlineExceeded => "runifold.deadline_exceeded",
+                RunErrorKind::Cancelled => "runifold.cancelled",
+                RunErrorKind::Transport => "runifold.transport",
+                RunErrorKind::Protocol => "runifold.protocol",
+                _ => "runifold.invocation",
+            },
+        }
+    }
+
     /// Returns the stable run-level failure category for business policy.
     pub fn run_error_kind(&self) -> RunErrorKind {
         match self {

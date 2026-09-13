@@ -6,6 +6,24 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-13
+
+### Added
+
+- Added the AI-native development contract: root/scoped Agent guides, versioned
+  recipes, generated manifest/API indexes, instruction adapters and Markdown indexes.
+- Added `runifold ai context`, `recipe`, `explain` and affected `check --execute`,
+  plus offline `doctor --ai --json` application diagnostics.
+- Added stable diagnostic accessors for Model, Tool, Effect and Agent errors while
+  preserving existing Display, serialization and run-level diagnostic codes.
+- Added knowledge/schema/fingerprint and architecture CI checks, compiled API
+  contracts, and an evidence-bound AI coding evaluation harness.
+
+### Changed
+
+- Aligned the quickstart with the recommended long-lived ProviderRuntime path.
+
+
 ## [0.10.0] - 2026-09-13
 
 ### Added

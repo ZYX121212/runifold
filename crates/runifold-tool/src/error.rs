@@ -40,6 +40,22 @@ pub struct ToolError {
 }
 
 impl ToolError {
+    /// Returns a stable diagnostic identifier without exposing error payloads.
+    ///
+    /// Resolve causes and corrective actions with `runifold ai explain <code>`.
+    /// This does not change the error's retry safety, Display or serialization.
+    pub const fn diagnostic_code(&self) -> &'static str {
+        match self.kind {
+            ToolErrorKind::NotFound => "RF-TOOL-001",
+            ToolErrorKind::InvalidInput => "RF-TOOL-002",
+            ToolErrorKind::CapabilityDenied => "RF-TOOL-003",
+            ToolErrorKind::Cancelled => "RF-TOOL-004",
+            ToolErrorKind::DeadlineExceeded => "RF-TOOL-005",
+            ToolErrorKind::Execution => "RF-TOOL-006",
+            ToolErrorKind::InvalidOutput => "RF-TOOL-007",
+        }
+    }
+
     /// Creates a local tool error with unknown retry safety.
     pub fn local(kind: ToolErrorKind, message: impl Into<String>) -> Self {
         Self {

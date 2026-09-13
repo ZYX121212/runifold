@@ -4,7 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-baseline="${SEMVER_BASELINE:-$(git tag --list 'v*' --sort=-version:refname | head -n 1)}"
+current_version="$(cargo metadata --no-deps --format-version 1 | jq -r ' .packages[0].version')"
+baseline="${SEMVER_BASELINE:-$(git tag --list 'v*' --sort=-version:refname | awk -v current="v$current_version" '$0 != current {print; exit}')}"
 if [[ -z "$baseline" ]]; then
     echo "No prior release tag exists; SemVer comparison starts after v0.1.0."
     exit 0

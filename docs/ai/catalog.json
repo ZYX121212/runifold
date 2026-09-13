@@ -1,0 +1,839 @@
+{
+  "crates": {
+    "runifold": {
+      "area": "facade",
+      "owns": "Public re-exports, ProviderRuntime and ergonomic composition",
+      "does_not_own": "Transport wire formats and a second execution loop",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold --features sqlite-bundled --locked"
+    },
+    "runifold-core": {
+      "area": "kernel",
+      "owns": "Run identity, authority, budgets, cancellation, events and checkpoints",
+      "does_not_own": "Provider, protocol, storage backend and application policy implementations",
+      "entry": "src/context.rs",
+      "test": "cargo test -p runifold-core --locked",
+      "key_files": [
+        "src/context.rs",
+        "src/budget.rs",
+        "src/error.rs",
+        "src/lib.rs"
+      ],
+      "local_rules": [
+        "RF-LAW-001: no model/provider/protocol/store dependencies in the kernel.",
+        "RF-LAW-003: parent authority and structured run lifetime remain enforceable."
+      ],
+      "extension": "Prefer kernel-neutral contracts. A protocol-specific need belongs in an edge adapter; test cancellation, budgets and authority when changing RunContext."
+    },
+    "runifold-model": {
+      "area": "model",
+      "owns": "Provider-neutral content, model invocation, streams, routing and retry contracts",
+      "does_not_own": "Vendor wire types and Agent tool loops",
+      "entry": "src/invocation.rs",
+      "test": "cargo test -p runifold-model --locked"
+    },
+    "runifold-agent": {
+      "area": "execution",
+      "owns": "Canonical model/callable loop, review, structured completion and sessions",
+      "does_not_own": "HTTP transports and database implementations",
+      "entry": "src/agent/execution.rs",
+      "test": "cargo test -p runifold-agent --locked",
+      "key_files": [
+        "src/agent/execution.rs",
+        "src/agent/callable.rs",
+        "src/agent/review.rs",
+        "src/agent/completion.rs",
+        "src/checkpoint.rs",
+        "src/conversation/session.rs"
+      ],
+      "local_rules": [
+        "RF-AGENT-LAW-001: prompt, run, stream, checkpoint and session execution share the canonical engine.",
+        "RF-AGENT-LAW-002: reviewers receive attenuated parent authority.",
+        "RF-TOOL-003: callable dispatch preserves explicit capability checks."
+      ],
+      "extension": "Before changing callable dispatch, read ../runifold-effect/AGENTS.md and the modify-agent-loop recipe; test both agent and effect crates."
+    },
+    "runifold-tool": {
+      "area": "execution",
+      "owns": "Typed tool descriptors, registry, input validation and safe errors",
+      "does_not_own": "Agent orchestration and vendor protocols",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-tool --locked"
+    },
+    "runifold-macros": {
+      "area": "execution",
+      "owns": "Typed Tool attribute expansion",
+      "does_not_own": "Runtime policy and execution",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold --test typed_tool_macro --locked"
+    },
+    "runifold-effect": {
+      "area": "execution",
+      "owns": "Write-ahead effects, stable replay identity and explicit recovery",
+      "does_not_own": "Vendor-specific business handlers and guaranteed remote exactly-once delivery",
+      "entry": "src/executor.rs",
+      "test": "cargo test -p runifold-effect --locked",
+      "key_files": [
+        "src/executor.rs",
+        "src/handler.rs",
+        "src/store.rs",
+        "src/record.rs"
+      ],
+      "local_rules": [
+        "RF-EFFECT-003: ambiguous non-idempotent effects cannot be retried without evidence.",
+        "Stable keys bind capability, effect class and canonical input. Completed outcomes replay without handler execution."
+      ],
+      "extension": "Add handler-specific reconciliation through EffectReconciler. Keep durable Started/Completed transitions and observability failure behavior intact."
+    },
+    "runifold-workflow": {
+      "area": "execution",
+      "owns": "Deterministic composition, durable steps, workers, leases, timers and signals",
+      "does_not_own": "Provider transport and business-specific workflows",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-workflow --locked"
+    },
+    "runifold-providers": {
+      "area": "providers",
+      "owns": "Feature-gated vendor transports and canonical protocol projection",
+      "does_not_own": "Kernel semantics and hidden Agent loops",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-providers --all-features --locked",
+      "key_files": [
+        "src/lib.rs",
+        "src/anthropic.rs",
+        "src/openai.rs",
+        "src/compatible.rs",
+        "tests/anthropic_http_cassette.rs"
+      ],
+      "local_rules": [
+        "RF-LAW-001: wire DTOs remain inside edge adapters.",
+        "Canonical streams require a valid lifecycle; preserve unsupported semantics explicitly."
+      ],
+      "extension": "Add compatible profiles to the existing protocol family; native protocols get a feature-gated module and loopback conformance tests. Test both isolated features and no-default-features."
+    },
+    "runifold-provider-testkit": {
+      "area": "testing",
+      "owns": "Loopback protocol cassettes, conformance and benchmark contracts",
+      "does_not_own": "Production provider transports",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-provider-testkit --locked"
+    },
+    "runifold-mcp": {
+      "area": "protocols",
+      "owns": "MCP client/server protocol and runtime adapters",
+      "does_not_own": "Changes to core authority or model IR for MCP wire formats",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-mcp --locked"
+    },
+    "runifold-retrieval": {
+      "area": "retrieval",
+      "owns": "Provider-neutral retrieval, documents and semantic-memory contracts",
+      "does_not_own": "A mandatory vector database or opinionated RAG application",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-retrieval --locked"
+    },
+    "runifold-retrieval-text": {
+      "area": "retrieval",
+      "owns": "Local text retrieval adapter",
+      "does_not_own": "Model execution and remote vector stores",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-retrieval-text --locked"
+    },
+    "runifold-retrieval-qdrant": {
+      "area": "retrieval",
+      "owns": "Qdrant retrieval adapter",
+      "does_not_own": "Provider-neutral retrieval policy",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-retrieval-qdrant --locked"
+    },
+    "runifold-retrieval-pgvector": {
+      "area": "retrieval",
+      "owns": "PostgreSQL vector retrieval adapter",
+      "does_not_own": "Agent conversation persistence",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-retrieval-pgvector --locked"
+    },
+    "runifold-store-sqlite": {
+      "area": "persistence",
+      "owns": "SQLite implementations of durable runtime stores",
+      "does_not_own": "A separate execution model or implicit unsafe recovery",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-store-sqlite --features bundled --locked"
+    },
+    "runifold-store-postgres": {
+      "area": "persistence",
+      "owns": "PostgreSQL implementations of durable runtime stores",
+      "does_not_own": "Application-owned authorization policy",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-store-postgres --locked"
+    },
+    "runifold-observability-otel": {
+      "area": "observability",
+      "owns": "Optional OpenTelemetry projection of canonical observations",
+      "does_not_own": "Core event semantics or default prompt capture",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-observability-otel --locked"
+    },
+    "runifold-ops": {
+      "area": "operations",
+      "owns": "Read-only execution inspection, evidence and value-free diffs",
+      "does_not_own": "Executing replayed model calls or external writes",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-ops --locked"
+    },
+    "runifold-cli": {
+      "area": "operations",
+      "owns": "Operational commands and AI development context/diagnostics",
+      "does_not_own": "Runtime implementation or executing suggested repairs",
+      "entry": "src/main.rs",
+      "test": "cargo test -p runifold-cli --locked"
+    },
+    "runifold-testkit": {
+      "area": "testing",
+      "owns": "Deterministic models, fault injection and offline evaluation",
+      "does_not_own": "Production transport",
+      "entry": "src/lib.rs",
+      "test": "cargo test -p runifold-testkit --locked"
+    },
+    "runifold-eval-cli": {
+      "area": "testing",
+      "owns": "Evaluation CLI and CI regression gates",
+      "does_not_own": "Application Agent policy",
+      "entry": "src/main.rs",
+      "test": "cargo test -p runifold-eval-cli --locked"
+    }
+  },
+  "recipes": [
+    {
+      "id": "create-agent",
+      "title": "Create an Agent",
+      "audience": "application",
+      "api": "ProviderModelExt \u2192 ProviderRuntime \u2192 AgentBuilder \u2192 Agent",
+      "source": "crates/runifold/examples/quickstart.rs",
+      "start": "use runifold::ProviderModelExt;",
+      "end": null,
+      "production": "Construct ProviderRuntime once at application startup and clone it into request handlers. Use .build() to retain the Agent. Use agent.run(input, &run) when the application supplies budgets, deadlines, capabilities or journals.",
+      "do_not": [
+        "Do not rebuild ProviderRuntime per HTTP request: clones share route health and retry state.",
+        "Do not implement another model/tool loop."
+      ],
+      "validation": [
+        "cargo check -p runifold --example quickstart --locked"
+      ],
+      "related": [
+        "docs/rfcs/0053-provider-runtime-contract.md",
+        "crates/runifold/src/lib.rs"
+      ],
+      "requirements": [
+        "runifold with runtime (default)",
+        "runifold-providers with openai",
+        "tokio with macros and rt-multi-thread",
+        "anyhow",
+        "OPENAI_API_KEY only when running, not compiling"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::ProviderRuntime",
+        "runifold::ProviderRuntime::agent",
+        "runifold::AgentBuilder"
+      ],
+      "production_source": "crates/runifold/examples/quickstart.rs",
+      "runtime_path": "ProviderRuntime \u2192 AgentBuilder \u2192 Agent \u2192 canonical execute_state \u2192 model/callables \u2192 validated outcome"
+    },
+    {
+      "id": "add-tool",
+      "title": "Add a typed Tool",
+      "audience": "application",
+      "api": "#[runifold::tool] \u2192 generated <name>_tool() \u2192 AgentBuilder::tool",
+      "source": "crates/runifold/tests/typed_tool_macro.rs",
+      "start": "#[derive(Deserialize, JsonSchema)]\nstruct AddInput",
+      "end": "#[derive(Deserialize, JsonSchema)]\nstruct ScaleInput",
+      "production": "The complete source defines add(input: AddInput, context: ToolContext) and generates add_tool(). Register it with builder.tool(add_tool()). For direct registry invocation explicitly grant its descriptor capability. Use State<T> for host-owned clients and IntoToolError for safe domain error conversion.",
+      "do_not": [
+        "Do not call the handler directly from an Agent loop.",
+        "Do not classify a write as Pure.",
+        "Do not put host credentials or injected State in the input schema."
+      ],
+      "validation": [
+        "cargo test -p runifold --test typed_tool_macro --locked",
+        "cargo check -p runifold --example ai_tool --locked"
+      ],
+      "related": [
+        "docs/rfcs/0016-typed-function-tools.md",
+        "docs/rfcs/0017-tool-state-and-errors.md"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "serde with derive",
+        "serde_json for JSON invocation",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running"
+      ],
+      "spans": [
+        {
+          "start": "#[derive(Deserialize, JsonSchema)]\nstruct AddInput",
+          "end": "#[derive(Deserialize, JsonSchema)]\nstruct ScaleInput"
+        },
+        {
+          "start": "#[runifold::tool(\n    description = \"Add two signed integers\",",
+          "end": "#[runifold::tool(\n    description = \"Scale"
+        }
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-tool",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::AgentBuilder",
+        "runifold::ToolRegistry",
+        "runifold::ToolContext",
+        "runifold::tool"
+      ],
+      "production_source": "crates/runifold/examples/ai_tool.rs",
+      "runtime_path": "Agent callable preflight \u2192 EffectExecutor \u2192 ToolRegistry::invoke \u2192 Tool::invoke \u2192 output validation \u2192 canonical transcript"
+    },
+    {
+      "id": "structured-output",
+      "title": "Return typed structured output",
+      "audience": "application",
+      "api": "AgentBuilder::build_structured::<T> \u2192 StructuredAgent<T>::run",
+      "source": "crates/runifold-agent/src/structured.rs",
+      "start": "    fn typed_agent_uses_one_type_for_schema_and_decode()",
+      "end": "    #[test]\n    fn typed_agent_fails",
+      "production": "Derive JsonSchema and Deserialize on the same output type. Production provider configuration uses the same builder. Keep local validation enabled; configure explicit bounded completion repair when needed, under the shared run budget.",
+      "do_not": [
+        "Do not treat provider schema acceptance as proof of valid output.",
+        "Do not independently choose a different decoder type or silently relax strictness."
+      ],
+      "validation": [
+        "cargo test -p runifold-agent structured::tests --locked",
+        "cargo check -p runifold --example ai_structured --locked"
+      ],
+      "related": [
+        "docs/rfcs/0019-typed-structured-output.md",
+        "crates/runifold-agent/src/completion.rs"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "serde with derive",
+        "runifold-testkit and futures-executor for the offline test",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::AgentBuilder",
+        "runifold::StructuredAgent"
+      ],
+      "production_source": "crates/runifold/examples/ai_structured.rs",
+      "runtime_path": "Canonical Agent loop \u2192 candidate \u2192 local completion validation / bounded repair \u2192 typed outcome"
+    },
+    {
+      "id": "stream-agent",
+      "title": "Stream an Agent",
+      "audience": "application",
+      "api": "Agent::stream \u2192 AgentStreamEvent",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "start": "fn streaming_drives_the_canonical_model_tool_loop_in_order()",
+      "end": "#[test]\nfn streaming_applies_backpressure",
+      "production": "Consume the stream incrementally with StreamExt::next in a UI or server; the example collects events only to assert ordering. Keep the Agent and RunContext alive while polling. Handle Err and the terminal Completed event. Dropping a stream can leave an external write ambiguous.",
+      "do_not": [
+        "Do not buffer the entire production stream merely to display text.",
+        "Do not equate a model response terminal event with Agent completion.",
+        "Do not restart a partially visible or effectful run without checking retry safety."
+      ],
+      "validation": [
+        "cargo test -p runifold-agent streaming_ --locked",
+        "cargo check -p runifold --example ai_stream --locked"
+      ],
+      "related": [
+        "docs/rfcs/0018-agent-streaming.md",
+        "crates/runifold-agent/src/stream.rs"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "futures-util for StreamExt",
+        "runifold-testkit and futures-executor for the offline test",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running",
+        "futures-util for StreamExt"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent",
+        "runifold::RunContext",
+        "runifold::AgentStreamEvent"
+      ],
+      "production_source": "crates/runifold/examples/ai_stream.rs",
+      "runtime_path": "Agent::stream \u2192 canonical Agent engine \u2192 buffered observer \u2192 model/callable/usage events \u2192 Completed or Err"
+    },
+    {
+      "id": "durable-conversation",
+      "title": "Persist a conversation and replay a request",
+      "audience": "application",
+      "api": "AgentSession::new \u2192 AgentSession::run",
+      "source": "crates/runifold/examples/durable_session.rs",
+      "start": "    let session = AgentSession::new(",
+      "end": "    println!(",
+      "production": "Use the complete credential-free SQLite example. Persist conversation ID, namespace and request ID in the application; reuse the request ID for the same logical request. For process restart recovery preserve compatible Agent/reviewer definitions and follow explicit session recovery. A new request needs a new request ID.",
+      "do_not": [
+        "Do not mint a fresh request ID for each retry.",
+        "Do not confuse conversation history, execution journal and semantic memory.",
+        "Do not treat emitted text as durable commit; durable streaming reports ConversationCommitted."
+      ],
+      "validation": [
+        "cargo check -p runifold --example durable_session --features sqlite-bundled --locked",
+        "cargo test -p runifold-agent conversation --locked"
+      ],
+      "related": [
+        "docs/rfcs/0073-production-agent-sessions.md",
+        "crates/runifold/examples/durable_publish.rs"
+      ],
+      "requirements": [
+        "runifold with sqlite-bundled",
+        "runifold-testkit",
+        "tokio",
+        "anyhow",
+        "No vendor credentials required"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::AgentSession",
+        "runifold::RunContext"
+      ],
+      "production_source": "crates/runifold/examples/durable_session.rs",
+      "runtime_path": "AgentSession admission \u2192 stable request/checkpoint identity \u2192 canonical Agent/effects \u2192 conversation commit \u2192 request replay"
+    },
+    {
+      "id": "add-provider",
+      "title": "Add a Provider adapter",
+      "audience": "contributor",
+      "api": "ProviderModel + Model; canonical ModelRequest/ModelStreamEvent",
+      "source": "crates/runifold-providers/src/lib.rs",
+      "start": "#[cfg(feature = \"anthropic\")]\npub mod anthropic;",
+      "end": "#[cfg(feature = \"bedrock\")]",
+      "production": "Use an existing compatible profile if its protocol already fits. For a native protocol add a feature-gated module alongside anthropic/openai, implement Model and provider identity/capabilities, and project every wire event through canonical model semantics. Update Cargo features, the CI feature matrix and docs/PROVIDERS.md. The excerpt shows the module registration; follow the linked Anthropic implementation for a complete adapter.",
+      "do_not": [
+        "Do not add vendor wire types to core or model contracts.",
+        "Do not guess model capabilities or hide retries.",
+        "Do not copy a full transport for another endpoint using the same protocol."
+      ],
+      "validation": [
+        "cargo test -p runifold-providers --no-default-features --features anthropic --locked",
+        "cargo check -p runifold-providers --no-default-features --locked"
+      ],
+      "related": [
+        "docs/PROVIDERS.md",
+        "docs/rfcs/0052-provider-crate-topology.md",
+        "crates/runifold-providers/src/anthropic.rs",
+        "crates/runifold-model/src/invocation.rs"
+      ],
+      "requirements": [
+        "Contributor workspace",
+        "Use the new feature in place of anthropic in validation once implemented"
+      ],
+      "applies_to": [
+        "crates/runifold-providers/**"
+      ],
+      "validation_profile": "runifold-providers",
+      "difficulty": "advanced",
+      "uses": [],
+      "runtime_path": "ModelRequest \u2192 adapter wire projection \u2192 transport \u2192 canonical stream accumulator \u2192 ModelResponse"
+    },
+    {
+      "id": "add-reviewer",
+      "title": "Review an Agent answer before completion",
+      "audience": "application",
+      "api": "TerminalRuleReviewer + TerminalReviewPolicy",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "start": "fn terminal_reviewer_approves_before_candidate_commit()",
+      "end": "#[test]\nfn terminal_reviewer_repairs",
+      "production": "Give the reviewer a stable name and version. Replace the approval closure with your rule and grant only required reviewer capabilities. Use a bounded policy for repairs. Use TurnReviewer for pre-call plan review; terminal review happens after candidate generation and cannot undo an executed write.",
+      "do_not": [
+        "Do not use post-hoc terminal review as authorization for an earlier Tool write.",
+        "Do not bypass local structured output validation.",
+        "Do not grant a reviewer more authority than its parent."
+      ],
+      "validation": [
+        "cargo test -p runifold-agent terminal_review --locked",
+        "cargo check -p runifold --example ai_reviewer --locked"
+      ],
+      "related": [
+        "crates/runifold-agent/src/terminal_review.rs",
+        "crates/runifold-agent/src/agent/review.rs"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline test",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::TerminalRuleReviewer",
+        "runifold::AgentBuilder"
+      ],
+      "production_source": "crates/runifold/examples/ai_reviewer.rs",
+      "runtime_path": "Candidate \u2192 local terminal validation \u2192 attenuated reviewer \u2192 approve / bounded repair / reject \u2192 completion commit"
+    },
+    {
+      "id": "add-effect",
+      "title": "Add recoverable external work",
+      "audience": "application",
+      "api": "Tool effect descriptor; EffectExecutor for low-level effect orchestration",
+      "source": "crates/runifold-effect/src/executor.rs",
+      "start": "    fn completed_idempotent_effect_is_replayed_without_handler_execution()",
+      "end": "    #[test]\n    fn full_event_payload_capture",
+      "production": "Ordinary Agent Tools already go through EffectExecutor; declare their real effect class and inject a durable executor for cross-process recovery. The excerpt is a low-level contract test showing stable-key replay. Use the durable publication example for receipt reconciliation and crash recovery with a real SQLite store.",
+      "do_not": [
+        "Do not manually nest EffectExecutor inside an ordinary Tool just to obtain Agent recovery.",
+        "Do not retry an ambiguous NonIdempotentWrite without external evidence.",
+        "Do not claim an in-memory effect store survives process restart."
+      ],
+      "validation": [
+        "cargo test -p runifold-effect --locked",
+        "cargo check -p runifold --example durable_publish --features sqlite-bundled --locked"
+      ],
+      "related": [
+        "docs/rfcs/0013-agent-callable-effects.md",
+        "crates/runifold/examples/durable_publish.rs",
+        "crates/runifold-effect/src/handler.rs"
+      ],
+      "requirements": [
+        "runifold with runtime; sqlite-bundled for durable publication",
+        "Low-level example uses runifold-effect test helpers"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-effect",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::EffectExecutor"
+      ],
+      "runtime_path": "Capability preflight \u2192 stable effect identity \u2192 persisted Started \u2192 handler / reconciliation \u2192 persisted Completed \u2192 replay"
+    },
+    {
+      "id": "add-workflow-step",
+      "title": "Compose workflow steps",
+      "audience": "application",
+      "api": "Workflow::builder \u2192 agent \u2192 build",
+      "source": "crates/runifold/examples/workflow_chain.rs",
+      "start": "fn main()",
+      "end": null,
+      "production": "Each .agent step supplies explicit child capabilities. Keep stable workflow version and step IDs for durable work; configure a durable store and worker for actual execution. This example only assembles the workflow, so it does not demonstrate recovery on its own.",
+      "do_not": [
+        "Do not grant ambient child authority.",
+        "Do not change a persisted workflow definition without a migration/version decision."
+      ],
+      "validation": [
+        "cargo check -p runifold --example workflow_chain --locked",
+        "cargo test -p runifold-workflow --locked"
+      ],
+      "related": [
+        "docs/rfcs/0023-durable-workflow-orchestration.md",
+        "docs/rfcs/0044-workflow-worker-runtime.md"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "runifold-providers with openai",
+        "anyhow",
+        "OPENAI_API_KEY only to run the assembly example"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-workflow",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent"
+      ],
+      "production_source": "crates/runifold/examples/workflow_chain.rs",
+      "runtime_path": "Workflow definition \u2192 durable worker / step execution \u2192 explicit child authority \u2192 canonical Agent \u2192 persisted step progress"
+    },
+    {
+      "id": "test-provider",
+      "title": "Test a Provider offline",
+      "audience": "contributor",
+      "api": "CassetteServer + HttpExchange + verify_success / verify_error",
+      "source": "crates/runifold-providers/tests/anthropic_http_cassette.rs",
+      "start": "async fn invokes_text_over_real_http_and_redacts_the_key()",
+      "end": "#[tokio::test]\nasync fn preserves_structured_rate_limit_metadata",
+      "production": "Require exact request JSON, canonical response events, usage and credential redaction. Add rate-limit, malformed stream, disconnect and cancellation cases. Use fake credentials with loopback URLs. The full source includes the SSE fixture helpers.",
+      "do_not": [
+        "Do not use a live vendor key in offline conformance tests.",
+        "Do not accept a missing terminal event as success.",
+        "Do not substitute mocked Rust responses for wire-protocol tests."
+      ],
+      "validation": [
+        "cargo test -p runifold-providers --no-default-features --features anthropic --test anthropic_http_cassette --locked"
+      ],
+      "related": [
+        "crates/runifold-provider-testkit/src/conformance.rs",
+        "docs/rfcs/0028-provider-transport-reliability.md"
+      ],
+      "requirements": [
+        "runifold-providers with anthropic",
+        "runifold-provider-testkit",
+        "tokio",
+        "serde_json",
+        "Local loopback sockets; no vendor credentials"
+      ],
+      "applies_to": [
+        "crates/runifold-providers/**"
+      ],
+      "validation_profile": "runifold-providers",
+      "difficulty": "advanced",
+      "uses": [],
+      "runtime_path": "CassetteServer expected request \u2192 real loopback transport \u2192 adapter \u2192 canonical success/error conformance checks"
+    },
+    {
+      "id": "conversation",
+      "title": "Use conversation history",
+      "audience": "application",
+      "api": "Agent::run_conversation",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "start": "fn conversation_run_loads_and_atomically_appends_canonical_transcript()",
+      "end": "#[test]\nfn conversation_run_can_summarize",
+      "production": "This lower-level API loads and appends canonical history with optimistic concurrency. For production request admission and replay use AgentSession and the durable-conversation recipe. Choose a namespace and context-window policy explicitly.",
+      "do_not": [
+        "Do not use conversation history as an execution journal.",
+        "Do not assume this lower-level API participates in AgentSession admission."
+      ],
+      "validation": [
+        "cargo test -p runifold-agent --locked"
+      ],
+      "related": [
+        "crates/runifold-agent/src/conversation.rs",
+        "docs/ai/recipes/durable-conversation.md"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline source test"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent"
+      ],
+      "runtime_path": "Load conversation \u2192 bounded context selection \u2192 canonical Agent run \u2192 optimistic atomic transcript append"
+    },
+    {
+      "id": "add-retriever",
+      "title": "Add retrieval context",
+      "audience": "application",
+      "api": "AgentBuilder::dynamic_context \u2192 Retriever",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "start": "fn retrieved_context_is_untrusted_user_data_before_the_original_prompt()",
+      "end": "#[test]\nfn explicit_run_denies",
+      "production": "Register the Retriever with dynamic_context(limit, retriever). Give it a read-only descriptor, bounded results and explicit authority. The application example below implements a small handbook source; replace its body with your backend while preserving cancellation and deadline handling.",
+      "do_not": [
+        "Do not promote retrieved documents into system instructions.",
+        "Do not bypass retrieval capability checks or confuse semantic memory with conversation persistence."
+      ],
+      "validation": [
+        "cargo test -p runifold-agent --locked",
+        "cargo check -p runifold --example ai_retrieval --locked"
+      ],
+      "related": [
+        "crates/runifold-agent/src/builder.rs",
+        "docs/rfcs/0040-provider-neutral-retrieval.md"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline source test",
+        "Production example: runifold-providers with openai, tokio, anyhow; OPENAI_API_KEY only when running"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent",
+        "runifold::Retriever"
+      ],
+      "production_source": "crates/runifold/examples/ai_retrieval.rs",
+      "runtime_path": "Agent context preparation \u2192 retrieval capability check \u2192 Retriever::retrieve \u2192 untrusted user context \u2192 model invocation"
+    },
+    {
+      "id": "modify-agent-loop",
+      "title": "Modify the canonical Agent loop",
+      "audience": "contributor",
+      "api": "agent/execution.rs \u2192 review \u2192 callable \u2192 completion",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "start": "fn completes_a_model_tool_model_loop()",
+      "end": "#[test]\nfn agent_preserves",
+      "production": "Trace entry through run, stream, checkpoint resume and session execution before editing. Extend the single state machine and observation points. Add regression assertions for the changed lifecycle in ordinary, streaming and durable paths; run Agent, Tool and Effect tests.",
+      "do_not": [
+        "Do not add a second model/tool execution loop.",
+        "Do not weaken capability checks or replay safety to make the new path pass."
+      ],
+      "validation": [
+        "cargo test -p runifold-agent --locked",
+        "cargo test -p runifold-effect --locked",
+        "cargo test -p runifold-tool --locked"
+      ],
+      "related": [
+        "crates/runifold-agent/src/agent/execution.rs",
+        "crates/runifold-agent/src/agent/callable.rs",
+        "crates/runifold-agent/src/agent/completion.rs"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline source test"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::Agent"
+      ],
+      "runtime_path": "Initial state \u2192 canonical execute_state \u2192 model \u2192 turn review \u2192 callable effects \u2192 completion / terminal review"
+    },
+    {
+      "id": "public-api-change",
+      "title": "Change a public API",
+      "audience": "contributor",
+      "api": "Owning crate export \u2192 facade export \u2192 executable contract",
+      "source": "crates/runifold-agent/src/agent/tests.rs",
+      "start": "fn ergonomic_prompt_grants_registered_tools_and_returns_text()",
+      "end": "#[test]\nfn prompt_text_is",
+      "production": "Use the public-surface test style shown here to define behavior, then add or change the owning API, explicit facade exports, rustdoc, changelog and the relevant RFC. Review semver compatibility; before 1.0 an incompatible public change needs a new minor release. Use scripts/semver-check.sh with the required release history/tool installed.",
+      "do_not": [
+        "Do not publish an internal helper solely to make a test compile.",
+        "Do not claim compatibility from compilation of the new version alone."
+      ],
+      "validation": [
+        "cargo test -p runifold-agent --locked",
+        "cargo check -p runifold --all-features --locked"
+      ],
+      "related": [
+        "docs/RELEASING.md",
+        "scripts/semver-check.sh",
+        "crates/runifold/src/lib.rs"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "runifold-testkit and futures-executor for the offline source test"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::Agent"
+      ],
+      "runtime_path": "Public caller \u2192 owning crate API \u2192 existing canonical implementation; facade re-exports preserve that path"
+    }
+  ],
+  "symbols": [
+    {
+      "symbol": "runifold::ProviderRuntime",
+      "source": "crates/runifold/src/lib.rs",
+      "name": "ProviderRuntime",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ProviderRuntime::agent",
+      "source": "crates/runifold/src/lib.rs",
+      "name": "agent",
+      "kind": "fn"
+    },
+    {
+      "symbol": "runifold::Agent",
+      "source": "crates/runifold-agent/src/agent.rs",
+      "name": "Agent",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::AgentBuilder",
+      "source": "crates/runifold-agent/src/builder.rs",
+      "name": "AgentBuilder",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ToolRegistry",
+      "source": "crates/runifold-tool/src/registry.rs",
+      "name": "ToolRegistry",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ToolContext",
+      "source": "crates/runifold-tool/src/context.rs",
+      "name": "ToolContext",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::AgentSession",
+      "source": "crates/runifold-agent/src/conversation/session.rs",
+      "name": "AgentSession",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::RunContext",
+      "source": "crates/runifold-core/src/context.rs",
+      "name": "RunContext",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::EffectExecutor",
+      "source": "crates/runifold-effect/src/executor.rs",
+      "name": "EffectExecutor",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::TerminalRuleReviewer",
+      "source": "crates/runifold-agent/src/terminal_review.rs",
+      "name": "TerminalRuleReviewer",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::tool",
+      "source": "crates/runifold-macros/src/lib.rs",
+      "name": "tool",
+      "kind": "fn"
+    },
+    {
+      "symbol": "runifold::StructuredAgent",
+      "source": "crates/runifold-agent/src/structured.rs",
+      "name": "StructuredAgent",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::AgentStreamEvent",
+      "source": "crates/runifold-agent/src/stream.rs",
+      "name": "AgentStreamEvent",
+      "kind": "enum"
+    },
+    {
+      "symbol": "runifold::Retriever",
+      "source": "crates/runifold-retrieval/src/retriever.rs",
+      "name": "Retriever",
+      "kind": "trait"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "public-api",
+  "prompt": "Add a documented public convenience method AgentBuildError::is_configuration_error() that distinguishes direct configuration failures from nested Tool/Route/Retrieval errors. Preserve all existing error behavior and add public-surface tests, release notes and API guidance.",
+  "expected_paths": [
+    "crates/runifold-agent/",
+    "crates/runifold/",
+    "docs/",
+    "CHANGELOG.md"
+  ],
+  "validation": [
+    [
+      "cargo",
+      "test",
+      "-p",
+      "runifold-agent",
+      "--locked"
+    ],
+    [
+      "cargo",
+      "check",
+      "-p",
+      "runifold",
+      "--all-features",
+      "--locked"
+    ]
+  ],
+  "review_rubric": [
+    "Method meaning and exhaustive category mapping are documented.",
+    "Public test demonstrates both direct and nested categories.",
+    "Changelog and appropriate API documentation updated without compatibility break."
+  ],
+  "baseline": "Operator must pin a commit; no default baseline or claimed result.",
+  "fixture": null
+}

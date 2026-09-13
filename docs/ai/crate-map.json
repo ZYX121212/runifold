@@ -1,0 +1,603 @@
+{
+  "runifold-agent": {
+    "path": "crates/runifold-agent",
+    "owns": "Canonical model/callable loop, review, structured completion and sessions",
+    "does_not_own": "HTTP transports and database implementations",
+    "entry": "crates/runifold-agent/src/agent/execution.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-effect": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ],
+      "runifold-retrieval": [
+        "normal"
+      ],
+      "runifold-tool": [
+        "normal"
+      ],
+      "runifold-testkit": [
+        "dev"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-agent --locked"
+    ]
+  },
+  "runifold": {
+    "path": "crates/runifold",
+    "owns": "Public re-exports, ProviderRuntime and ergonomic composition",
+    "does_not_own": "Transport wire formats and a second execution loop",
+    "entry": "crates/runifold/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-agent": [
+        "normal"
+      ],
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-effect": [
+        "normal"
+      ],
+      "runifold-mcp": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ],
+      "runifold-macros": [
+        "normal"
+      ],
+      "runifold-observability-otel": [
+        "normal"
+      ],
+      "runifold-retrieval": [
+        "normal"
+      ],
+      "runifold-retrieval-pgvector": [
+        "normal"
+      ],
+      "runifold-retrieval-qdrant": [
+        "normal"
+      ],
+      "runifold-store-sqlite": [
+        "normal"
+      ],
+      "runifold-tool": [
+        "normal"
+      ],
+      "runifold-workflow": [
+        "normal"
+      ],
+      "runifold-store-postgres": [
+        "normal"
+      ],
+      "runifold-providers": [
+        "dev"
+      ],
+      "runifold-testkit": [
+        "cfg(not(target_arch = \"wasm32\")):dev-dependencies"
+      ]
+    },
+    "features": {
+      "default": [
+        "runtime"
+      ],
+      "runtime": [
+        "dep:runifold-agent",
+        "dep:runifold-effect",
+        "dep:runifold-macros",
+        "dep:runifold-retrieval",
+        "dep:runifold-tool",
+        "dep:runifold-workflow",
+        "dep:schemars",
+        "dep:serde_json"
+      ],
+      "otel": [
+        "dep:runifold-observability-otel"
+      ],
+      "mcp": [
+        "runtime",
+        "dep:runifold-mcp"
+      ],
+      "sqlite": [
+        "runtime",
+        "dep:runifold-store-sqlite"
+      ],
+      "sqlite-bundled": [
+        "sqlite",
+        "runifold-store-sqlite/bundled"
+      ],
+      "qdrant": [
+        "runtime",
+        "dep:runifold-retrieval-qdrant"
+      ],
+      "pgvector": [
+        "runtime",
+        "dep:runifold-retrieval-pgvector"
+      ],
+      "workflow-postgres": [
+        "runtime",
+        "dep:runifold-store-postgres"
+      ],
+      "archive-s3": [
+        "runtime",
+        "dep:reqwest",
+        "dep:sha2",
+        "dep:base64",
+        "dep:serde_json",
+        "dep:time",
+        "dep:hmac",
+        "dep:secrecy"
+      ]
+    },
+    "validation": [
+      "cargo test -p runifold --features sqlite-bundled --locked"
+    ]
+  },
+  "runifold-core": {
+    "path": "crates/runifold-core",
+    "owns": "Run identity, authority, budgets, cancellation, events and checkpoints",
+    "does_not_own": "Provider, protocol, storage backend and application policy implementations",
+    "entry": "crates/runifold-core/src/context.rs",
+    "workspace_dependencies": {},
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-core --locked"
+    ]
+  },
+  "runifold-effect": {
+    "path": "crates/runifold-effect",
+    "owns": "Write-ahead effects, stable replay identity and explicit recovery",
+    "does_not_own": "Vendor-specific business handlers and guaranteed remote exactly-once delivery",
+    "entry": "crates/runifold-effect/src/executor.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-effect --locked"
+    ]
+  },
+  "runifold-eval-cli": {
+    "path": "crates/runifold-eval-cli",
+    "owns": "Evaluation CLI and CI regression gates",
+    "does_not_own": "Application Agent policy",
+    "entry": "crates/runifold-eval-cli/src/main.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-testkit": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-eval-cli --locked"
+    ]
+  },
+  "runifold-model": {
+    "path": "crates/runifold-model",
+    "owns": "Provider-neutral content, model invocation, streams, routing and retry contracts",
+    "does_not_own": "Vendor wire types and Agent tool loops",
+    "entry": "crates/runifold-model/src/invocation.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-model --locked"
+    ]
+  },
+  "runifold-macros": {
+    "path": "crates/runifold-macros",
+    "owns": "Typed Tool attribute expansion",
+    "does_not_own": "Runtime policy and execution",
+    "entry": "crates/runifold-macros/src/lib.rs",
+    "workspace_dependencies": {},
+    "features": {},
+    "validation": [
+      "cargo test -p runifold --test typed_tool_macro --locked"
+    ]
+  },
+  "runifold-mcp": {
+    "path": "crates/runifold-mcp",
+    "owns": "MCP client/server protocol and runtime adapters",
+    "does_not_own": "Changes to core authority or model IR for MCP wire formats",
+    "entry": "crates/runifold-mcp/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ],
+      "runifold-tool": [
+        "normal"
+      ],
+      "runifold-workflow": [
+        "normal"
+      ],
+      "runifold-store-sqlite": [
+        "dev"
+      ],
+      "runifold-testkit": [
+        "dev"
+      ]
+    },
+    "features": {
+      "workflow-tasks": [
+        "dep:runifold-workflow",
+        "dep:uuid"
+      ]
+    },
+    "validation": [
+      "cargo test -p runifold-mcp --locked"
+    ]
+  },
+  "runifold-observability-otel": {
+    "path": "crates/runifold-observability-otel",
+    "owns": "Optional OpenTelemetry projection of canonical observations",
+    "does_not_own": "Core event semantics or default prompt capture",
+    "entry": "crates/runifold-observability-otel/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ],
+      "runifold-workflow": [
+        "normal"
+      ],
+      "runifold-testkit": [
+        "dev"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-observability-otel --locked"
+    ]
+  },
+  "runifold-ops": {
+    "path": "crates/runifold-ops",
+    "owns": "Read-only execution inspection, evidence and value-free diffs",
+    "does_not_own": "Executing replayed model calls or external writes",
+    "entry": "crates/runifold-ops/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-ops --locked"
+    ]
+  },
+  "runifold-cli": {
+    "path": "crates/runifold-cli",
+    "owns": "Operational commands and AI development context/diagnostics",
+    "does_not_own": "Runtime implementation or executing suggested repairs",
+    "entry": "crates/runifold-cli/src/main.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-ops": [
+        "normal"
+      ],
+      "runifold-store-postgres": [
+        "normal"
+      ],
+      "runifold-store-sqlite": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-cli --locked"
+    ]
+  },
+  "runifold-providers": {
+    "path": "crates/runifold-providers",
+    "owns": "Feature-gated vendor transports and canonical protocol projection",
+    "does_not_own": "Kernel semantics and hidden Agent loops",
+    "entry": "crates/runifold-providers/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ],
+      "runifold-retrieval": [
+        "normal"
+      ],
+      "runifold-provider-testkit": [
+        "dev"
+      ]
+    },
+    "features": {
+      "default": [],
+      "anthropic": [
+        "dep:eventsource-stream",
+        "dep:httpdate"
+      ],
+      "bedrock": [
+        "dep:aws-sdk-bedrockruntime",
+        "dep:aws-smithy-types"
+      ],
+      "cohere": [
+        "dep:runifold-retrieval"
+      ],
+      "gemini": [
+        "dep:eventsource-stream",
+        "dep:runifold-retrieval"
+      ],
+      "ollama": [
+        "dep:runifold-retrieval"
+      ],
+      "openai": [
+        "dep:eventsource-stream",
+        "dep:httpdate",
+        "dep:runifold-retrieval"
+      ],
+      "openai-realtime": [
+        "openai",
+        "dep:futures-channel",
+        "dep:js-sys",
+        "dep:tokio",
+        "dep:tokio-tungstenite",
+        "dep:wasm-bindgen",
+        "dep:wasm-bindgen-futures",
+        "dep:web-sys"
+      ]
+    },
+    "validation": [
+      "cargo test -p runifold-providers --all-features --locked"
+    ]
+  },
+  "runifold-provider-testkit": {
+    "path": "crates/runifold-provider-testkit",
+    "owns": "Loopback protocol cassettes, conformance and benchmark contracts",
+    "does_not_own": "Production provider transports",
+    "entry": "crates/runifold-provider-testkit/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-provider-testkit --locked"
+    ]
+  },
+  "runifold-retrieval": {
+    "path": "crates/runifold-retrieval",
+    "owns": "Provider-neutral retrieval, documents and semantic-memory contracts",
+    "does_not_own": "A mandatory vector database or opinionated RAG application",
+    "entry": "crates/runifold-retrieval/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-retrieval --locked"
+    ]
+  },
+  "runifold-retrieval-pgvector": {
+    "path": "crates/runifold-retrieval-pgvector",
+    "owns": "PostgreSQL vector retrieval adapter",
+    "does_not_own": "Agent conversation persistence",
+    "entry": "crates/runifold-retrieval-pgvector/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-retrieval": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-retrieval-pgvector --locked"
+    ]
+  },
+  "runifold-retrieval-qdrant": {
+    "path": "crates/runifold-retrieval-qdrant",
+    "owns": "Qdrant retrieval adapter",
+    "does_not_own": "Provider-neutral retrieval policy",
+    "entry": "crates/runifold-retrieval-qdrant/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-retrieval": [
+        "normal"
+      ],
+      "runifold-provider-testkit": [
+        "dev"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-retrieval-qdrant --locked"
+    ]
+  },
+  "runifold-retrieval-text": {
+    "path": "crates/runifold-retrieval-text",
+    "owns": "Local text retrieval adapter",
+    "does_not_own": "Model execution and remote vector stores",
+    "entry": "crates/runifold-retrieval-text/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-retrieval": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-retrieval-text --locked"
+    ]
+  },
+  "runifold-store-postgres": {
+    "path": "crates/runifold-store-postgres",
+    "owns": "PostgreSQL implementations of durable runtime stores",
+    "does_not_own": "Application-owned authorization policy",
+    "entry": "crates/runifold-store-postgres/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-agent": [
+        "normal"
+      ],
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-effect": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ],
+      "runifold-ops": [
+        "normal"
+      ],
+      "runifold-retrieval": [
+        "normal"
+      ],
+      "runifold-workflow": [
+        "normal"
+      ],
+      "runifold-mcp": [
+        "dev"
+      ],
+      "runifold-tool": [
+        "dev"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-store-postgres --locked"
+    ]
+  },
+  "runifold-store-sqlite": {
+    "path": "crates/runifold-store-sqlite",
+    "owns": "SQLite implementations of durable runtime stores",
+    "does_not_own": "A separate execution model or implicit unsafe recovery",
+    "entry": "crates/runifold-store-sqlite/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-agent": [
+        "normal"
+      ],
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-effect": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ],
+      "runifold-ops": [
+        "normal"
+      ],
+      "runifold-workflow": [
+        "normal"
+      ],
+      "runifold-testkit": [
+        "dev"
+      ],
+      "runifold-tool": [
+        "dev"
+      ]
+    },
+    "features": {
+      "default": [],
+      "bundled": [
+        "rusqlite/bundled"
+      ]
+    },
+    "validation": [
+      "cargo test -p runifold-store-sqlite --features bundled --locked"
+    ]
+  },
+  "runifold-testkit": {
+    "path": "crates/runifold-testkit",
+    "owns": "Deterministic models, fault injection and offline evaluation",
+    "does_not_own": "Production transport",
+    "entry": "crates/runifold-testkit/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ],
+      "runifold-retrieval": [
+        "normal"
+      ],
+      "runifold-tool": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-testkit --locked"
+    ]
+  },
+  "runifold-tool": {
+    "path": "crates/runifold-tool",
+    "owns": "Typed tool descriptors, registry, input validation and safe errors",
+    "does_not_own": "Agent orchestration and vendor protocols",
+    "entry": "crates/runifold-tool/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-tool --locked"
+    ]
+  },
+  "runifold-workflow": {
+    "path": "crates/runifold-workflow",
+    "owns": "Deterministic composition, durable steps, workers, leases, timers and signals",
+    "does_not_own": "Provider transport and business-specific workflows",
+    "entry": "crates/runifold-workflow/src/lib.rs",
+    "workspace_dependencies": {
+      "runifold-agent": [
+        "normal"
+      ],
+      "runifold-core": [
+        "normal"
+      ],
+      "runifold-model": [
+        "normal"
+      ],
+      "runifold-testkit": [
+        "dev"
+      ]
+    },
+    "features": {},
+    "validation": [
+      "cargo test -p runifold-workflow --locked"
+    ]
+  }
+}

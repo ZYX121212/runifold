@@ -41,6 +41,25 @@ pub struct EffectExecutorError {
 }
 
 impl EffectExecutorError {
+    /// Returns a stable diagnostic identifier without exposing error payloads.
+    ///
+    /// Resolve causes and corrective actions with `runifold ai explain <code>`.
+    /// This does not change the error's retry safety, Display or serialization.
+    pub const fn diagnostic_code(&self) -> &'static str {
+        match self.kind {
+            EffectExecutorErrorKind::CapabilityDenied => "RF-EFFECT-001",
+            EffectExecutorErrorKind::IdempotencyConflict => "RF-EFFECT-002",
+            EffectExecutorErrorKind::Ambiguous => "RF-EFFECT-003",
+            EffectExecutorErrorKind::Store => "RF-EFFECT-004",
+            EffectExecutorErrorKind::Observability => "RF-EFFECT-005",
+            EffectExecutorErrorKind::Handler => "RF-EFFECT-006",
+            EffectExecutorErrorKind::Cancelled => "RF-EFFECT-007",
+            EffectExecutorErrorKind::DeadlineExceeded => "RF-EFFECT-008",
+            EffectExecutorErrorKind::Protocol => "RF-EFFECT-009",
+            EffectExecutorErrorKind::Reconciliation => "RF-EFFECT-010",
+        }
+    }
+
     /// Creates an error without a handler source.
     pub fn new(kind: EffectExecutorErrorKind, message: impl Into<String>) -> Self {
         Self {

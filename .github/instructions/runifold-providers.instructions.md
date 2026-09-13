@@ -1,0 +1,6 @@
+---
+applyTo: "crates/runifold-providers/**"
+---
+<!-- Generated from canonical crate guide. -->
+Read AGENTS.md and crates/runifold-providers/AGENTS.md.
+Use docs/ai/recipes for the current task; run the local validation profile.

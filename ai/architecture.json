@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "laws": [
+    {
+      "id": "RF-LAW-001",
+      "title": "Provider and protocol isolation",
+      "check": "forbidden_dependency",
+      "scope": [
+        "runifold-core"
+      ],
+      "forbid": [
+        "runifold-model",
+        "runifold-agent",
+        "runifold-providers",
+        "runifold-mcp",
+        "runifold-observability-otel",
+        "runifold-store-sqlite",
+        "runifold-store-postgres",
+        "reqwest",
+        "hyper"
+      ],
+      "dependency_kinds": [
+        "normal",
+        "build"
+      ],
+      "severity": "error"
+    },
+    {
+      "id": "RF-LAW-002",
+      "title": "One canonical execution path",
+      "check": "review_and_tests",
+      "scope": [
+        "runifold",
+        "runifold-agent"
+      ],
+      "evidence": [
+        "cargo test -p runifold-agent --locked"
+      ]
+    },
+    {
+      "id": "RF-LAW-003",
+      "title": "Child authority cannot amplify",
+      "check": "review_and_tests",
+      "scope": [
+        "runifold-core",
+        "runifold-agent"
+      ],
+      "evidence": [
+        "cargo test -p runifold-agent authority --locked"
+      ]
+    },
+    {
+      "id": "RF-LAW-004",
+      "title": "Visible output and effects constrain retry safety",
+      "check": "review_and_tests",
+      "scope": [
+        "runifold-model",
+        "runifold-effect"
+      ],
+      "evidence": [
+        "cargo test -p runifold-effect --locked"
+      ]
+    },
+    {
+      "id": "RF-LAW-005",
+      "title": "History, journal and memory remain distinct",
+      "check": "review_and_tests",
+      "scope": [
+        "runifold-agent",
+        "runifold-retrieval"
+      ],
+      "evidence": [
+        "cargo test -p runifold-agent conversation --locked"
+      ]
+    }
+  ]
+}

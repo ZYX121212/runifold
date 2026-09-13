@@ -243,6 +243,27 @@ Planned edge crates include A2A transports and additional persistence
 backends. They remain outside the kernel until their dependency and protocol
 boundaries are clear.
 
+## AI-native development
+
+Runifold provides a versioned development contract for coding agents: scoped
+instructions, executable task recipes, machine-readable architecture, stable
+diagnostics and affected-boundary verification. Start with [the AI guide](docs/ai/README.md)
+or [AGENTS.md](AGENTS.md) when modifying the framework.
+
+```sh
+runifold ai context --json
+runifold ai recipe add-tool --json
+runifold ai explain RF-TOOL-003 --json
+runifold doctor --ai --json --manifest-path /path/to/app/Cargo.toml
+runifold ai check --json
+```
+
+`ai check` operates on a Runifold source workspace; add `--execute` to run its
+selected checks. `doctor --ai` inspects application Cargo declarations offline.
+Recipes are bundled into the CLI and carry their knowledge version. See the
+[generated manifest](runifold.ai.json), [validation contract](docs/rfcs/0074-ai-native-developer-experience.md)
+and [AI coding evaluation suite](ai-evals/README.md).
+
 ## Contributing
 
 Start with the [project charter](docs/CHARTER.md), then use the

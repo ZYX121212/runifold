@@ -5,8 +5,9 @@ use runifold::ProviderModelExt;
 use runifold_providers::openai::OpenAiClient;
 
 async fn prompt() -> anyhow::Result<String> {
-    let agent = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?
-        .agent("assistant", "gpt-5")
+    let runtime = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?.runtime("gpt-5")?;
+    let agent = runtime
+        .agent("assistant")
         .system("Answer precisely and expose uncertainty.");
 
     Ok(agent

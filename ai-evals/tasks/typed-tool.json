@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "typed-tool",
+  "prompt": "Add a typed read-only Tool to an example Agent. Use the canonical Tool API, declare its real effect class, and add an offline test proving invocation and denial without the required capability.",
+  "expected_paths": [
+    "crates/runifold/",
+    "crates/runifold-tool/"
+  ],
+  "validation": [
+    [
+      "cargo",
+      "test",
+      "-p",
+      "runifold",
+      "--test",
+      "typed_tool_macro",
+      "--locked"
+    ],
+    [
+      "cargo",
+      "test",
+      "-p",
+      "runifold-agent",
+      "capability",
+      "--locked"
+    ]
+  ],
+  "review_rubric": [
+    "Uses generated typed Tool or FunctionTool through the registry.",
+    "Read-only classification matches actual behavior.",
+    "New task-specific regression exercises the added Tool and capability denial."
+  ],
+  "baseline": "Operator must pin a commit; no default baseline or claimed result.",
+  "fixture": null
+}

@@ -140,7 +140,12 @@ impl Agent {
         crate::AgentBuilder::new(name, model, model_ref)
     }
 
-    /// Creates an agent without instructions or tools.
+    /// Low-level construction for an explicitly supplied Model.
+    ///
+    /// For provider-backed applications prefer the facade `ProviderRuntime::agent`
+    /// entry point and share the runtime across requests. This constructor is
+    /// useful for custom model composition and deterministic offline tests.
+    /// It uses the same canonical execution engine.
     pub fn new(name: impl Into<String>, model: Arc<dyn Model>, model_ref: ModelRef) -> Self {
         Self {
             name: name.into(),

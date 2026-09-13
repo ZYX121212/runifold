@@ -46,10 +46,10 @@ archive-s3 = [
 runifold-agent = { workspace = true, optional = true }
 runifold-core.workspace = true
 runifold-effect = { workspace = true, optional = true }
-runifold-mcp = { version = "0.10.0", path = "../runifold-mcp", optional = true }
+runifold-mcp = { version = "0.10.1", path = "../runifold-mcp", optional = true }
 runifold-model.workspace = true
 runifold-macros = { workspace = true, optional = true }
-runifold-observability-otel = { version = "0.10.0", path = "../runifold-observability-otel", optional = true }
+runifold-observability-otel = { version = "0.10.1", path = "../runifold-observability-otel", optional = true }
 runifold-retrieval = { workspace = true, optional = true }
 runifold-retrieval-pgvector = { workspace = true, optional = true }
 runifold-retrieval-qdrant = { workspace = true, optional = true }
@@ -69,6 +69,7 @@ secrecy = { workspace = true, optional = true }
 [dev-dependencies]
 anyhow = "1.0.104"
 futures-executor.workspace = true
+futures-util.workspace = true
 runifold-providers = { path = "../runifold-providers", features = ["anthropic", "gemini", "ollama", "openai-realtime"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -123,3 +124,23 @@ required-features = ["sqlite"]
 [[example]]
 name = "durable_publish"
 required-features = ["sqlite"]
+
+[[example]]
+name = "ai_tool"
+required-features = ["runtime"]
+
+[[example]]
+name = "ai_structured"
+required-features = ["runtime"]
+
+[[example]]
+name = "ai_stream"
+required-features = ["runtime"]
+
+[[example]]
+name = "ai_reviewer"
+required-features = ["runtime"]
+
+[[example]]
+name = "ai_retrieval"
+required-features = ["runtime"]

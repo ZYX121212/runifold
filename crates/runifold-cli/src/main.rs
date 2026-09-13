@@ -1,5 +1,7 @@
 //! Read-only operational CLI for Runifold execution artifacts and journals.
 
+mod ai;
+
 use std::{
     fs::{File, OpenOptions},
     io::{BufReader, Read, Write},
@@ -30,6 +32,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Versioned AI development interface.
+    Ai {
+        #[command(subcommand)]
+        command: AiCommand,
+    },
     /// Inspect, tail, or replay canonical run events.
     Run {
         #[command(subcommand)]
@@ -45,10 +52,63 @@ enum Command {
         #[command(subcommand)]
         command: BudgetCommand,
     },
-    /// Validate run evidence and report operational health.
+    /// Print bundled, versioned development context.
+    Context {
+        /// A task ID from the recipe index; omit to list tasks.
+        #[arg(long)]
+        task: Option<String>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate run evidence, or inspect a Cargo project with --ai.
     Doctor {
+        /// Inspect Cargo declarations offline instead of execution events.
+        #[arg(long, conflicts_with_all = ["events", "sqlite", "postgres", "run_id", "table"])]
+        ai: bool,
+        /// Emit AI diagnostics as JSON (operational doctor already emits JSON).
+        #[arg(long)]
+        json: bool,
+        /// Cargo manifest to inspect; defaults to Cargo.toml in the current directory.
+        #[arg(long, requires = "ai")]
+        manifest_path: Option<PathBuf>,
         #[command(flatten)]
         input: EventInput,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AiCommand {
+    /// Show the compact bundled knowledge index, optionally with project inspection.
+    Context {
+        #[arg(long)]
+        json: bool,
+        /// Inspect this project's Cargo declarations instead of the bundled index.
+        #[arg(long)]
+        manifest_path: Option<PathBuf>,
+    },
+    /// Show one task recipe and its executable source references.
+    Recipe {
+        task: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Explain a stable RF diagnostic or existing runifold.* code.
+    Explain {
+        code: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Select affected validation and check architecture/freshness in a source workspace.
+    Check {
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        #[arg(long, default_value = "HEAD")]
+        base: String,
+        #[arg(long)]
+        execute: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -143,8 +203,36 @@ enum BudgetCommand {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<std::process::ExitCode> {
     match Cli::parse().command {
+        Command::Ai { command } => match command {
+            AiCommand::Context {
+                json,
+                manifest_path: None,
+            } => ai::context(None, json)?,
+            AiCommand::Context {
+                json,
+                manifest_path: Some(path),
+            } => {
+                if !tokio::task::spawn_blocking(move || ai::doctor(&path, json)).await?? {
+                    return Ok(std::process::ExitCode::FAILURE);
+                }
+            }
+            AiCommand::Recipe { task, json } => ai::context(Some(&task), json)?,
+            AiCommand::Explain { code, json } => ai::explain(&code, json)?,
+            AiCommand::Check {
+                root,
+                base,
+                execute,
+                json,
+            } => {
+                if !tokio::task::spawn_blocking(move || ai::check(&root, &base, execute, json))
+                    .await??
+                {
+                    return Ok(std::process::ExitCode::FAILURE);
+                }
+            }
+        },
         Command::Run { command } => match command {
             RunCommand::Inspect { input } => {
                 let events = input.load().await?;
@@ -181,7 +269,20 @@ async fn main() -> Result<()> {
                 print_json(&BudgetExplanation::new(budget, usage))?;
             }
         },
-        Command::Doctor { input } => {
+        Command::Context { task, json } => ai::context(task.as_deref(), json)?,
+        Command::Doctor {
+            ai: true,
+            json,
+            manifest_path,
+            ..
+        } => {
+            let path = manifest_path.unwrap_or_else(|| PathBuf::from("Cargo.toml"));
+            let healthy = tokio::task::spawn_blocking(move || ai::doctor(&path, json)).await??;
+            if !healthy {
+                return Ok(std::process::ExitCode::FAILURE);
+            }
+        }
+        Command::Doctor { input, .. } => {
             let events = input.load().await?;
             let inspection = RunInspection::inspect(&events)?;
             print_json(&serde_json::json!({
@@ -191,7 +292,7 @@ async fn main() -> Result<()> {
             }))?;
         }
     }
-    Ok(())
+    Ok(std::process::ExitCode::SUCCESS)
 }
 
 fn load_source(source: &dyn RunEventSource, run_id: RunId) -> Result<Vec<RunEvent>> {

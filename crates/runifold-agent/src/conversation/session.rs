@@ -25,6 +25,8 @@ const KIND: &str = "runifold.conversation.admission";
 /// remain available and do not honor this admission record. The conversation's
 /// UUID is reserved as its admission checkpoint ID; request IDs must differ.
 #[derive(Clone)]
+#[doc(alias = "durable conversation")]
+#[doc(alias = "request replay")]
 pub struct AgentSession {
     agent: Agent,
     store: Arc<dyn DurableConversationStore>,

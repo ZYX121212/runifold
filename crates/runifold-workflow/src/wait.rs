@@ -130,6 +130,8 @@ impl Default for WorkflowInterruptId {
 
 /// Persisted request presented to a human reviewer.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[doc(alias = "human approval")]
+#[doc(alias = "human in the loop")]
 pub struct WorkflowInterruptRequest {
     /// Stable identity used by the decision command.
     pub interrupt_id: WorkflowInterruptId,

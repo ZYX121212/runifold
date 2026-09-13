@@ -1,0 +1,26 @@
+# Runifold 0.10.1
+
+> Typed, observable and reliable AI application runtime in Rust.
+
+Use recipes for application development; read architecture for framework changes.
+
+## AI Coding
+
+- [docs/ai/README.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/README.md)
+- [docs/ai/architecture.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/architecture.md)
+- [docs/ai/api-map.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/api-map.md)
+- [runifold.ai.json](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/runifold.ai.json)
+- [docs/ai/recipes/create-agent.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/create-agent.md)
+- [docs/ai/recipes/add-tool.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/add-tool.md)
+- [docs/ai/recipes/structured-output.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/structured-output.md)
+- [docs/ai/recipes/stream-agent.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/stream-agent.md)
+- [docs/ai/recipes/durable-conversation.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/durable-conversation.md)
+- [docs/ai/recipes/add-provider.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/add-provider.md)
+- [docs/ai/recipes/add-reviewer.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/add-reviewer.md)
+- [docs/ai/recipes/add-effect.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/add-effect.md)
+- [docs/ai/recipes/add-workflow-step.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/add-workflow-step.md)
+- [docs/ai/recipes/test-provider.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/test-provider.md)
+- [docs/ai/recipes/conversation.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/conversation.md)
+- [docs/ai/recipes/add-retriever.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/add-retriever.md)
+- [docs/ai/recipes/modify-agent-loop.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/modify-agent-loop.md)
+- [docs/ai/recipes/public-api-change.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.1/docs/ai/recipes/public-api-change.md)
