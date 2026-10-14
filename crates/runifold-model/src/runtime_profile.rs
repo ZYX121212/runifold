@@ -167,7 +167,7 @@ mod tests {
 
         assert_eq!(profile.selected_response_mode(), ResponseMode::Streaming);
         assert_eq!(profile.selected_feature_policy(), FeaturePolicy::Strict);
-        assert!(profile.provider_options().is_empty());
+        assert_eq!(profile.provider_options().len(), 0);
         assert_eq!(profile.selected_retry_policy().max_attempts(), 3);
     }
 

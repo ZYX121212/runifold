@@ -29,6 +29,9 @@ breaking changes require a minor-version increment.
 - Kept current Rust quality checks passing and rebuilt the real MinIO CI fixture
   from pinned official source commits after upstream images became unavailable.
   Reliability evidence records source commits and actual build identities.
+- Rounded browser request timeouts up to Fetch's millisecond precision and
+  bounded them to the supported timer range, preserving deadline classification
+  without changing native timeout precision.
 
 - Corrected the client Tool Search regression fixture to use valid function
   metadata values, ensuring it tests unsupported Tool kinds rather than an

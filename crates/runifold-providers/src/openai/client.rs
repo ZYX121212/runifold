@@ -301,7 +301,7 @@ impl OpenAiClient {
             builder = builder.header("X-OpenRouter-Title", application_title);
         }
         if let Some(remaining) = context.remaining() {
-            builder = builder.timeout(remaining);
+            builder = builder.timeout(crate::reliability::request_timeout(remaining));
         }
         builder
     }

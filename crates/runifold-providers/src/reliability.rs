@@ -3,6 +3,29 @@
 use reqwest::StatusCode;
 use runifold_core::RetrySafety;
 use runifold_model::ModelError;
+use std::time::Duration;
+
+pub(crate) fn request_timeout(remaining: Duration) -> Duration {
+    #[cfg(target_arch = "wasm32")]
+    {
+        browser_timeout(remaining)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        remaining
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn browser_timeout(remaining: Duration) -> Duration {
+    // Fetch AbortGuard truncates to signed 32-bit milliseconds. Rounding up
+    // prevents an abort just before the canonical deadline from looking like
+    // a transport failure; bounding the timer also avoids a conversion panic.
+    let milliseconds = remaining.as_nanos().saturating_add(999_999) / 1_000_000;
+    let milliseconds = u64::try_from(milliseconds.min(i32::MAX as u128))
+        .expect("the bounded browser timeout fits in u64");
+    Duration::from_millis(milliseconds)
+}
 
 pub(crate) fn classify_transport(error: &reqwest::Error, model_error: &mut ModelError) {
     #[cfg(not(target_arch = "wasm32"))]
@@ -25,6 +48,28 @@ mod tests {
     use runifold_model::{ModelError, ModelErrorKind};
 
     use super::*;
+
+    #[test]
+    fn browser_timeouts_round_up_without_overflowing_the_fetch_timer() {
+        assert_eq!(browser_timeout(Duration::ZERO), Duration::ZERO);
+        assert_eq!(
+            browser_timeout(Duration::from_micros(150_001)),
+            Duration::from_millis(151)
+        );
+        assert_eq!(
+            browser_timeout(Duration::from_millis(150)),
+            Duration::from_millis(150)
+        );
+        assert_eq!(
+            browser_timeout(Duration::from_secs(u64::MAX)),
+            Duration::from_millis(i32::MAX as u64)
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(
+            request_timeout(Duration::from_nanos(1)),
+            Duration::from_nanos(1)
+        );
+    }
 
     #[test]
     fn only_explicit_rejection_is_safe_by_default() {

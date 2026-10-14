@@ -129,7 +129,7 @@ impl Reranker for CohereReranker {
                     "top_n": request.limit,
                 }));
             if let Some(remaining) = context.remaining() {
-                builder = builder.timeout(remaining);
+                builder = builder.timeout(crate::reliability::request_timeout(remaining));
             }
             let cancellation = context.cancellation().cancelled();
             let send = builder.send();

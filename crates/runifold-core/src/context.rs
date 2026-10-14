@@ -267,7 +267,7 @@ mod tests {
 
         assert_eq!(child.parent_run_id(), Some(parent.run_id()));
         assert_eq!(child.root_run_id(), parent.root_run_id());
-        assert!(child.capabilities().is_empty());
+        assert_eq!(child.capabilities().len(), 0);
 
         child
             .budget()

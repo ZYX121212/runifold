@@ -865,7 +865,7 @@
         "docs/rfcs/0018-agent-streaming.md",
         "crates/runifold-agent/src/stream.rs"
       ],
-      "source_sha256": "de3684106db1691f6e558a162cda43d72395071515e92254f7f532b9a9f421bc"
+      "source_sha256": "2c4f5a01671d72d7acac86280f2514e4870ea97060edb90b7652d212358cc603"
     },
     "durable-conversation": {
       "title": "Persist a conversation and replay a request",
@@ -958,7 +958,7 @@
         "crates/runifold-agent/src/terminal_review.rs",
         "crates/runifold-agent/src/agent/review.rs"
       ],
-      "source_sha256": "de3684106db1691f6e558a162cda43d72395071515e92254f7f532b9a9f421bc"
+      "source_sha256": "2c4f5a01671d72d7acac86280f2514e4870ea97060edb90b7652d212358cc603"
     },
     "add-effect": {
       "title": "Add recoverable external work",
@@ -1076,7 +1076,7 @@
         "crates/runifold-agent/src/conversation.rs",
         "docs/ai/recipes/durable-conversation.md"
       ],
-      "source_sha256": "de3684106db1691f6e558a162cda43d72395071515e92254f7f532b9a9f421bc"
+      "source_sha256": "2c4f5a01671d72d7acac86280f2514e4870ea97060edb90b7652d212358cc603"
     },
     "add-retriever": {
       "title": "Add retrieval context",
@@ -1107,7 +1107,7 @@
         "crates/runifold-agent/src/builder.rs",
         "docs/rfcs/0040-provider-neutral-retrieval.md"
       ],
-      "source_sha256": "de3684106db1691f6e558a162cda43d72395071515e92254f7f532b9a9f421bc"
+      "source_sha256": "2c4f5a01671d72d7acac86280f2514e4870ea97060edb90b7652d212358cc603"
     },
     "modify-agent-loop": {
       "title": "Modify the canonical Agent loop",
@@ -1138,7 +1138,7 @@
         "crates/runifold-agent/src/agent/callable.rs",
         "crates/runifold-agent/src/agent/completion.rs"
       ],
-      "source_sha256": "de3684106db1691f6e558a162cda43d72395071515e92254f7f532b9a9f421bc"
+      "source_sha256": "2c4f5a01671d72d7acac86280f2514e4870ea97060edb90b7652d212358cc603"
     },
     "public-api-change": {
       "title": "Change a public API",
@@ -1168,7 +1168,7 @@
         "scripts/semver-check.sh",
         "crates/runifold/src/lib.rs"
       ],
-      "source_sha256": "de3684106db1691f6e558a162cda43d72395071515e92254f7f532b9a9f421bc"
+      "source_sha256": "2c4f5a01671d72d7acac86280f2514e4870ea97060edb90b7652d212358cc603"
     }
   },
   "validation": {
@@ -1959,7 +1959,7 @@
       "crates/runifold-agent/src/agent/completion.rs": "9da41f2f8b9812539bb5ec60bfd3bab6d732c46a37d370d577132e1fb3e00b87",
       "crates/runifold-agent/src/agent/execution.rs": "0ded43d5921b414cf53c1cfef1eb2cee688173c19a50efabfd199fc1957cc6e5",
       "crates/runifold-agent/src/agent/review.rs": "81c0c4d2c6d22699b586609d4ce3b9c6f995e15682bd2c350dbf1f936cc145bb",
-      "crates/runifold-agent/src/agent/tests.rs": "de3684106db1691f6e558a162cda43d72395071515e92254f7f532b9a9f421bc",
+      "crates/runifold-agent/src/agent/tests.rs": "2c4f5a01671d72d7acac86280f2514e4870ea97060edb90b7652d212358cc603",
       "crates/runifold-agent/src/builder.rs": "3a7376c286c76d7231565171cb1f652ca9981fb51f74410fa42ec33d05bf63be",
       "crates/runifold-agent/src/completion.rs": "916d182744f008ef4fbfae5456e7e3ddef3ea21481fea854c45f211215bad0c9",
       "crates/runifold-agent/src/conversation.rs": "bc646724e24877e884973c5b758efe3e51b2fddc51ff137415bd47117e78e9c1",
@@ -1969,7 +1969,7 @@
       "crates/runifold-agent/src/terminal_review.rs": "b978dad7a359ce4fbac87ef5b15396a18bc722c80cc9698c8de604a39d05028f",
       "crates/runifold-cli/Cargo.toml": "776674cc38edee9c6f9ae1d42bc14fc55c2fba76affc2ded4ad9c71910d73d10",
       "crates/runifold-core/Cargo.toml": "7ce8ea845fc8096c087c902e00d3062934f7657c284de29c640f348ac3899fee",
-      "crates/runifold-core/src/context.rs": "dbb6f38e6787ed5c5fc6ff39af880cc62ca57ece4b033d69edf8843603ff3a42",
+      "crates/runifold-core/src/context.rs": "199bb6cf84114002a5cef15f84cec4432ced36d026986c7d04b50f85cacf8504",
       "crates/runifold-core/src/error.rs": "d889cd40792bd4a99ac1dcba4f4a40591b993872fcd73f6a10cbb21abccbfd3f",
       "crates/runifold-effect/Cargo.toml": "e8c712303ef5d9afa92dd74eee81d5987114ec8014ee37c4d1524a6e4edebbdf",
       "crates/runifold-effect/src/error.rs": "d3dfeb760919d455d73cd1fc6ab41eff4e14331994ebafdebc4df3a563e49572",
@@ -2036,6 +2036,6 @@
       "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
       "scripts/semver-check.sh": "5b96ed39779dff7383e07c20fad7726ae727290c42343ecf11d38dae5b10117a"
     },
-    "digest": "0d107086bdb04beaae860584fc2b1ad6cdc199bc410841bfd47c832c699f4db2"
+    "digest": "27d70464869998cabcb7160eba4cade8d566a765c7f5851656bb37c987aba9c8"
   }
 }

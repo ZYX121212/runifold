@@ -272,7 +272,10 @@ async fn new_models_reject_incompatible_parameters_before_transport() {
         .insert("openai".into(), json!({"reasoning_effort":"none"}));
     request.generation.temperature = Some(0.2);
     assert!(encode_chat_request(&request, "openai").is_ok());
-    assert!(server.observed_requests().is_empty());
+    assert_eq!(
+        server.observed_requests(),
+        [] as [runifold_provider_testkit::ObservedRequest; 0]
+    );
 }
 
 #[tokio::test]

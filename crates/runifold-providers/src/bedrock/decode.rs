@@ -499,7 +499,10 @@ mod tests {
                 .iter()
                 .all(|event| event.provider == "bedrock")
         );
-        assert!(decoder.finish().unwrap().is_empty());
+        assert_eq!(
+            decoder.finish().unwrap(),
+            [] as [runifold_model::ModelStreamEvent; 0]
+        );
     }
 
     #[test]

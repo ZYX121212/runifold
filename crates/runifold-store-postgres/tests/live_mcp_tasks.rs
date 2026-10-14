@@ -232,12 +232,12 @@ async fn assert_fenced_terminal_cleanup(
     assert_eq!(tombstones.len(), 1);
     assert_eq!(tombstones[0].checkpoint_id.to_string(), task_id);
     assert_eq!(tombstones[0].final_status, WorkflowTaskStatus::Cancelled);
-    assert!(
+    assert_eq!(
         store
             .compact_terminal_tasks(takeover.clone(), cleanup_retention, cleanup_limit)
             .await
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [runifold_workflow::WorkflowTaskTombstone; 0]
     );
     assert_eq!(
         store
@@ -310,12 +310,12 @@ async fn assert_supervisor_discovers_and_cleans_tenants(store: &Arc<PostgresWork
     assert_eq!(report.tasks_deleted, 4);
     assert_eq!(report.infrastructure_errors, 0);
     assert_eq!(supervisor.metrics().snapshot().tasks_deleted, 4);
-    assert!(
+    assert_eq!(
         store
             .list_task_cleanup_tenants(None, WorkflowTenantListLimit::new(10).unwrap())
             .await
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [runifold_workflow::WorkflowTenantId; 0]
     );
     assert_tombstone_governance(store, tenants[0].clone()).await;
 }
@@ -686,7 +686,7 @@ async fn assert_authorized_governance_control_plane(store: &Arc<PostgresWorkflow
         .await
         .unwrap_err();
     assert!(matches!(denied, WorkflowTaskGovernanceError::Denied { .. }));
-    assert!(archive.batch_ids.lock().unwrap().is_empty());
+    assert_eq!(archive.batch_ids.lock().unwrap().len(), 0);
 
     let first = control
         .export_next_page(
@@ -937,7 +937,7 @@ async fn assert_authorizer_outage_fails_closed(
         error,
         WorkflowTaskGovernanceError::Authorization(_)
     ));
-    assert!(archive.batch_ids.lock().unwrap().is_empty());
+    assert_eq!(archive.batch_ids.lock().unwrap().len(), 0);
 }
 
 async fn seed_governance_tombstone(

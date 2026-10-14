@@ -1107,7 +1107,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(compacted.summary, Some(summary));
-        assert!(compacted.summary_buffer.is_empty());
+        assert_eq!(compacted.summary_buffer.len(), 0);
         assert_eq!(compacted.summary_backlog, 0);
         assert_eq!(compacted.window.len(), 2);
 

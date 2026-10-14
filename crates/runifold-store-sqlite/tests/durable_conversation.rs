@@ -170,7 +170,10 @@ async fn checkpoint_conflict_rolls_back_transcript_append() {
         )
         .await
         .expect("conversation remains readable");
-    assert!(transcript.is_empty());
+    assert_eq!(
+        transcript,
+        [] as [runifold_agent::ConversationTranscriptEntry; 0]
+    );
     assert_eq!(
         CheckpointStore::load(&store, checkpoint_id)
             .expect("checkpoint remains readable")
@@ -219,7 +222,10 @@ async fn committed_turn_recovers_after_process_exit_before_ack() {
         .await
         .expect("committed turn resumes after response loss");
     assert_eq!(outcome.conversation_version.get(), 1);
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
     let transcript = store
         .list_transcript(
             conversation_id,
@@ -549,7 +555,10 @@ async fn session_rejects_other_connection_before_work_and_recovers_dropped_strea
         panic!("expected busy")
     };
     assert_eq!(active, request_id);
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
     assert!(matches!(
         other.run(request_id, "changed", &root_run()).await,
         Err(AgentSessionError::RequestMismatch)
@@ -659,7 +668,10 @@ async fn admission_binds_agent_before_first_execution_checkpoint() {
     );
     let request = CheckpointId::new();
     assert!(session.run(request, "hello", &root_run()).await.is_err());
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
     assert!(
         AgentCheckpoint::existing(request, store.clone())
             .load()

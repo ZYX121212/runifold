@@ -154,12 +154,7 @@ fn ai_explain_resolves_runtime_codes_and_existing_aliases() {
         assert!(output.status.success(), "{}", stderr(&output));
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["diagnostic"]["code"], expected);
-        assert!(
-            !value["diagnostic"]["canonical_fix"]
-                .as_str()
-                .unwrap()
-                .is_empty()
-        );
+        assert_ne!(value["diagnostic"]["canonical_fix"].as_str().unwrap(), "");
     }
     for args in [
         ["ai", "recipe", "missing", "--json"],

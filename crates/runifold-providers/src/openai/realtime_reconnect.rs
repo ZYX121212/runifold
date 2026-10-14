@@ -682,7 +682,7 @@ mod tests {
             OpenAiRealtimeReconnectError::AmbiguousResponseInFlight
         ));
         assert!(!called);
-        assert!(sleeper.delays.lock().unwrap().is_empty());
+        assert_eq!(sleeper.delays.lock().unwrap().len(), 0);
         assert_eq!(
             events,
             [OpenAiRealtimeReconnectEvent::Stopped {
