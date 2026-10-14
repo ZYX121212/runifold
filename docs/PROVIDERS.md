@@ -51,7 +51,7 @@ deadlines, and response size.
 
 The [2026-10-14 protocol audit](rfcs/0077-existing-provider-protocol-audit.md)
 records official sources, corrections, unchanged interfaces and live-test limits.
-The corrections are unreleased. Independent vendor services are outside its scope.
+The corrections ship in 0.10.3. Independent vendor services are outside its scope.
 
 Use `ModelResponse::assistant_message()` when persisting history. Anthropic and
 Bedrock preserve signed/private thinking, Gemini preserves exact signed parts,
