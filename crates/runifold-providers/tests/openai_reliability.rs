@@ -99,13 +99,15 @@ async fn final_text_is_reconciled_over_http_without_accepting_incomplete_json() 
                 response.structured::<serde_json::Value>().is_ok(),
                 structured_success
             );
+            server
+                .wait_until_finished(Duration::from_secs(5))
+                .await
+                .unwrap();
         } else {
             assert_eq!(result.unwrap_err().kind, ModelErrorKind::Protocol);
+            // A protocol rejection may close the stream before later chunks.
+            server.assert_finished().unwrap();
         }
-        server
-            .wait_until_finished(Duration::from_secs(5))
-            .await
-            .unwrap();
     }
 }
 

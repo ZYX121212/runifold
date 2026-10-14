@@ -38,6 +38,8 @@ breaking changes require a minor-version increment.
   replaced stale cached checker versions during CI and release validation.
 - Made PostgreSQL cleanup lease fault injection use explicit database-clock expiry,
   preserving heartbeat, expired-owner and fencing assertions under CI load.
+- Corrected malformed-stream fixtures to verify protocol rejection and matched
+  requests without requiring successful writes after the client closes its socket.
 
 - Corrected the client Tool Search regression fixture to use valid function
   metadata values, ensuring it tests unsupported Tool kinds rather than an

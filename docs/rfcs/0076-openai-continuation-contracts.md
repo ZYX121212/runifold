@@ -235,6 +235,12 @@ still checks rejection of expired heartbeats, owner takeover and stale writes.
 Neither fix relaxes the production lease or compatibility contracts. The final
 candidate must complete fresh CI, reference application, benchmark and soak gates.
 
+Malformed custom-tool and text-stream fixtures also distinguish a matched request
+from a fully written response: a protocol rejection intentionally closes the
+socket before later chunks can be sent. Rejection branches assert the error and
+matched request; valid branches still await successful writer completion. The
+custom-tool fixture delays the trailing chunk to exercise early closure explicitly.
+
 ## Official sources
 
 - [Reasoning and phase replay](https://developers.openai.com/api/docs/guides/reasoning)
