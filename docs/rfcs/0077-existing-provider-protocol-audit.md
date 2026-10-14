@@ -103,3 +103,8 @@ CI discovered four newly published RustSec advisories on 2026-10-14:
 and [RUSTSEC-2026-0349](https://github.com/RustSec/advisory-db/blob/main/crates/rustls/RUSTSEC-2026-0349.md).
 The workspace and standalone benchmark locks now resolve rustls 0.23.46, the
 patched version for all four. Security policy is unchanged.
+
+An additional standalone benchmark audit found its older h2 lock affected by
+[RUSTSEC-2026-0258](https://github.com/RustSec/advisory-db/blob/main/crates/h2/RUSTSEC-2026-0258.md)
+and a yanked chacha20 0.10.1. Its lock now resolves h2 0.4.20 and chacha20 0.10.2.
+The benchmark tests and its Rust 1.88 compilation are verified independently.
