@@ -145,7 +145,7 @@ async fn invokes_binary_event_stream_with_sigv4_and_redacted_temporary_credentia
             ..ModelUsage::default()
         }
     );
-    assert!(!response.provider_events.is_empty());
+    assert_ne!(response.provider_events, Vec::new());
     server.assert_finished().unwrap();
 
     let observed = server.observed_requests();

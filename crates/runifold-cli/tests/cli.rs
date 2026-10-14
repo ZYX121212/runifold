@@ -48,7 +48,7 @@ fn inspect_rejects_empty_and_invalid_exports() {
             .output()
             .unwrap();
         assert!(!output.status.success());
-        assert!(!output.stderr.is_empty());
+        assert_ne!(output.stderr, Vec::<u8>::new());
         fs::remove_file(path).unwrap();
     }
 }
@@ -65,7 +65,7 @@ fn inspect_unknown_sqlite_run_is_read_only_and_fails_cleanly() {
         .unwrap();
 
     assert!(!output.status.success());
-    assert!(!output.stderr.is_empty());
+    assert_ne!(output.stderr, Vec::<u8>::new());
     assert!(path.exists());
     fs::remove_file(path).unwrap();
 }

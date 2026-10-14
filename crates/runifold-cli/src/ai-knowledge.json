@@ -1971,7 +1971,7 @@
         "crates/runifold-cli/Cargo.toml": "776674cc38edee9c6f9ae1d42bc14fc55c2fba76affc2ded4ad9c71910d73d10",
         "crates/runifold-core/Cargo.toml": "7ce8ea845fc8096c087c902e00d3062934f7657c284de29c640f348ac3899fee",
         "crates/runifold-core/src/context.rs": "dbb6f38e6787ed5c5fc6ff39af880cc62ca57ece4b033d69edf8843603ff3a42",
-        "crates/runifold-core/src/error.rs": "9088290cf826956607b87a17797d38339ca831ad920b2df187330d3d99e3d82c",
+        "crates/runifold-core/src/error.rs": "d889cd40792bd4a99ac1dcba4f4a40591b993872fcd73f6a10cbb21abccbfd3f",
         "crates/runifold-effect/Cargo.toml": "e8c712303ef5d9afa92dd74eee81d5987114ec8014ee37c4d1524a6e4edebbdf",
         "crates/runifold-effect/src/error.rs": "d3dfeb760919d455d73cd1fc6ab41eff4e14331994ebafdebc4df3a563e49572",
         "crates/runifold-effect/src/executor.rs": "b22f27e7e6736ff615b9eae24c6bf41781183bea494a9a07866af6f35f331cc3",
@@ -2037,7 +2037,7 @@
         "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
         "scripts/semver-check.sh": "5b96ed39779dff7383e07c20fad7726ae727290c42343ecf11d38dae5b10117a"
       },
-      "digest": "c948b6e86f9f4989661e831680d236d30ab3b97db2c2b2270cd232a7b6b1f6d7"
+      "digest": "0d107086bdb04beaae860584fc2b1ad6cdc199bc410841bfd47c832c699f4db2"
     }
   },
   "documents": {

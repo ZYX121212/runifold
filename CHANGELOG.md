@@ -24,6 +24,12 @@ breaking changes require a minor-version increment.
 
 ### Fixed
 
+- Updated locked QUIC/TLS dependencies to resolve six RustSec advisories while
+  retaining the workspace MSRV; updated standalone benchmark locks together.
+- Kept current Rust quality checks passing and rebuilt the real MinIO CI fixture
+  from pinned official source commits after upstream images became unavailable.
+  Reliability evidence records source commits and actual build identities.
+
 - Corrected the client Tool Search regression fixture to use valid function
   metadata values, ensuring it tests unsupported Tool kinds rather than an
   earlier metadata type error.
