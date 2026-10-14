@@ -796,6 +796,14 @@ fn adapter_capabilities_for(config: &OpenAiConfig) -> ModelCapabilities {
         capabilities.image_input = native();
         capabilities.document_input = native();
     }
+    if config.wire_protocol == OpenAiWireProtocol::ChatCompletions
+        && matches!(
+            config.provider.as_str(),
+            "deepseek" | "openrouter" | "zhipu" | "minimax" | "qwen"
+        )
+    {
+        capabilities.reasoning = FeatureSupport::new(SupportLevel::Native);
+    }
     if config.provider == "ark" && config.wire_protocol == OpenAiWireProtocol::Responses {
         capabilities.reasoning = FeatureSupport::new(SupportLevel::Native);
         capabilities.extensions.insert(

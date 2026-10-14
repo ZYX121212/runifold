@@ -350,3 +350,70 @@ async fn delayed_sse_body_preserves_deadline_exceeded() {
 
     assert_eq!(error.kind, ModelErrorKind::DeadlineExceeded);
 }
+
+#[tokio::test]
+async fn structured_output_and_private_thinking_survive_serialized_http_replay() {
+    let first = [
+        json!({"type":"message_start","message":{"id":"msg1","model":"claude-test","usage":{
+            "input_tokens":3,"cache_read_input_tokens":7,"cache_creation_input_tokens":5}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"encrypted-private"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"","signature":"sig"}}),
+        json!({"type":"content_block_stop","index":1}),
+        json!({"type":"content_block_start","index":2,"content_block":{"type":"text","text":"{\"ok\":true}"}}),
+        json!({"type":"content_block_stop","index":2}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}),
+        json!({"type":"message_stop"}),
+    ];
+    let second = [
+        json!({"type":"message_start","message":{"id":"msg2","model":"claude-test","usage":{}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"done"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}),
+        json!({"type":"message_stop"}),
+    ];
+    let server = CassetteServer::start(vec![
+        HttpExchange::new("POST", "/v1/messages", sse_response(&first)),
+        HttpExchange::new("POST", "/v1/messages", sse_response(&second)),
+    ])
+    .unwrap();
+    let schema = json!({"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false});
+    let mut initial = request();
+    initial.output_format = runifold_model::OutputFormat::JsonSchema {
+        name: "result".into(),
+        schema: schema.clone(),
+        strict: true,
+    };
+    let client = client(&server);
+    let response = client
+        .invoke(initial, ModelCallContext::new())
+        .await
+        .unwrap();
+    assert_eq!(response.usage.input_tokens, 15);
+    let stored = serde_json::to_vec(&response.assistant_message().unwrap()).unwrap();
+    let restored: Message = serde_json::from_slice(&stored).unwrap();
+    client
+        .invoke(
+            request()
+                .message(restored)
+                .message(Message::user("continue")),
+            ModelCallContext::new(),
+        )
+        .await
+        .unwrap();
+    server.assert_finished().unwrap();
+    let bodies = server.observed_requests();
+    assert_eq!(
+        bodies[0].json_body().unwrap()["output_config"]["format"],
+        json!({"type":"json_schema","schema":schema})
+    );
+    let replay = bodies[1].json_body().unwrap();
+    assert_eq!(
+        replay["messages"][1]["content"][0],
+        json!({"type":"redacted_thinking","data":"encrypted-private"})
+    );
+    assert_eq!(
+        replay["messages"][1]["content"][1],
+        json!({"type":"thinking","thinking":"","signature":"sig"})
+    );
+}

@@ -19,6 +19,7 @@ pub struct GeminiEventDecoder {
     model: String,
     response_id: Option<String>,
     model_version: Option<String>,
+    usage: serde_json::Map<String, Value>,
 }
 
 impl GeminiEventDecoder {
@@ -62,8 +63,27 @@ impl GeminiEventDecoder {
             });
         }
         if let Some(usage) = payload.get("usageMetadata") {
+            let fields = usage
+                .as_object()
+                .ok_or_else(|| protocol("Gemini usageMetadata must be an object"))?;
+            for field in [
+                "promptTokenCount",
+                "candidatesTokenCount",
+                "thoughtsTokenCount",
+                "toolUsePromptTokenCount",
+                "cachedContentTokenCount",
+            ] {
+                if let Some(value) = fields.get(field) {
+                    if value.as_u64().is_none() {
+                        return Err(protocol(
+                            "Gemini usage token counts must be unsigned integers",
+                        ));
+                    }
+                    self.usage.insert(field.into(), value.clone());
+                }
+            }
             events.push(ModelStreamEvent::UsageUpdated {
-                usage: decode_usage(usage),
+                usage: decode_usage(&Value::Object(self.usage.clone())),
             });
         }
         events.push(provider_event(
@@ -187,6 +207,9 @@ fn decode_part(
     part: &Value,
     events: &mut Vec<ModelStreamEvent>,
 ) -> Result<(), ModelError> {
+    if part.get("text").is_none() || part.get("thought").and_then(Value::as_bool) == Some(true) {
+        decoder.text_index = None;
+    }
     if let Some(call) = part.get("functionCall") {
         let index = decoder.allocate()?;
         events.push(ModelStreamEvent::ContentPartCompleted {
@@ -203,10 +226,7 @@ fn decode_part(
             index,
             part: ContentPart::Reasoning(ReasoningPart {
                 text: part.get("text").and_then(Value::as_str).map(String::from),
-                signature: part
-                    .get("thoughtSignature")
-                    .and_then(Value::as_str)
-                    .map(String::from),
+                signature: thought_signature(part).map(String::from),
                 redacted: false,
                 provider_data: Vec::new(),
             }),
@@ -221,6 +241,9 @@ fn decode_part(
             });
         }
         preserve_signed_part(decoder, part, signature, !text.is_empty(), events)?;
+        if signature.is_some() {
+            decoder.text_index = None;
+        }
     } else if let Some(inline) = part.get("inlineData") {
         let index = decoder.allocate()?;
         let media_type = required_string(inline, "mimeType")?.to_owned();
@@ -312,7 +335,7 @@ fn decode_tool_call(call: &Value, part: &Value, index: u32) -> Result<ContentPar
         .get("id")
         .and_then(Value::as_str)
         .map_or_else(|| format!("gemini-call-{index}"), String::from);
-    let mut metadata = BTreeMap::new();
+    let mut metadata = BTreeMap::from([("gemini.part".into(), part.clone())]);
     if let Some(signature) = part
         .get("thoughtSignature")
         .or_else(|| part.get("thought_signature"))
@@ -347,8 +370,10 @@ fn validate_prompt(payload: &Value) -> Result<(), ModelError> {
 
 fn decode_usage(value: &Value) -> ModelUsage {
     ModelUsage {
-        input_tokens: unsigned(value, "promptTokenCount"),
-        output_tokens: unsigned(value, "candidatesTokenCount"),
+        input_tokens: unsigned(value, "promptTokenCount")
+            .saturating_add(unsigned(value, "toolUsePromptTokenCount")),
+        output_tokens: unsigned(value, "candidatesTokenCount")
+            .saturating_add(unsigned(value, "thoughtsTokenCount")),
         reasoning_tokens: unsigned(value, "thoughtsTokenCount"),
         cached_input_tokens: unsigned(value, "cachedContentTokenCount"),
         ..ModelUsage::default()
@@ -439,6 +464,46 @@ mod tests {
     use serde_json::json;
 
     use super::GeminiEventDecoder;
+
+    #[test]
+    fn thinking_and_tool_prompt_tokens_contribute_to_total_usage() {
+        let usage = super::decode_usage(&json!({"promptTokenCount":10,
+            "candidatesTokenCount":3,"thoughtsTokenCount":7,
+            "toolUsePromptTokenCount":2,"cachedContentTokenCount":5}));
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 10);
+        assert_eq!(usage.total_tokens(), 22);
+        assert_eq!(usage.reasoning_tokens, 7);
+        assert_eq!(usage.cached_input_tokens, 5);
+    }
+
+    #[test]
+    fn partial_usage_retains_prior_input_and_thinking_counts() {
+        let mut decoder = GeminiEventDecoder::new("test");
+        decoder
+            .decode(&json!({"usageMetadata":{"promptTokenCount":10,"thoughtsTokenCount":7}}))
+            .unwrap();
+        let events = decoder
+            .decode(&json!({"usageMetadata":{"candidatesTokenCount":3}}))
+            .unwrap();
+        let usage = events
+            .iter()
+            .find_map(|event| {
+                if let ModelStreamEvent::UsageUpdated { usage } = event {
+                    Some(usage)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 10);
+        assert!(
+            decoder
+                .decode(&json!({"usageMetadata":{"promptTokenCount":-1}}))
+                .is_err()
+        );
+    }
 
     #[test]
     fn decodes_text_usage_and_terminal_reason() {

@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use aws_sdk_bedrockruntime::types::{
     AnyToolChoice, AutoToolChoice, ContentBlock, ConversationRole, DocumentBlock, DocumentFormat,
-    DocumentSource, ImageBlock, ImageFormat, ImageSource, InferenceConfiguration, Message,
+    DocumentSource, ImageBlock, ImageFormat, ImageSource, InferenceConfiguration,
+    JsonSchemaDefinition, Message, OutputConfig, OutputFormat as NativeOutputFormat,
+    OutputFormatStructure, OutputFormatType, ReasoningContentBlock, ReasoningTextBlock,
     SpecificToolChoice, SystemContentBlock, Tool, ToolConfiguration, ToolInputSchema,
     ToolResultBlock, ToolResultContentBlock, ToolResultStatus, ToolSpecification, ToolUseBlock,
 };
@@ -23,6 +25,7 @@ pub(crate) struct EncodedRequest {
     pub(crate) system: Vec<SystemContentBlock>,
     pub(crate) inference: InferenceConfiguration,
     pub(crate) tools: Option<ToolConfiguration>,
+    pub(crate) output_config: Option<aws_sdk_bedrockruntime::types::OutputConfig>,
     pub(crate) additional_fields: Option<Document>,
 }
 
@@ -32,11 +35,7 @@ pub(crate) fn encode_request(request: &ModelRequest) -> Result<EncodedRequest, M
             "Amazon Bedrock Converse does not expose a portable deterministic seed",
         ));
     }
-    if !matches!(request.output_format, OutputFormat::Text) {
-        return Err(unsupported(
-            "structured output requires a model-specific Bedrock strategy",
-        ));
-    }
+    let output_config = encode_output_config(&request.output_format)?;
 
     let mut system = Vec::new();
     let mut messages = Vec::new();
@@ -116,8 +115,44 @@ pub(crate) fn encode_request(request: &ModelRequest) -> Result<EncodedRequest, M
         system,
         inference,
         tools: encode_tools(request)?,
+        output_config,
         additional_fields: encode_additional_fields(request)?,
     })
+}
+
+fn encode_output_config(format: &OutputFormat) -> Result<Option<OutputConfig>, ModelError> {
+    match format {
+        OutputFormat::Text => Ok(None),
+        OutputFormat::JsonSchema { name, schema, .. } => {
+            if !schema.is_object() {
+                return Err(invalid(
+                    "Bedrock structured output requires a JSON Schema object",
+                ));
+            }
+            let definition = JsonSchemaDefinition::builder()
+                .name(name)
+                .schema(
+                    serde_json::to_string(schema)
+                        .map_err(|_| invalid("cannot encode Bedrock JSON Schema"))?,
+                )
+                .build()
+                .map_err(build_error)?;
+            Ok(Some(
+                OutputConfig::builder()
+                    .text_format(
+                        NativeOutputFormat::builder()
+                            .r#type(OutputFormatType::JsonSchema)
+                            .structure(OutputFormatStructure::JsonSchema(definition))
+                            .build()
+                            .map_err(build_error)?,
+                    )
+                    .build(),
+            ))
+        }
+        _ => Err(unsupported(
+            "Bedrock JSON output requires an explicit JSON Schema",
+        )),
+    }
 }
 
 fn encode_content(part: &ContentPart, role: Role) -> Result<ContentBlock, ModelError> {
@@ -170,9 +205,40 @@ fn encode_content(part: &ContentPart, role: Role) -> Result<ContentBlock, ModelE
                     .map_err(build_error)?,
             ))
         }
-        ContentPart::Reasoning(_) => Err(unsupported(
-            "Bedrock reasoning input requires an unmodified model-specific round trip",
-        )),
+        ContentPart::Reasoning(reasoning) if role == Role::Assistant => {
+            if reasoning.redacted || !reasoning.provider_data.is_empty() {
+                return Err(unsupported(
+                    "Bedrock private reasoning requires preserved native bytes",
+                ));
+            }
+            let signature = reasoning.signature.as_ref().ok_or_else(|| {
+                unsupported("Bedrock reasoning replay requires its original signature")
+            })?;
+            let block = ReasoningTextBlock::builder()
+                .text(reasoning.text.as_deref().unwrap_or(""))
+                .signature(signature)
+                .build()
+                .map_err(build_error)?;
+            Ok(ContentBlock::ReasoningContent(
+                ReasoningContentBlock::ReasoningText(block),
+            ))
+        }
+        ContentPart::ProviderOpaque(data)
+            if role == Role::Assistant
+                && data.provider == "bedrock"
+                && data.kind == "reasoning_redacted" =>
+        {
+            let encoded = data
+                .value
+                .as_str()
+                .ok_or_else(|| invalid("Bedrock redacted reasoning must be base64 text"))?;
+            let bytes = STANDARD
+                .decode(encoded)
+                .map_err(|_| invalid("Bedrock redacted reasoning is not valid base64"))?;
+            Ok(ContentBlock::ReasoningContent(
+                ReasoningContentBlock::RedactedContent(Blob::new(bytes)),
+            ))
+        }
         ContentPart::Image { .. }
         | ContentPart::Audio { .. }
         | ContentPart::Document { .. }
@@ -292,7 +358,17 @@ fn encode_tools(request: &ModelRequest) -> Result<Option<ToolConfiguration>, Mod
         .tools
         .iter()
         .map(|tool| {
+            let strict = tool
+                .metadata
+                .get("bedrock.strict")
+                .map(|value| {
+                    value
+                        .as_bool()
+                        .ok_or_else(|| invalid("bedrock.strict must be a boolean"))
+                })
+                .transpose()?;
             ToolSpecification::builder()
+                .set_strict(strict)
                 .name(&tool.name)
                 .description(&tool.description)
                 .input_schema(ToolInputSchema::Json(json_to_document(&tool.input_schema)?))

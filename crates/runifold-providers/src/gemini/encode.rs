@@ -21,9 +21,6 @@ pub fn encode_request(request: &ModelRequest) -> Result<Value, ModelError> {
     if request.messages.is_empty() {
         return Err(invalid("a model request must contain messages"));
     }
-    if request.generation.seed.is_some() {
-        return Err(unsupported("Gemini adapter does not support seed"));
-    }
     let (system_parts, contents) = encode_messages(request)?;
     if contents.is_empty() {
         return Err(invalid("Gemini requires non-system content"));
@@ -38,6 +35,15 @@ pub fn encode_request(request: &ModelRequest) -> Result<Value, ModelError> {
         );
     }
     let mut generation = Map::new();
+    if let Some(seed) = request.generation.seed {
+        generation.insert(
+            "seed".into(),
+            json!(
+                i32::try_from(seed)
+                    .map_err(|_| invalid("Gemini seed exceeds the signed 32-bit range"))?
+            ),
+        );
+    }
     optional(
         &mut generation,
         "temperature",
@@ -108,16 +114,29 @@ pub fn encode_request(request: &ModelRequest) -> Result<Value, ModelError> {
 fn encode_messages(request: &ModelRequest) -> Result<(Vec<Value>, Vec<Value>), ModelError> {
     let mut system_parts = Vec::new();
     let mut contents = Vec::new();
+    let mut call_ids = std::collections::BTreeMap::new();
     for message in &request.messages {
         let mut parts = Vec::new();
         for part in &message.content {
+            if let ContentPart::ToolCall(call) = part
+                && let Some(original) = call.metadata.get("gemini.part")
+            {
+                call_ids.insert(call.id.clone(), original["functionCall"].get("id").cloned());
+            }
             if let ContentPart::ProviderOpaque(data) = part
                 && data.provider == "gemini"
                 && data.kind == "signed_part_replay"
             {
                 replace_signed_part(&mut parts, &data.value)?;
             } else {
-                parts.push(encode_part(part, message.role)?);
+                let mut encoded = encode_part(part, message.role)?;
+                if let ContentPart::ToolResult(result) = part
+                    && let Some(None) = call_ids.get(&result.call_id)
+                    && let Some(response) = encoded["functionResponse"].as_object_mut()
+                {
+                    response.remove("id");
+                }
+                parts.push(encoded);
             }
         }
         if message.role == Role::System {
@@ -178,6 +197,27 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
             |text| json!({"text":text}),
         ),
         ContentPart::ToolCall(call) if role == Role::Assistant => {
+            if let Some(original) = call.metadata.get("gemini.part") {
+                let wire = &original["functionCall"];
+                let arguments = wire.get("args").cloned().unwrap_or_else(|| json!({}));
+                if wire["name"].as_str() != Some(call.name.as_str())
+                    || arguments != call.arguments
+                    || wire
+                        .get("id")
+                        .is_some_and(|id| id.as_str() != Some(call.id.as_str()))
+                    || original
+                        .get("thoughtSignature")
+                        .or_else(|| original.get("thought_signature"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        != gemini_tool_signature(call)?
+                {
+                    return Err(invalid(
+                        "Gemini signed function call was modified before replay",
+                    ));
+                }
+                return Ok(original.clone());
+            }
             let mut part = json!({
                 "functionCall":{"id":call.id,"name":call.name,"args":call.arguments}
             });
@@ -334,6 +374,36 @@ fn merge_options(body: &mut Map<String, Value>, request: &ModelRequest) -> Resul
         .as_object()
         .ok_or_else(|| invalid("provider_options.gemini must be an object"))?;
     for (key, value) in options {
+        if key == "generationConfig" {
+            let extra = value
+                .as_object()
+                .ok_or_else(|| invalid("Gemini generationConfig options must be an object"))?;
+            let generation = body
+                .entry(key.clone())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(|| invalid("Gemini generationConfig must be an object"))?;
+            for (field, value) in extra {
+                if generation.contains_key(field)
+                    || matches!(
+                        field.as_str(),
+                        "temperature"
+                            | "topP"
+                            | "maxOutputTokens"
+                            | "stopSequences"
+                            | "responseMimeType"
+                            | "responseJsonSchema"
+                            | "seed"
+                    )
+                {
+                    return Err(invalid(format!(
+                        "Gemini generation option `{field}` is adapter-owned"
+                    )));
+                }
+                generation.insert(field.clone(), value.clone());
+            }
+            continue;
+        }
         if body.contains_key(key)
             || matches!(
                 key.as_str(),
@@ -366,6 +436,19 @@ mod tests {
 
     use super::encode_request;
     use crate::gemini::GeminiEventDecoder;
+
+    #[test]
+    fn generation_seed_rejects_overflow_and_option_overrides() {
+        let mut request =
+            ModelRequest::new(ModelRef::new("gemini", "test"), Message::user("hello"));
+        request.generation.seed = Some(u64::MAX);
+        assert!(encode_request(&request).is_err());
+        request.generation.seed = None;
+        request
+            .provider_options
+            .insert("gemini".into(), json!({"generationConfig":{"seed":1}}));
+        assert!(encode_request(&request).is_err());
+    }
 
     #[test]
     fn encodes_native_contents_and_system_instruction() {

@@ -35,11 +35,6 @@ pub fn encode_request(
             "Anthropic Messages does not support deterministic seed",
         ));
     }
-    if !matches!(request.output_format, OutputFormat::Text) {
-        return Err(unsupported(
-            "structured output requires a provider-specific strategy and is not enabled",
-        ));
-    }
 
     let (system, messages) = encode_messages(request)?;
     let mut body = Map::new();
@@ -89,14 +84,8 @@ pub fn encode_request(
                 request
                     .tools
                     .iter()
-                    .map(|tool| {
-                        json!({
-                            "name": tool.name,
-                            "description": tool.description,
-                            "input_schema": tool.input_schema
-                        })
-                    })
-                    .collect(),
+                    .map(encode_tool)
+                    .collect::<Result<Vec<_>, _>>()?,
             ),
         );
         body.insert(
@@ -106,8 +95,59 @@ pub fn encode_request(
     } else if !matches!(request.tool_choice, ToolChoice::Auto | ToolChoice::None) {
         return Err(invalid("tool choice requires at least one tool"));
     }
+    if let OutputFormat::JsonSchema { schema, .. } = &request.output_format {
+        if !schema.is_object() {
+            return Err(invalid(
+                "Anthropic structured output requires a JSON Schema object",
+            ));
+        }
+        body.insert(
+            "output_config".into(),
+            json!({"format":{"type":"json_schema","schema":schema}}),
+        );
+    } else if !matches!(request.output_format, OutputFormat::Text) {
+        return Err(unsupported(
+            "Anthropic JSON output requires an explicit JSON Schema",
+        ));
+    }
     merge_provider_options(&mut body, request)?;
     Ok(Value::Object(body))
+}
+
+fn pdf_source(source: &MediaSource) -> bool {
+    match source {
+        MediaSource::Base64 { media_type, .. } => media_type == "application/pdf",
+        MediaSource::Url { media_type, .. } => media_type.as_deref() == Some("application/pdf"),
+        _ => false,
+    }
+}
+
+fn encode_tool(tool: &runifold_model::ToolSpec) -> Result<Value, ModelError> {
+    let mut value =
+        json!({"name":tool.name,"description":tool.description,"input_schema":tool.input_schema});
+    for field in [
+        "strict",
+        "defer_loading",
+        "eager_input_streaming",
+        "cache_control",
+        "allowed_callers",
+        "input_examples",
+    ] {
+        if let Some(option) = tool.metadata.get(&format!("anthropic.{field}")) {
+            let valid = match field {
+                "strict" | "defer_loading" | "eager_input_streaming" => option.is_boolean(),
+                "cache_control" => option.is_object(),
+                _ => option.is_array(),
+            };
+            if !valid {
+                return Err(invalid(format!(
+                    "invalid Anthropic tool metadata `{field}`"
+                )));
+            }
+            value[field] = option.clone();
+        }
+    }
+    Ok(value)
 }
 
 fn encode_messages(request: &ModelRequest) -> Result<(Vec<Value>, Vec<Value>), ModelError> {
@@ -159,12 +199,15 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
         }
         ContentPart::ToolCall(call) => {
             require_role(role, Role::Assistant, "tool call")?;
-            Ok(json!({
-                "type": "tool_use",
-                "id": call.id,
-                "name": call.name,
-                "input": call.arguments
-            }))
+            let mut block =
+                json!({"type":"tool_use","id":call.id,"name":call.name,"input":call.arguments});
+            if let Some(caller) = call.metadata.get("anthropic.caller") {
+                if !caller.is_object() {
+                    return Err(invalid("Anthropic tool caller must be an object"));
+                }
+                block["caller"] = caller.clone();
+            }
+            Ok(block)
         }
         ContentPart::ToolResult(result) => {
             if !matches!(role, Role::User | Role::Tool) {
@@ -178,9 +221,12 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
                 .signature
                 .as_ref()
                 .ok_or_else(|| unsupported("Anthropic thinking round trips require a signature"))?;
-            let thinking = reasoning.text.as_ref().ok_or_else(|| {
-                unsupported("Anthropic thinking round trips require visible thinking text")
-            })?;
+            if reasoning.redacted || !reasoning.provider_data.is_empty() {
+                return Err(unsupported(
+                    "private Anthropic thinking must use its preserved content block",
+                ));
+            }
+            let thinking = reasoning.text.as_deref().unwrap_or("");
             Ok(json!({
                 "type": "thinking",
                 "thinking": thinking,
@@ -191,6 +237,14 @@ fn encode_part(part: &ContentPart, role: Role) -> Result<Value, ModelError> {
             if data.provider == PROVIDER && data.kind == "content_block" =>
         {
             Ok(data.value.clone())
+        }
+        ContentPart::Document { source, name } if pdf_source(source) => {
+            require_role(role, Role::User, "document")?;
+            let mut block = json!({"type":"document","source":encode_media(source)?});
+            if let Some(name) = name {
+                block["title"] = Value::String(name.clone());
+            }
+            Ok(block)
         }
         ContentPart::Audio { .. }
         | ContentPart::Document { .. }
@@ -321,6 +375,24 @@ fn merge_provider_options(
         .as_object()
         .ok_or_else(|| invalid("`provider_options.anthropic` must be a JSON object"))?;
     for (key, value) in options {
+        if key == "output_config" && body.contains_key(key) {
+            let extra = value
+                .as_object()
+                .ok_or_else(|| invalid("Anthropic output_config must be an object"))?;
+            let target = body
+                .get_mut(key)
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| invalid("Anthropic output_config must be an object"))?;
+            for (field, value) in extra {
+                if target.contains_key(field) {
+                    return Err(invalid(format!(
+                        "Anthropic output_config `{field}` is adapter-owned"
+                    )));
+                }
+                target.insert(field.clone(), value.clone());
+            }
+            continue;
+        }
         if body.contains_key(key)
             || matches!(
                 key.as_str(),
@@ -363,6 +435,47 @@ mod tests {
     use super::encode_request;
 
     use crate::content_projection::decode_content_envelope;
+
+    #[test]
+    fn strict_tool_metadata_and_output_effort_are_preserved_without_override() {
+        let mut request =
+            ModelRequest::new(ModelRef::new("anthropic", "test"), Message::user("hello"));
+        request.tools.push(ToolSpec {
+            name: "lookup".into(),
+            description: "lookup".into(),
+            input_schema: json!({"type":"object","additionalProperties":false}),
+            output_schema: None,
+            metadata: BTreeMap::from([
+                ("anthropic.strict".into(), json!(true)),
+                ("anthropic.allowed_callers".into(), json!(["direct"])),
+            ]),
+        });
+        request.output_format = runifold_model::OutputFormat::JsonSchema {
+            name: "answer".into(),
+            schema: json!({"type":"string"}),
+            strict: true,
+        };
+        request.provider_options.insert(
+            "anthropic".into(),
+            json!({"output_config":{"effort":"high"}}),
+        );
+        let body = encode_request(&request, 100).unwrap();
+        assert_eq!(body["tools"][0]["strict"], true);
+        assert_eq!(body["tools"][0]["allowed_callers"], json!(["direct"]));
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert_eq!(
+            body["output_config"]["format"]["schema"],
+            json!({"type":"string"})
+        );
+        request
+            .provider_options
+            .insert("anthropic".into(), json!({"output_config":{"format":{}}}));
+        assert!(encode_request(&request, 100).is_err());
+        request.tools[0]
+            .metadata
+            .insert("anthropic.strict".into(), json!("true"));
+        assert!(encode_request(&request, 100).is_err());
+    }
 
     #[test]
     fn encodes_system_messages_and_required_tools_natively() {
@@ -504,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_audio_and_document_inputs_use_safe_projection_blocks() {
+    fn audio_is_projected_and_pdf_uses_native_document_blocks() {
         let message = Message::new(
             Role::User,
             vec![
@@ -532,11 +645,17 @@ mod tests {
         .unwrap();
         let blocks = body["messages"][0]["content"].as_array().unwrap();
 
-        assert!(blocks.iter().all(|block| {
-            decode_content_envelope(block["text"].as_str().unwrap())
+        assert!(
+            decode_content_envelope(blocks[0]["text"].as_str().unwrap())
                 .unwrap()
                 .is_some()
-        }));
+        );
+        assert_eq!(blocks[1]["type"], "document");
+        assert_eq!(
+            blocks[1]["source"],
+            json!({"type":"url","url":"https://example.com/report.pdf"})
+        );
+        assert_eq!(blocks[1]["title"], "report.pdf");
     }
 
     #[test]

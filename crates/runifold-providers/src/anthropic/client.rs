@@ -270,14 +270,13 @@ fn retry_after(response: &Response) -> Option<std::time::Duration> {
 
 fn adapter_capabilities() -> ModelCapabilities {
     let native = || FeatureSupport::new(SupportLevel::Native);
-    let unsupported = || FeatureSupport::new(SupportLevel::Unsupported);
     let emulated = || FeatureSupport::new(SupportLevel::Emulated);
     let unknown = || FeatureSupport::new(SupportLevel::Unknown);
     ModelCapabilities {
         streaming: native(),
         tools: native(),
         parallel_tools: unknown(),
-        structured_output: unsupported(),
+        structured_output: native(),
         reasoning: native(),
         image_input: native(),
         audio_input: emulated(),
@@ -382,10 +381,7 @@ mod tests {
 
         assert_eq!(capabilities.streaming.level, SupportLevel::Native);
         assert_eq!(capabilities.tools.level, SupportLevel::Native);
-        assert_eq!(
-            capabilities.structured_output.level,
-            SupportLevel::Unsupported
-        );
+        assert_eq!(capabilities.structured_output.level, SupportLevel::Native);
         assert_eq!(capabilities.audio_input.level, SupportLevel::Emulated);
         assert_eq!(capabilities.document_input.level, SupportLevel::Emulated);
     }

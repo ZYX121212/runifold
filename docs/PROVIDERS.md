@@ -47,6 +47,28 @@ OpenAI-compatible brand alias. It implements the provider-neutral `Reranker`
 contract and validates returned indices, scores, result bounds, cancellation,
 deadlines, and response size.
 
+## Existing-interface audit
+
+The [2026-10-14 protocol audit](rfcs/0077-existing-provider-protocol-audit.md)
+records official sources, corrections, unchanged interfaces and live-test limits.
+The corrections are unreleased. Independent vendor services are outside its scope.
+
+Use `ModelResponse::assistant_message()` when persisting history. Anthropic and
+Bedrock preserve signed/private thinking, Gemini preserves exact signed parts,
+and DeepSeek/OpenRouter/Qwen/MiniMax/Zhipu preserve provider reasoning metadata.
+Qwen `preserve_thinking` and Zhipu retained-thinking controls remain explicit
+model-specific options; adapter support does not imply every model supports them.
+
+Anthropic and Bedrock accept `OutputFormat::JsonSchema` on models that support
+native structured output. Schemas pass through unchanged; unsupported schema
+constraints can receive a vendor validation error. Plain `OutputFormat::Json`
+without a schema remains unsupported on these two adapters. Set descriptor
+metadata `anthropic.strict` or `bedrock.strict` to a boolean for strict tools.
+Anthropic PDF URL/base64 documents use native document blocks.
+
+Cohere exposes `with_max_tokens_per_doc(NonZeroU32)` and `with_priority(u16)`;
+priority must be 0–999. Defaults keep server-side truncation and queue behavior.
+
 ## Per-model capabilities and hosted tools
 
 Adapter defaults intentionally describe only verified protocol behavior.

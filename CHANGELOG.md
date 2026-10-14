@@ -6,6 +6,22 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+### Added
+
+- Added native Anthropic and Bedrock JSON Schema output, strict tool metadata,
+  native Anthropic PDF documents and explicit Cohere rerank truncation/priority.
+
+### Fixed
+
+- Preserved Anthropic/Bedrock private reasoning, Gemini signed function-call
+  parts, and DeepSeek/OpenRouter/Qwen/MiniMax/Zhipu thinking through persisted
+  assistant history and subsequent requests.
+- Corrected cached/thinking/tool-prompt usage accounting for Anthropic, Gemini,
+  DeepSeek and xAI; corrected Mistral seed and Groq output-limit field names.
+- Bounded Cohere streaming response reads and Bedrock encrypted reasoning,
+  protected private decoder Debug output and validated incompatible thinking
+  tool choices. See RFC 0077 for official sources and verification limits.
+
 ## [0.10.2] - 2026-10-14
 
 ### Added
