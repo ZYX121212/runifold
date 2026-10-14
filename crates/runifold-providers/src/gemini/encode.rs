@@ -384,6 +384,11 @@ fn merge_options(body: &mut Map<String, Value>, request: &ModelRequest) -> Resul
                 .as_object_mut()
                 .ok_or_else(|| invalid("Gemini generationConfig must be an object"))?;
             for (field, value) in extra {
+                if field == "candidateCount" && value.as_u64() != Some(1) {
+                    return Err(unsupported(
+                        "Gemini canonical responses support exactly one candidate",
+                    ));
+                }
                 if generation.contains_key(field)
                     || matches!(
                         field.as_str(),
@@ -393,6 +398,7 @@ fn merge_options(body: &mut Map<String, Value>, request: &ModelRequest) -> Resul
                             | "stopSequences"
                             | "responseMimeType"
                             | "responseJsonSchema"
+                            | "responseSchema"
                             | "seed"
                     )
                 {
@@ -447,6 +453,16 @@ mod tests {
         request
             .provider_options
             .insert("gemini".into(), json!({"generationConfig":{"seed":1}}));
+        assert!(encode_request(&request).is_err());
+        request.provider_options.insert(
+            "gemini".into(),
+            json!({"generationConfig":{"candidateCount":2}}),
+        );
+        assert!(encode_request(&request).is_err());
+        request.provider_options.insert(
+            "gemini".into(),
+            json!({"generationConfig":{"responseSchema":{}}}),
+        );
         assert!(encode_request(&request).is_err());
     }
 

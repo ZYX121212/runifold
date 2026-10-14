@@ -327,8 +327,17 @@ fn validate_compatible_thinking(
             "forced tool choice is incompatible with this provider's thinking mode",
         ));
     }
-    if provider == "deepseek" && body.get("tool_choice").and_then(Value::as_str) == Some("auto") {
-        body.remove("tool_choice");
+    if provider == "deepseek" {
+        match body.get("tool_choice").and_then(Value::as_str) {
+            Some("auto") => {
+                body.remove("tool_choice");
+            }
+            Some("none") => {
+                body.remove("tool_choice");
+                body.remove("tools");
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -1412,6 +1421,11 @@ mod tests {
             super::validate_compatible_thinking(&mut body, provider).unwrap();
             if provider == "deepseek" {
                 assert!(!body.contains_key("tool_choice"));
+                body.insert("tool_choice".into(), json!("none"));
+                body.insert("tools".into(), json!([{"type":"function"}]));
+                super::validate_compatible_thinking(&mut body, provider).unwrap();
+                assert!(!body.contains_key("tool_choice"));
+                assert!(!body.contains_key("tools"));
             }
         }
     }

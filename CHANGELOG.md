@@ -13,6 +13,8 @@ breaking changes require a minor-version increment.
 
 ### Fixed
 
+- Updated rustls to 0.23.46 in workspace and standalone benchmark locks for
+  RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348 and RUSTSEC-2026-0349.
 - Preserved Anthropic/Bedrock private reasoning, Gemini signed function-call
   parts, and DeepSeek/OpenRouter/Qwen/MiniMax/Zhipu thinking through persisted
   assistant history and subsequent requests.
