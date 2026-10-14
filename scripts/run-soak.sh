@@ -45,9 +45,12 @@ while (( $(date +%s) < runifold_soak_deadline )); do
   run_suite sqlite-session cargo test -p runifold-store-sqlite --tests --locked
   run_suite effect cargo test -p runifold-effect --locked
   run_suite provider cargo test -p runifold-providers \
-    --features anthropic,gemini,ollama,openai \
+    --features anthropic,gemini,ollama,openai,openai-realtime \
     --test openai_control_http \
     --test openai_reliability \
+    --test openai_continuation_http \
+    --test openai_responses_ws \
+    --test openai_stream_consistency \
     --locked
   runifold_soak_iterations="$((runifold_soak_iterations + 1))"
 done

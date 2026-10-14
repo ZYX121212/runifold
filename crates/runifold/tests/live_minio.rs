@@ -29,23 +29,16 @@ use runifold_workflow::{
 };
 use serde::Serialize;
 
-const MINIO_SERVER_IMAGE: &str = "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z";
-const MINIO_SERVER_DIGEST: &str =
-    "sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e";
-const MINIO_CLIENT_IMAGE: &str = "quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z";
-const MINIO_CLIENT_DIGEST: &str =
-    "sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3";
-
 #[derive(Debug, Serialize)]
 struct MinioReliabilityEvidence {
     schema_version: u32,
     suite: &'static str,
     result: &'static str,
     revision: Option<String>,
-    server_image: &'static str,
-    server_digest: &'static str,
-    client_image: &'static str,
-    client_digest: &'static str,
+    server_source_commit: String,
+    server_image_id: String,
+    client_source_commit: String,
+    client_sha256: String,
     stress_iterations: u32,
     concurrent_requests: u64,
     response_loss_recoveries: u32,
@@ -136,14 +129,14 @@ async fn lock_checksum_concurrency_and_reconstruction_survive_real_minio() {
     )
     .await;
     write_evidence(&MinioReliabilityEvidence {
-        schema_version: 1,
+        schema_version: 2,
         suite: "runifold.s3-worm-reliability",
         result: "passed",
         revision: evidence_revision(),
-        server_image: MINIO_SERVER_IMAGE,
-        server_digest: MINIO_SERVER_DIGEST,
-        client_image: MINIO_CLIENT_IMAGE,
-        client_digest: MINIO_CLIENT_DIGEST,
+        server_source_commit: required("RUNIFOLD_MINIO_SERVER_SOURCE"),
+        server_image_id: required("RUNIFOLD_MINIO_SERVER_IMAGE_ID"),
+        client_source_commit: required("RUNIFOLD_MINIO_CLIENT_SOURCE"),
+        client_sha256: required("RUNIFOLD_MINIO_CLIENT_SHA256"),
         stress_iterations: iterations,
         concurrent_requests,
         response_loss_recoveries,

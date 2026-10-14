@@ -474,7 +474,7 @@ mod tests {
 
         assert_eq!(error.kind, GatewayErrorKind::Cancelled);
         assert_eq!(run.budget().usage().delegations, 0);
-        assert!(model.recorded_requests().is_empty());
+        assert_eq!(model.recorded_requests().len(), 0);
     }
 
     #[test]
@@ -489,6 +489,6 @@ mod tests {
 
         assert_eq!(error.kind, GatewayErrorKind::MaxDepth);
         assert_eq!(run.budget().usage().delegations, 0);
-        assert!(model.recorded_requests().is_empty());
+        assert_eq!(model.recorded_requests().len(), 0);
     }
 }

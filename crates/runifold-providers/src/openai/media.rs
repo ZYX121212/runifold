@@ -136,7 +136,17 @@ impl OpenAiMediaCapabilityCatalog {
     pub(super) fn public_openai_defaults(provider: &str) -> Self {
         let mut catalog = Self::new();
         if provider == "openai" {
-            for model in ["gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"] {
+            for model in [
+                "gpt-image-1",
+                "gpt-image-1-mini",
+                "gpt-image-1.5",
+                "gpt-image-2",
+                "gpt-image-2-2026-04-21",
+                "gpt-image-2.5-sunburst",
+                "gpt-image-2.5-sunburst-2026-09-08",
+                "gpt-image-2.5-flare",
+                "gpt-image-2.5-flare-2026-09-08",
+            ] {
                 catalog.insert_image_profile(
                     ModelRef::new(provider, model),
                     OpenAiImageWireProfile::GptImage,
@@ -195,6 +205,9 @@ impl ImageGenerationModel for OpenAiClient {
                     "image prompt must be non-empty and count must be 1..=10",
                 ));
             }
+            if request.transparent && request.format == ImageFormat::Jpeg {
+                return Err(invalid("transparent image output requires PNG or WebP"));
+            }
             let profile = self.image_wire_profile(&request.model);
             if profile != OpenAiImageWireProfile::GptImage && request.format != ImageFormat::Png {
                 return Err(invalid(
@@ -231,43 +244,152 @@ impl ImageGenerationModel for OpenAiClient {
             })
             .await?;
             let bytes = read_bounded(response, &context, self.provider()).await?;
-            let payload: ImagePayload = serde_json::from_slice(&bytes)
-                .map_err(|_| protocol_error(self.provider(), "image response is invalid JSON"))?;
-            let images = payload
-                .data
-                .into_iter()
-                .map(|image| {
-                    let source = match (image.b64_json, image.url) {
-                        (Some(data), _) if !data.is_empty() => MediaSource::Base64 {
-                            media_type: request.format.media_type().into(),
-                            data,
-                        },
-                        (None, Some(url)) if !url.is_empty() => MediaSource::Url {
-                            url,
-                            media_type: Some(request.format.media_type().into()),
-                        },
-                        _ => {
-                            return Err(protocol_error(
-                                self.provider(),
-                                "image response item has no image payload",
-                            ));
-                        }
-                    };
-                    Ok(GeneratedImage {
-                        source,
-                        revised_prompt: image.revised_prompt,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if images.is_empty() {
-                return Err(protocol_error(
-                    self.provider(),
-                    "image response contains no outputs",
-                ));
-            }
-            Ok(ImageGenerationResponse { images })
+            decode_images(&bytes, request.format, self.provider())
         })
     }
+}
+
+fn decode_images(
+    bytes: &[u8],
+    format: ImageFormat,
+    provider: &str,
+) -> Result<ImageGenerationResponse, ModelError> {
+    let payload: ImagePayload = serde_json::from_slice(bytes)
+        .map_err(|_| protocol_error(provider, "image response is invalid JSON"))?;
+    if payload
+        .output_format
+        .as_deref()
+        .is_some_and(|actual| actual != image_format(format))
+    {
+        return Err(protocol_error(
+            provider,
+            "image response format disagrees with the requested format",
+        ));
+    }
+    let images = payload
+        .data
+        .into_iter()
+        .map(|image| {
+            let source = match (image.b64_json, image.url) {
+                (Some(data), _) if !data.is_empty() => MediaSource::Base64 {
+                    media_type: format.media_type().into(),
+                    data,
+                },
+                (None, Some(url)) if !url.is_empty() => MediaSource::Url {
+                    url,
+                    media_type: Some(format.media_type().into()),
+                },
+                _ => {
+                    return Err(protocol_error(
+                        provider,
+                        "image response item has no image payload",
+                    ));
+                }
+            };
+            Ok(GeneratedImage {
+                source,
+                revised_prompt: image.revised_prompt,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if images.is_empty() {
+        return Err(protocol_error(
+            provider,
+            "image response contains no outputs",
+        ));
+    }
+    Ok(ImageGenerationResponse { images })
+}
+
+/// Explicit GPT Image edit inputs; image bytes and prompts are private in Debug.
+#[derive(Clone)]
+pub struct OpenAiImageEditRequest {
+    /// Generation settings including model, prompt, quality and output format.
+    pub generation: ImageGenerationRequest,
+    /// Ordered reference images as URLs, inline data or owned provider files.
+    pub images: Vec<MediaSource>,
+    /// Optional mask accepted by the selected GPT Image model.
+    pub mask: Option<MediaSource>,
+}
+
+impl std::fmt::Debug for OpenAiImageEditRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiImageEditRequest")
+            .field("model", &self.generation.model)
+            .field("images", &self.images.len())
+            .field("mask", &self.mask.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl OpenAiClient {
+    /// Edits images through the GPT Image JSON endpoint under caller cancellation.
+    ///
+    /// Remote media is sent as references; this method never downloads it.
+    ///
+    /// # Errors
+    /// Rejects unverified models, invalid image inputs and transport/protocol failures.
+    pub fn edit_image(
+        &self,
+        request: OpenAiImageEditRequest,
+        context: ModelCallContext,
+    ) -> ModelFuture<'_, Result<ImageGenerationResponse, ModelError>> {
+        Box::pin(async move {
+            let generation = &request.generation;
+            validate_provider(self, &generation.model.provider)?;
+            if self.image_wire_profile(&generation.model) != OpenAiImageWireProfile::GptImage {
+                return Err(invalid(
+                    "JSON image edits require an explicitly declared GPT Image profile",
+                ));
+            }
+            if request.images.is_empty()
+                || request.images.len() > 16
+                || generation.prompt.trim().is_empty()
+                || generation.count == 0
+                || generation.count > 10
+            {
+                return Err(invalid(
+                    "image edits require 1..=16 images, a nonempty prompt and 1..=10 outputs",
+                ));
+            }
+            if generation.transparent && generation.format == ImageFormat::Jpeg {
+                return Err(invalid("transparent image output requires PNG or WebP"));
+            }
+            let images = request
+                .images
+                .iter()
+                .map(|source| edit_image_reference(source, self.provider()))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut body = json!({"model":generation.model.name,"prompt":generation.prompt,"n":generation.count,"images":images,"output_format":image_format(generation.format)});
+            if let Some(size) = &generation.size {
+                body["size"] = json!(size);
+            }
+            if let Some(quality) = &generation.quality {
+                body["quality"] = json!(quality);
+            }
+            if generation.transparent {
+                body["background"] = json!("transparent");
+            }
+            if let Some(mask) = &request.mask {
+                body["mask"] = edit_image_reference(mask, self.provider())?;
+            }
+            let response = send_media_request(self, "images/edits", &context, |builder| {
+                builder.json(&body)
+            })
+            .await?;
+            let bytes = read_bounded(response, &context, self.provider()).await?;
+            decode_images(&bytes, generation.format, self.provider())
+        })
+    }
+}
+
+fn edit_image_reference(source: &MediaSource, provider: &str) -> Result<Value, ModelError> {
+    let mut reference = super::encode::encode_image(source, provider)?;
+    reference
+        .as_object_mut()
+        .ok_or_else(|| invalid("image reference must be an object"))?
+        .remove("type");
+    Ok(reference)
 }
 
 impl SpeechModel for OpenAiClient {
@@ -504,6 +626,7 @@ const fn speech_format(format: SpeechFormat) -> &'static str {
 #[derive(Deserialize)]
 struct ImagePayload {
     data: Vec<ImagePayloadItem>,
+    output_format: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -543,6 +666,15 @@ mod tests {
             catalog.image_profile(&ModelRef::new("openai", "future-image-model")),
             None
         );
+        for model in [
+            "gpt-image-2.5-sunburst-2026-09-08",
+            "gpt-image-2.5-flare-2026-09-08",
+        ] {
+            assert_eq!(
+                catalog.image_profile(&ModelRef::new("openai", model)),
+                Some(OpenAiImageWireProfile::GptImage)
+            );
+        }
         assert_eq!(
             catalog.speech_profile(&ModelRef::new("openai", "tts-1")),
             Some(OpenAiSpeechWireProfile::Conservative)

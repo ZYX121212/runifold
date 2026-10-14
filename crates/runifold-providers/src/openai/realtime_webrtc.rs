@@ -742,7 +742,7 @@ async fn exchange_sdp(
         request = request.bearer_auth(bearer);
     }
     if let Some(remaining) = context.remaining() {
-        request = request.timeout(remaining);
+        request = request.timeout(crate::reliability::request_timeout(remaining));
     }
     let response = run_http(request.send(), context)
         .await?

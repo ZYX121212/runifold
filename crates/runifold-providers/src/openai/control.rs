@@ -4,6 +4,7 @@ mod batch;
 mod files;
 #[cfg(feature = "openai-realtime")]
 mod realtime;
+mod responses;
 
 use std::{future::Future, pin::Pin};
 
@@ -21,6 +22,11 @@ use thiserror::Error;
 use url::Url;
 
 use super::OpenAiConfig;
+
+pub use responses::{
+    OpenAiBackgroundStream, OpenAiCompactedResponse, OpenAiResponseEventStream,
+    OpenAiResponseStatus, OpenAiStoredResponse,
+};
 
 pub use batch::{OpenAiBatch, OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus};
 pub use files::{
@@ -145,7 +151,7 @@ impl OpenAiControlPlane {
             builder = builder.header("openai-project", project);
         }
         if let Some(remaining) = context.remaining() {
-            builder = builder.timeout(remaining);
+            builder = builder.timeout(crate::reliability::request_timeout(remaining));
         }
         builder
     }

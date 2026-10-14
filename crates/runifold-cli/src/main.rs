@@ -560,7 +560,7 @@ mod tests {
             repeated_cursor: false,
         };
         let events = load_source_bounded(&source, RunId::new(), 1).unwrap();
-        assert!(events.is_empty());
+        assert_eq!(events, [] as [runifold_core::RunEvent; 0]);
         assert!(RunInspection::inspect(&events).is_err());
     }
 

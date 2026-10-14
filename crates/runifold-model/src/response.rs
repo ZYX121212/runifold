@@ -118,6 +118,19 @@ pub struct ModelResponse {
 }
 
 impl ModelResponse {
+    /// Builds assistant history while preserving namespaced continuation metadata.
+    ///
+    /// This does not grant authority or retain execution-journal events. Provider
+    /// adapters may use the metadata to restore original message boundaries.
+    ///
+    /// # Errors
+    /// Returns an error when the response has no content.
+    pub fn assistant_message(&self) -> Result<crate::Message, crate::ModelError> {
+        let mut message = crate::Message::new(crate::Role::Assistant, self.content.clone())?;
+        message.metadata.clone_from(&self.provider_metadata);
+        Ok(message)
+    }
+
     /// Collects model-visible text in canonical content order.
     ///
     /// Reasoning, refusals, Tool calls, citations, and provider-specific

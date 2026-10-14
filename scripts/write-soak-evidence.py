@@ -45,6 +45,7 @@ def main() -> None:
             "effect_ambiguity_and_reconciliation",
             "sqlite_session_admission_summary_and_process_recovery",
             "provider_http_fragmentation_timeout_and_control_plane",
+            "openai_continuation_identity_and_websocket_ownership",
         ],
         "credential_material": "excluded",
         "model_content": "excluded",

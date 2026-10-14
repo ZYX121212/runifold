@@ -47,6 +47,70 @@ fn response(delay: Duration) -> ScriptedResponse {
     .with_header("content-type", "text/event-stream")
 }
 
+#[tokio::test]
+async fn final_text_is_reconciled_over_http_without_accepting_incomplete_json() {
+    use serde_json::json;
+
+    for (final_text, status, expected) in [
+        ("{\"ok\":true}", "completed", Some(true)),
+        ("{\"ok\":true}", "incomplete", Some(false)),
+        ("different", "completed", None),
+    ] {
+        let terminal_type = if status == "completed" {
+            "response.completed"
+        } else {
+            "response.incomplete"
+        };
+        let events = [
+            json!({"type":"response.created","sequence_number":0,
+                "response":{"id":"resp","model":"gpt-test"}}),
+            json!({"type":"response.content_part.added","sequence_number":1,
+                "output_index":0,"content_index":0,
+                "part":{"type":"output_text","text":""}}),
+            json!({"type":"response.output_text.delta","sequence_number":2,
+                "output_index":0,"content_index":0,"delta":"{\"ok\":"}),
+            json!({"type":"response.output_text.done","sequence_number":3,
+                "output_index":0,"content_index":0,"text":final_text}),
+            json!({"type":"response.content_part.done","sequence_number":4,
+                "output_index":0,"content_index":0,
+                "part":{"type":"output_text","text":final_text}}),
+            json!({"type":terminal_type,"sequence_number":5,
+                "response":{"status":status,"usage":{},
+                    "incomplete_details":{"reason":"max_output_tokens"}}}),
+        ];
+        let chunks = events
+            .iter()
+            .map(|event| ResponseChunk::text(format!("data: {event}\n\n")))
+            .collect();
+        let server = CassetteServer::start(vec![HttpExchange::new(
+            "POST",
+            "/v1/responses",
+            ScriptedResponse::ok(chunks).with_header("content-type", "text/event-stream"),
+        )])
+        .unwrap();
+
+        let result = client(&server)
+            .invoke(request(), ModelCallContext::new())
+            .await;
+        if let Some(structured_success) = expected {
+            let response = result.unwrap();
+            assert_eq!(response.text(), final_text);
+            assert_eq!(
+                response.structured::<serde_json::Value>().is_ok(),
+                structured_success
+            );
+            server
+                .wait_until_finished(Duration::from_secs(5))
+                .await
+                .unwrap();
+        } else {
+            assert_eq!(result.unwrap_err().kind, ModelErrorKind::Protocol);
+            // A protocol rejection may close the stream before later chunks.
+            server.assert_finished().unwrap();
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_client_isolates_16_concurrent_responses_streams() {
     let server = CassetteServer::start_repeating(

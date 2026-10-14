@@ -109,7 +109,7 @@ impl AnthropicClient {
             builder = builder.header("anthropic-beta", self.config.beta_features.join(","));
         }
         if let Some(remaining) = context.remaining() {
-            builder = builder.timeout(remaining);
+            builder = builder.timeout(crate::reliability::request_timeout(remaining));
         }
         builder
     }

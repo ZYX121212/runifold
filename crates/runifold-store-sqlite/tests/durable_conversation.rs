@@ -36,7 +36,18 @@ async fn durable_turn_atomically_survives_reopen_and_resume() {
     let path = database_path();
     let store = Arc::new(SqliteStore::open(&path).expect("SQLite store opens"));
     let model = ScriptedModel::new();
-    model.enqueue(response_events("terminal", "persisted"));
+    let mut events = response_events("terminal", "persisted");
+    let metadata = BTreeMap::from([(
+        "openai.message_blocks".into(),
+        serde_json::json!([{"id":"msg_done","phase":"final_answer"}]),
+    )]);
+    if let Some(ModelStreamEvent::ResponseCompleted {
+        provider_metadata, ..
+    }) = events.last_mut()
+    {
+        provider_metadata.clone_from(&metadata);
+    }
+    model.enqueue(events);
     let agent = Agent::new(
         "durable-assistant",
         Arc::new(model.clone()),
@@ -78,6 +89,7 @@ async fn durable_turn_atomically_survives_reopen_and_resume() {
         .await
         .expect("transcript survives reopen");
     assert_eq!(transcript.len(), 2);
+    assert_eq!(transcript[1].message.metadata, metadata);
     let checkpoint = AgentCheckpoint::existing(checkpoint_id, reopened.clone());
     let (_, state) = checkpoint.load().expect("checkpoint survives reopen");
     assert!(matches!(
@@ -95,6 +107,15 @@ async fn durable_turn_atomically_survives_reopen_and_resume() {
         .await
         .expect("committed durable turn resumes without execution");
     assert_eq!(resumed.conversation_version.get(), 1);
+    assert_eq!(
+        resumed
+            .outcome
+            .transcript
+            .last()
+            .expect("assistant history survives")
+            .metadata,
+        metadata
+    );
     assert_eq!(model.recorded_requests().len(), 1);
 
     fs::remove_file(path).expect("temporary SQLite database is removable");
@@ -149,7 +170,10 @@ async fn checkpoint_conflict_rolls_back_transcript_append() {
         )
         .await
         .expect("conversation remains readable");
-    assert!(transcript.is_empty());
+    assert_eq!(
+        transcript,
+        [] as [runifold_agent::ConversationTranscriptEntry; 0]
+    );
     assert_eq!(
         CheckpointStore::load(&store, checkpoint_id)
             .expect("checkpoint remains readable")
@@ -198,7 +222,10 @@ async fn committed_turn_recovers_after_process_exit_before_ack() {
         .await
         .expect("committed turn resumes after response loss");
     assert_eq!(outcome.conversation_version.get(), 1);
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
     let transcript = store
         .list_transcript(
             conversation_id,
@@ -528,7 +555,10 @@ async fn session_rejects_other_connection_before_work_and_recovers_dropped_strea
         panic!("expected busy")
     };
     assert_eq!(active, request_id);
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
     assert!(matches!(
         other.run(request_id, "changed", &root_run()).await,
         Err(AgentSessionError::RequestMismatch)
@@ -638,7 +668,10 @@ async fn admission_binds_agent_before_first_execution_checkpoint() {
     );
     let request = CheckpointId::new();
     assert!(session.run(request, "hello", &root_run()).await.is_err());
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
     assert!(
         AgentCheckpoint::existing(request, store.clone())
             .load()

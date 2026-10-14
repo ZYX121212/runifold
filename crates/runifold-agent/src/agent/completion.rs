@@ -2,7 +2,7 @@
 
 use std::{fmt, marker::PhantomData, sync::Arc};
 
-use runifold_model::{ContentPart, Message, ModelResponse, Role, StructuredOutputErrorKind};
+use runifold_model::{ContentPart, Message, ModelResponse, StructuredOutputErrorKind};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
@@ -74,7 +74,7 @@ pub(super) fn rejected_candidate_message(response: &ModelResponse) -> Option<Mes
     if response.content.is_empty() {
         return None;
     }
-    let mut message = Message::new(Role::Assistant, response.content.clone()).ok()?;
+    let mut message = response.assistant_message().ok()?;
     message.metadata.insert(
         "runifold.context.transient".into(),
         serde_json::Value::Bool(true),
@@ -220,7 +220,8 @@ impl Agent {
         checkpoint: &mut Option<&mut CheckpointCursor>,
         context: &TerminalCompletionContext<'_>,
     ) -> Result<Option<AgentOutcome>, AgentError> {
-        let assistant = Message::new(Role::Assistant, response.content.clone())
+        let assistant = response
+            .assistant_message()
             .map_err(|error| AgentError::Protocol(error.to_string()))?;
         progress.transcript.push(assistant);
         if progress.terminal_repairs > 0 {

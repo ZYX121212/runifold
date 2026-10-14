@@ -1107,7 +1107,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(compacted.summary, Some(summary));
-        assert!(compacted.summary_buffer.is_empty());
+        assert_eq!(compacted.summary_buffer.len(), 0);
         assert_eq!(compacted.summary_backlog, 0);
         assert_eq!(compacted.window.len(), 2);
 
@@ -1247,7 +1247,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(found, vec![memory]);
-        assert!(
+        assert_eq!(
             block_on(store.list_transcript(
                 other_id,
                 namespace,
@@ -1255,7 +1255,8 @@ mod tests {
                 ConversationWindow::new(4).unwrap(),
             ))
             .unwrap()
-            .is_empty()
+            .len(),
+            0
         );
     }
 }

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "0.10.1",
+  "version": "0.10.2",
   "symbols": {
     "runifold::ProviderRuntime": {
       "source": "crates/runifold/src/lib.rs",
@@ -54,7 +54,7 @@
     "runifold::RunContext": {
       "source": "crates/runifold-core/src/context.rs",
       "declaration": "pub struct RunContext",
-      "source_sha256": "dbb6f38e6787ed5c5fc6ff39af880cc62ca57ece4b033d69edf8843603ff3a42",
+      "source_sha256": "199bb6cf84114002a5cef15f84cec4432ced36d026986c7d04b50f85cacf8504",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },

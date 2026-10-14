@@ -1079,7 +1079,10 @@ mod tests {
         );
 
         assert!(journal.record(&event).is_err());
-        assert!(fixture.exporter.get_finished_spans().unwrap().is_empty());
+        assert_eq!(
+            fixture.exporter.get_finished_spans().unwrap(),
+            [] as [opentelemetry_sdk::trace::SpanData; 0]
+        );
     }
 
     #[derive(Debug)]

@@ -403,7 +403,7 @@ mod tests {
 
         assert_eq!(decoded.call_id, result.call_id);
         assert_eq!(decoded.content, result.content);
-        assert!(decoded.metadata.is_empty());
+        assert_eq!(decoded.metadata.len(), 0);
         assert!(!encoded.contains("host.secret"));
     }
 

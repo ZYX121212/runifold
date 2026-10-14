@@ -114,7 +114,11 @@ stale-token fencing, principal-bound decisions, durable rejection reasons, and
 successful independent approval.
 
 S3-compatible immutable tombstone archives have a dedicated, mandatory CI job
-against pinned MinIO server and client images. The job creates an Object
+against MinIO server and client binaries built from pinned official source
+commits. `scripts/build-minio-fixture.sh` verifies the fetched commit identities,
+builds a static server image without a registry base, and records its image ID
+and the client binary checksum. This avoids unavailable upstream image channels.
+The job creates an Object
 Lock-enabled bucket, configures a CI-only static KMS key for SSE-S3, and runs
 the otherwise ignored `live_minio` test. It races same-batch writers,
 reconstructs the archive client, rejects a conflicting payload, and verifies
@@ -123,13 +127,15 @@ separately signed HEAD request. A transparent TCP fault proxy also allows
 MinIO to commit an encrypted locked object and then discards the successful
 PUT response; the same archive call must recover through HEAD and a direct
 client reconstruction must replay the identical receipt. The four
-`RUNIFOLD_MINIO_*` variables are required; missing configuration is a test
+connection `RUNIFOLD_MINIO_*` variables and the source/image/checksum provenance
+variables supplied by CI are required; missing configuration is a test
 failure rather than a skip.
 
 The CI job runs 32 four-writer conditional-create iterations and eight
 commit-success/response-loss recoveries. A successful run writes
 `target/reliability-evidence/minio-worm.json` and uploads it as a 30-day CI
-artifact. The report contains only the revision, pinned image identities,
+artifact. Evidence schema 2 contains only the revision, pinned source commits,
+the actual server image ID and client binary checksum,
 bounded operation counts, elapsed time, and pass result. It contains no
 credentials, tenant IDs, object keys, payloads, URLs, or provider error bodies.
 Set `RUNIFOLD_MINIO_STRESS_ITERATIONS` to `1..=1000` for a larger local run.

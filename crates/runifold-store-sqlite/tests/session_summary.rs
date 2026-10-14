@@ -305,7 +305,10 @@ async fn summary_commit_conflict_retains_completed_output_without_overwriting_hi
         1,
         "completed summary is reused on retry"
     );
-    assert!(fixture.main.recorded_requests().is_empty());
+    assert_eq!(
+        fixture.main.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
 }
 
 #[tokio::test]
@@ -335,7 +338,10 @@ async fn summary_pass_limit_persists_across_recovery() {
             .is_err()
     );
     assert_eq!(fixture.summary.recorded_requests().len(), 1);
-    assert!(fixture.main.recorded_requests().is_empty());
+    assert_eq!(
+        fixture.main.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
 }
 
 #[tokio::test]
@@ -362,7 +368,10 @@ async fn committed_summary_survives_failed_progress_ack_and_reopen() {
             .await
             .is_err()
     );
-    assert!(fixture.main.recorded_requests().is_empty());
+    assert_eq!(
+        fixture.main.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
     let view = fixture
         .store
         .load_view(
@@ -495,7 +504,10 @@ async fn summary_and_main_agent_share_one_hard_budget() {
     );
     assert!(session.run(request, "next", &context).await.is_err());
     assert_eq!(fixture.summary.recorded_requests().len(), 1);
-    assert!(fixture.main.recorded_requests().is_empty());
+    assert_eq!(
+        fixture.main.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
     assert_eq!(context.budget().usage().turns, 1);
     assert_eq!(
         session

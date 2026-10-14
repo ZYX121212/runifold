@@ -114,7 +114,7 @@ impl EmbeddingModel for GeminiEmbeddingModel {
                 builder = builder.header("x-goog-api-key", api_key.expose_secret());
             }
             if let Some(remaining) = context.remaining() {
-                builder = builder.timeout(remaining);
+                builder = builder.timeout(crate::reliability::request_timeout(remaining));
             }
 
             let started = Instant::now();

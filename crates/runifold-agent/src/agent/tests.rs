@@ -342,6 +342,49 @@ fn agent_preserves_provider_tool_call_metadata_for_the_next_turn() {
 }
 
 #[test]
+fn provider_message_metadata_survives_checkpoint_and_completed_replay() {
+    let model = ScriptedModel::new();
+    let mut events = response_events(
+        "done",
+        vec![ContentPart::text("answer")],
+        FinishReason::Stop,
+    );
+    let metadata = BTreeMap::from([(
+        "openai.message_blocks".into(),
+        json!([{"id":"msg_done","phase":"final_answer"}]),
+    )]);
+    if let Some(ModelStreamEvent::ResponseCompleted {
+        provider_metadata, ..
+    }) = events.last_mut()
+    {
+        provider_metadata.clone_from(&metadata);
+    }
+    model.enqueue(events);
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    );
+    let checkpoint = AgentCheckpoint::new(Arc::new(InMemoryCheckpointStore::new()));
+    let run = root_run(Budget {
+        turns: Some(1),
+        ..Budget::default()
+    });
+    let outcome =
+        futures_executor::block_on(agent.run_checkpointed("start", &run, &checkpoint)).unwrap();
+    assert_eq!(outcome.transcript.last().unwrap().metadata, metadata);
+    let (_, state) = checkpoint.load().unwrap();
+    let round_trip: crate::AgentCheckpointState =
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    assert_eq!(round_trip.transcript.last().unwrap().metadata, metadata);
+    let replayed =
+        futures_executor::block_on(agent.resume(&checkpoint, &run, ResumePolicy::RejectAmbiguous))
+            .unwrap();
+    assert_eq!(replayed.transcript.last().unwrap().metadata, metadata);
+    assert_eq!(model.recorded_requests().len(), 1);
+}
+
+#[test]
 fn agent_continues_provider_pause_turn_with_preserved_assistant_context() {
     let model = ScriptedModel::new();
     let opaque = ContentPart::ProviderOpaque(runifold_model::ProviderData {
@@ -1706,7 +1749,7 @@ fn tool_minimum_rejects_an_obviously_insufficient_shared_budget() {
             remaining: 2
         }
     ));
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -1933,7 +1976,7 @@ fn automatic_summary_stops_at_the_explicit_pass_limit_before_model_execution() {
         }
     ));
     assert_eq!(summarizer_model.recorded_requests().len(), 2);
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -2032,7 +2075,7 @@ fn explicit_run_denies_an_ungranted_retriever_before_model_execution() {
         AgentError::Retrieval(RetrievalError::CapabilityDenied { .. })
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -2171,7 +2214,7 @@ fn journal_failure_is_fail_closed_before_model_execution() {
     let error = futures_executor::block_on(agent.run("start", &run)).unwrap_err();
 
     assert!(matches!(error, AgentError::Journal(_)));
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -2664,7 +2707,7 @@ fn gateway_rejects_child_authority_amplification_before_execution() {
             if error.kind == GatewayErrorKind::AuthorityEscalation
     ));
     assert_eq!(run.budget().usage().delegations, 0);
-    assert!(child_model.recorded_requests().is_empty());
+    assert_eq!(child_model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -2713,7 +2756,7 @@ fn delegation_budget_stops_before_the_child_model_runs() {
         AgentError::Gateway(ref error)
             if error.kind == GatewayErrorKind::BudgetExceeded
     ));
-    assert!(child_model.recorded_requests().is_empty());
+    assert_eq!(child_model.recorded_requests().len(), 0);
 }
 
 #[test]

@@ -81,7 +81,15 @@ Applications may declare model-specific capabilities explicitly. Under the
 default strict policy, unknown required features fail. Best-effort mode permits
 unknown features only with a visible warning.
 
-## Deferred decisions
+## Current continuation contracts
+
+The initial exclusions below are historical. Phase-preserving history, qualified
+Tool dispatch, custom/client-search outputs, explicit background lifecycle and
+compaction, native Responses WebSocket and async correlation are specified in
+[RFC 0076](0076-openai-continuation-contracts.md). The new Model adapter retains the
+same canonical Agent engine; provider storage never implies an Agent commit.
+
+## Initially deferred decisions
 
 - model capability catalog and cache invalidation;
 - resumable streams;
