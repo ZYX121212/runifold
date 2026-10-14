@@ -34,6 +34,8 @@ breaking changes require a minor-version increment.
   without changing native timeout precision.
 - Included continuation, stream consistency and native WebSocket ownership
   regressions in the multi-hour reliability soak.
+- Updated the pinned API compatibility checker for Rust 1.99 rustdoc output and
+  replaced stale cached checker versions during CI and release validation.
 
 - Corrected the client Tool Search regression fixture to use valid function
   metadata values, ensuring it tests unsupported Tool kinds rather than an
