@@ -928,7 +928,7 @@
           "crates/runifold-providers/src/anthropic.rs",
           "crates/runifold-model/src/invocation.rs"
         ],
-        "source_sha256": "5344f9460784a48c5ad8edb2c44572a7d05b558b939e14c9dcd5894858acb8d1"
+        "source_sha256": "fa03848c0d7370ffea3f7e65d28ec57dee700096429eeae3ce4d5b1e577cd309"
       },
       "add-reviewer": {
         "title": "Review an Agent answer before completion",
@@ -1989,7 +1989,7 @@
         "crates/runifold-provider-testkit/src/conformance.rs": "1656a086c91028c9cc0d1e78d2bdbec498833d50804b4d9a6cdcc254cd3239f3",
         "crates/runifold-providers/Cargo.toml": "bea223c651cf977b4e14e603ea43b51f49455c9acdf7c60f57888d3caefc9a57",
         "crates/runifold-providers/src/anthropic.rs": "9745d39be70afd199b8ee303d7993e0ad9100b99f6d51497dcc4c53ac66d4865",
-        "crates/runifold-providers/src/lib.rs": "5344f9460784a48c5ad8edb2c44572a7d05b558b939e14c9dcd5894858acb8d1",
+        "crates/runifold-providers/src/lib.rs": "fa03848c0d7370ffea3f7e65d28ec57dee700096429eeae3ce4d5b1e577cd309",
         "crates/runifold-providers/tests/anthropic_http_cassette.rs": "64f8cf18c55f387c1a134b0aab9cc3e5c57128e5890d4bde1ae90a397d647e2a",
         "crates/runifold-retrieval-pgvector/Cargo.toml": "706f76e14f30aafec86f3a3218f396531b9b1d72940ad38ff2b261c26e016418",
         "crates/runifold-retrieval-qdrant/Cargo.toml": "dde355fe3742ab09eda8da6fc6c4daacf9f224874388eb5c6cfb1bbf7e4f0b38",
@@ -2037,7 +2037,7 @@
         "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
         "scripts/semver-check.sh": "5b96ed39779dff7383e07c20fad7726ae727290c42343ecf11d38dae5b10117a"
       },
-      "digest": "27d70464869998cabcb7160eba4cade8d566a765c7f5851656bb37c987aba9c8"
+      "digest": "ded112f39b039330332690cbecf5849a35ba3a58eafe0bb72add8af70f9cba57"
     }
   },
   "documents": {

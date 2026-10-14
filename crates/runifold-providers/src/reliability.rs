@@ -1,8 +1,5 @@
 //! Conservative retry-safety classification shared by HTTP providers.
 
-use reqwest::StatusCode;
-use runifold_core::RetrySafety;
-use runifold_model::ModelError;
 use std::time::Duration;
 
 pub(crate) fn request_timeout(remaining: Duration) -> Duration {
@@ -27,26 +24,42 @@ fn browser_timeout(remaining: Duration) -> Duration {
     Duration::from_millis(milliseconds)
 }
 
-pub(crate) fn classify_transport(error: &reqwest::Error, model_error: &mut ModelError) {
+#[cfg(any(
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai"
+))]
+pub(crate) fn classify_transport(
+    error: &reqwest::Error,
+    model_error: &mut runifold_model::ModelError,
+) {
     #[cfg(not(target_arch = "wasm32"))]
     if error.is_connect() {
-        model_error.retry_safety = RetrySafety::Safe;
+        model_error.retry_safety = runifold_core::RetrySafety::Safe;
     }
 
     #[cfg(target_arch = "wasm32")]
     let _ = (error, model_error);
 }
 
-pub(crate) fn classify_status(status: StatusCode, model_error: &mut ModelError) {
-    if status == StatusCode::TOO_MANY_REQUESTS {
-        model_error.retry_safety = RetrySafety::Safe;
+#[cfg(any(
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai"
+))]
+pub(crate) fn classify_status(
+    status: reqwest::StatusCode,
+    model_error: &mut runifold_model::ModelError,
+) {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        model_error.retry_safety = runifold_core::RetrySafety::Safe;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use runifold_model::{ModelError, ModelErrorKind};
-
     use super::*;
 
     #[test]
@@ -72,7 +85,16 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        feature = "anthropic",
+        feature = "gemini",
+        feature = "ollama",
+        feature = "openai"
+    ))]
     fn only_explicit_rejection_is_safe_by_default() {
+        use reqwest::StatusCode;
+        use runifold_core::RetrySafety;
+        use runifold_model::{ModelError, ModelErrorKind};
         let mut rate_limited = ModelError::local(ModelErrorKind::Provider, "rate limited");
         classify_status(StatusCode::TOO_MANY_REQUESTS, &mut rate_limited);
         assert_eq!(rate_limited.retry_safety, RetrySafety::Safe);

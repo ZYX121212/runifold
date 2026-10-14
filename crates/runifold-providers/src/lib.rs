@@ -19,6 +19,7 @@ pub use compatible::{
 
 #[cfg(any(
     feature = "anthropic",
+    feature = "cohere",
     feature = "gemini",
     feature = "ollama",
     feature = "openai"
