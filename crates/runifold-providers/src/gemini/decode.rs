@@ -272,6 +272,15 @@ fn decode_part(
         });
         preserve_signed_part(decoder, part, thought_signature(part), true, events)?;
     } else {
+        let index = decoder.allocate()?;
+        events.push(ModelStreamEvent::ContentPartCompleted {
+            index,
+            part: ContentPart::ProviderOpaque(runifold_model::ProviderData {
+                provider: "gemini".into(),
+                kind: "part".into(),
+                value: part.clone(),
+            }),
+        });
         events.push(provider_event("part", part.clone()));
     }
     Ok(())

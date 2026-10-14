@@ -451,6 +451,30 @@ mod tests {
     }
 
     #[test]
+    fn opaque_native_parts_survive_decode_serialize_and_replay() {
+        let part = json!({"executableCode":{"language":"PYTHON","code":"print(1)"},"thoughtSignature":"sig"});
+        let mut decoder = GeminiEventDecoder::new("test");
+        let events = decoder
+            .decode(
+                &json!({"candidates":[{"content":{"parts":[part.clone()]},"finishReason":"STOP"}]}),
+            )
+            .unwrap();
+        let mut accumulator = runifold_model::ModelStreamAccumulator::new();
+        let response = events
+            .into_iter()
+            .find_map(|event| accumulator.push(event).unwrap())
+            .unwrap();
+        let stored = serde_json::to_vec(&response.assistant_message().unwrap()).unwrap();
+        let restored: Message = serde_json::from_slice(&stored).unwrap();
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("gemini", "test"),
+            restored,
+        ))
+        .unwrap();
+        assert_eq!(body["contents"][0]["parts"][0], part);
+    }
+
+    #[test]
     fn encodes_native_contents_and_system_instruction() {
         let request = ModelRequest::new(
             ModelRef::new("gemini", "gemini-test"),

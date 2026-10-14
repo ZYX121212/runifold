@@ -16,6 +16,8 @@ breaking changes require a minor-version increment.
 - Preserved Anthropic/Bedrock private reasoning, Gemini signed function-call
   parts, and DeepSeek/OpenRouter/Qwen/MiniMax/Zhipu thinking through persisted
   assistant history and subsequent requests.
+- Preserved Ollama parallel tool-call/result IDs and opaque Gemini native parts
+  across persisted history and subsequent requests.
 - Corrected cached/thinking/tool-prompt usage accounting for Anthropic, Gemini,
   DeepSeek and xAI; corrected Mistral seed and Groq output-limit field names.
 - Bounded Cohere streaming response reads and Bedrock encrypted reasoning,

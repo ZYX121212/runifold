@@ -20,7 +20,7 @@ from transport support. No default model IDs or regional credentials change.
 | Anthropic Messages | [Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs): use GA `output_config.format`, retain schema unchanged, merge non-conflicting effort options. Explicit JSON Schema is required; JSON-only mode remains unsupported. [Strict tools](https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use) enables `anthropic.strict` metadata. |
 | Anthropic thinking/tools | [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking): preserve encrypted redacted blocks and signature-only thinking. [Programmatic calling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling): retain caller metadata; tool descriptor metadata can carry allowed callers, defer loading and examples. This does not implement a hosted tool executor. |
 | Anthropic documents/usage | [PDF support](https://platform.claude.com/docs/en/build-with-claude/pdf-support): PDF URL/base64 documents use native blocks; other unsupported media keep existing explicit projection. [Caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching): total input includes uncached, cache reads and cache writes exactly once across incremental updates. |
-| Gemini GenerateContent | [Thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures): replay original signed function-call part, including absence of a native ID; matching results also omit an invented ID. Preserve signed-part boundaries. [Generation config and usage](https://ai.google.dev/api/generate-content): support signed-32-bit seed and nested optional generation config without overriding canonical fields. Input includes tool prompt tokens; output includes thoughts, which remain an output subset. |
+| Gemini GenerateContent | [Thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures): replay original signed function-call part, including absence of a native ID; matching results also omit an invented ID. Preserve signed-part boundaries and opaque native output parts. [Generation config and usage](https://ai.google.dev/api/generate-content): support signed-32-bit seed and nested optional generation config without overriding canonical fields. Input includes tool prompt tokens; output includes thoughts, which remain an output subset. |
 | Bedrock ConverseStream | [Structured outputs](https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html): use `outputConfig.textFormat` and `bedrock.strict` tool metadata. JSON Schema is serialized without removing constraints. [Reasoning content](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html): preserve signed text and fragmented encrypted bytes through binary EventStream and replay. Private buffers are bounded and decoder Debug output omits payloads. |
 | Cohere Rerank v2 | [Rerank reference](https://docs.cohere.com/reference/rerank): canonical `api.cohere.com` endpoint; explicit `with_max_tokens_per_doc` and priority 0–999. Stream response reads under a 4 MiB bound with cancellation; reject credentials/query/fragment in base URLs. |
 | DeepSeek Chat | [Thinking mode](https://api-docs.deepseek.com/guides/thinking_mode/): retain assistant `reasoning_content` for subsequent turns, including after persistence. [Agent integrations](https://api-docs.deepseek.com/quick_start/agent_integrations/oh_my_pi/): omit default auto tool choice; explicit thinking plus forced tool choice fails locally. Cache-hit tokens map to cached input, not cache writes. |
@@ -31,6 +31,8 @@ from transport support. No default model IDs or regional credentials change.
 | Mistral Chat | [Chat reference](https://docs.mistral.ai/api/endpoint/chat): map canonical seed to `random_seed`. Existing tools, response formats and stream fields retain their wire mapping. |
 | Groq Chat | [Compatibility](https://console.groq.com/docs/openai): use current `max_completion_tokens` for output limits; other compatible fields remain unchanged. |
 | xAI Chat | [Chat reference](https://docs.x.ai/developers/rest-api-reference/inference/chat-completions): reconcile output against total minus input, retaining separately reported reasoning without double counting. Existing Chat endpoint remains supported; no automatic migration to Responses. |
+
+| Ollama Chat | [Native wire types](https://github.com/ollama/ollama/blob/main/api/types.go): preserve assistant tool-call `id` and result `tool_call_id`, including parallel same-name calls across persisted history. Existing thinking, format and options mappings remain unchanged. |
 
 ## Interfaces checked without a transport change
 
@@ -48,8 +50,6 @@ all canonical features.
   retain the existing Responses interface and offline conformance contract.
   The dynamic API reference was only partially retrievable, so the official
   SDK guide supplements it; no exhaustive live-vendor acceptance claim is made.
-- [Ollama chat](https://docs.ollama.com/api/chat) retains native thinking, tools,
-  structured output and options through `/api/chat`; thinking already replays.
 - [Together compatibility](https://docs.together.ai/docs/inference/openai-compatibility)
   retains Chat, tools, JSON and streaming. Advanced model-native reasoning options
   remain explicit provider options; no universal reasoning-history guarantee.
@@ -83,7 +83,7 @@ change.
 
 ## Local validation
 
-- Provider all-feature suite: 314 passed; two opt-in live tests ignored.
+- Provider all-feature suite: 316 passed; two opt-in live tests ignored.
 - Neutral model boundary suite: 59 passed.
 - Rust 1.99 provider Clippy, all targets/features, warnings denied: passed.
 - Rust 1.88 provider all-feature compilation: passed.

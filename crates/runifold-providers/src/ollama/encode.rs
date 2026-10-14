@@ -143,7 +143,7 @@ fn encode_message(role: Role, parts: &[ContentPart]) -> Result<Value, ModelError
                 presentation.push(part.clone());
                 requires_projection = true;
             }
-            ContentPart::ToolCall(call) => tool_calls.push(json!({"function":{
+            ContentPart::ToolCall(call) => tool_calls.push(json!({"id":call.id,"function":{
                 "name":call.name,
                 "arguments":call.arguments
             }})),
@@ -180,7 +180,7 @@ fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
         }
     }
     let content = encode_tool_result_envelope(result)?;
-    let mut message = json!({"role":"tool","content":content});
+    let mut message = json!({"role":"tool","content":content,"tool_call_id":result.call_id});
     if !images.is_empty() {
         message["images"] = Value::Array(images);
     }
