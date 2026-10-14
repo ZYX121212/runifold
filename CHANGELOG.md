@@ -36,6 +36,8 @@ breaking changes require a minor-version increment.
   regressions in the multi-hour reliability soak.
 - Updated the pinned API compatibility checker for Rust 1.99 rustdoc output and
   replaced stale cached checker versions during CI and release validation.
+- Made PostgreSQL cleanup lease fault injection use explicit database-clock expiry,
+  preserving heartbeat, expired-owner and fencing assertions under CI load.
 
 - Corrected the client Tool Search regression fixture to use valid function
   metadata values, ensuring it tests unsupported Tool kinds rather than an

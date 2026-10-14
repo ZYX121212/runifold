@@ -223,6 +223,18 @@ quality, account access, all OpenAI endpoints, browser Responses sockets, automa
 hosted async scheduling, or server-side exactly-once effects. Decisions, GPT-Live
 and the managed Agents API are separate product/protocol integrations.
 
+## Release qualification follow-up
+
+The release gates also exposed two infrastructure issues: cargo-semver-checks
+0.49.0 cannot read Rust 1.99 rustdoc JSON, and a PostgreSQL fault fixture could
+lose a 40 ms cleanup lease before its heartbeat on a busy runner. CI and release
+validation now require checker 0.51.0, including replacement of older cached
+binaries. The fixture grants normal leases, checks the persisted heartbeat
+expiration, then explicitly expires a fenced lease with the database clock. It
+still checks rejection of expired heartbeats, owner takeover and stale writes.
+Neither fix relaxes the production lease or compatibility contracts. The final
+candidate must complete fresh CI, reference application, benchmark and soak gates.
+
 ## Official sources
 
 - [Reasoning and phase replay](https://developers.openai.com/api/docs/guides/reasoning)

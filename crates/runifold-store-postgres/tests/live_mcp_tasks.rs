@@ -90,7 +90,15 @@ async fn task_survives_database_restart_and_concurrent_subscribers_converge() {
     );
     assert_active_task_is_protected(&control_store, tenant.clone()).await;
     assert_concurrent_subscribers_converge(&recovered, &task.task_id).await;
-    assert_fenced_terminal_cleanup(&control_store, &recovered, tenant, &task.task_id).await;
+    assert_fenced_terminal_cleanup(
+        &control_store,
+        &recovered,
+        tenant,
+        &task.task_id,
+        &recovered_url,
+        &table,
+    )
+    .await;
     assert_supervisor_discovers_and_cleans_tenants(&control_store).await;
     assert_authorized_governance_control_plane(&control_store).await;
 }
@@ -148,38 +156,49 @@ async fn assert_concurrent_subscribers_converge(client: &McpClient, task_id: &st
     );
 }
 
-async fn assert_fenced_terminal_cleanup(
+async fn assert_cleanup_heartbeat(
     store: &PostgresWorkflowStore,
-    client: &McpClient,
-    tenant: WorkflowTenantId,
-    task_id: &str,
+    database: &tokio_postgres::Client,
+    tenant: &WorkflowTenantId,
+    table: &str,
 ) {
-    let cleanup_limit = WorkflowTaskCleanupLimit::new(10).unwrap();
-    let cleanup_retention = WorkflowTaskRetention::new(Duration::from_millis(1)).unwrap();
-    let short_lease = LeaseDuration::new(Duration::from_millis(40)).unwrap();
+    let initial_lease = LeaseDuration::new(Duration::from_secs(30)).unwrap();
     let heartbeat_probe = store
         .claim_task_cleanup(
             tenant.clone(),
             WorkerId::parse("cleanup-heartbeat").unwrap(),
-            short_lease,
+            initial_lease,
         )
         .await
         .unwrap()
         .unwrap();
+    let original_expiry = heartbeat_probe.expires_at_ms;
     let renewed = store
         .heartbeat_task_cleanup(
             heartbeat_probe,
-            LeaseDuration::new(Duration::from_secs(1)).unwrap(),
+            LeaseDuration::new(Duration::from_secs(60)).unwrap(),
         )
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(45)).await;
+    assert!(renewed.expires_at_ms > original_expiry);
+    let stored_expiry: i64 = database
+        .query_one(
+            &format!(
+                "SELECT FLOOR(EXTRACT(EPOCH FROM lease_expires_at) * 1000)::BIGINT
+                 FROM {table}_task_cleanup WHERE tenant_id = $1"
+            ),
+            &[&tenant.as_str()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(u64::try_from(stored_expiry).unwrap(), renewed.expires_at_ms);
     assert!(
         store
             .claim_task_cleanup(
                 tenant.clone(),
                 WorkerId::parse("cleanup-blocked").unwrap(),
-                short_lease,
+                initial_lease,
             )
             .await
             .unwrap()
@@ -187,12 +206,32 @@ async fn assert_fenced_terminal_cleanup(
         "database-clock heartbeat must prevent premature takeover"
     );
     store.release_task_cleanup(renewed).await.unwrap();
+}
+
+async fn assert_fenced_terminal_cleanup(
+    store: &PostgresWorkflowStore,
+    client: &McpClient,
+    tenant: WorkflowTenantId,
+    task_id: &str,
+    connection_url: &str,
+    table: &str,
+) {
+    let (database, connection) = tokio_postgres::connect(connection_url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let connection_task = tokio::spawn(connection);
+    let cleanup_limit = WorkflowTaskCleanupLimit::new(10).unwrap();
+    let cleanup_retention = WorkflowTaskRetention::new(Duration::from_millis(1)).unwrap();
+    // CI scheduling pauses must not expire a lease before its heartbeat RPC.
+    // Inject expiry with the database clock below, as other lease fixtures do.
+    let initial_lease = LeaseDuration::new(Duration::from_secs(30)).unwrap();
+    assert_cleanup_heartbeat(store, &database, &tenant, table).await;
 
     let first_lease = store
         .claim_task_cleanup(
             tenant.clone(),
             WorkerId::parse("cleanup-a").unwrap(),
-            short_lease,
+            initial_lease,
         )
         .await
         .unwrap()
@@ -202,18 +241,41 @@ async fn assert_fenced_terminal_cleanup(
             .claim_task_cleanup(
                 tenant.clone(),
                 WorkerId::parse("cleanup-b").unwrap(),
-                short_lease,
+                initial_lease,
             )
             .await
             .unwrap()
             .is_none()
     );
-    tokio::time::sleep(Duration::from_millis(45)).await;
+    assert_eq!(
+        database
+            .execute(
+                &format!(
+                    "UPDATE {table}_task_cleanup
+                     SET lease_expires_at = clock_timestamp() - INTERVAL '1 millisecond'
+                     WHERE tenant_id = $1 AND owner = $2 AND fencing_token = $3"
+                ),
+                &[
+                    &tenant.as_str(),
+                    &first_lease.owner.as_str(),
+                    &i64::try_from(first_lease.fencing_token).unwrap(),
+                ],
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    let expired = store
+        .heartbeat_task_cleanup(first_lease.clone(), initial_lease)
+        .await
+        .unwrap_err();
+    assert_eq!(expired.kind, WorkflowStoreErrorKind::LeaseLost);
+    connection_task.abort();
     let takeover = store
         .claim_task_cleanup(
             tenant.clone(),
             WorkerId::parse("cleanup-b").unwrap(),
-            LeaseDuration::new(Duration::from_secs(1)).unwrap(),
+            LeaseDuration::new(Duration::from_secs(30)).unwrap(),
         )
         .await
         .unwrap()
