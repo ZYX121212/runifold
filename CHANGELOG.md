@@ -32,6 +32,8 @@ breaking changes require a minor-version increment.
 - Rounded browser request timeouts up to Fetch's millisecond precision and
   bounded them to the supported timer range, preserving deadline classification
   without changing native timeout precision.
+- Included continuation, stream consistency and native WebSocket ownership
+  regressions in the multi-hour reliability soak.
 
 - Corrected the client Tool Search regression fixture to use valid function
   metadata values, ensuring it tests unsupported Tool kinds rather than an
