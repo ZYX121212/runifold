@@ -38,6 +38,7 @@ The adapter supports native:
 - system instructions and user/model contents;
 - text, inline media, file media, and signed thought round trips;
 - function declarations, calls, and responses;
+- function-response media parts only for inline media; remote media uses a reversible structured text projection, and scalar or failed structured results remain JSON objects;
 - JSON mode and JSON Schema response configuration;
 - temperature, top-p, output limit, and stop sequences;
 - usage metadata and finish-reason normalization;

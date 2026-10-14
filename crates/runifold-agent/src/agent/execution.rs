@@ -11,8 +11,8 @@ use super::{
     BufferedObserver, CheckpointCursor, ContentPart, DurableConversationCheckpoint, Either,
     EventId, Instant, InvocationId, LifecycleEvent, Message, ModelCallContext, ModelError,
     ModelErrorKind, ModelRequest, ModelResponse, ModelStreamAccumulator, NoopObserver,
-    ResumePolicy, Role, RunContext, RunEventKind, StreamExt, TOOL_RESULT_EXECUTION_ID_METADATA,
-    ToolCall, ToolChoice, Usage, emit_agent_event, select,
+    ResumePolicy, RunContext, RunEventKind, StreamExt, TOOL_RESULT_EXECUTION_ID_METADATA, ToolCall,
+    ToolChoice, Usage, emit_agent_event, select,
 };
 use crate::conversation::{
     AgentConversationError, AgentConversationOutcome, AutomaticConversationSummary,
@@ -673,12 +673,7 @@ impl Agent {
             };
             let calls = tool_calls_from(&response.content);
             if calls.is_empty() {
-                if self.continue_provider_turn(
-                    response.clone(),
-                    &mut progress,
-                    run,
-                    &mut checkpoint,
-                )? {
+                if self.continue_provider_turn(&response, &mut progress, run, &mut checkpoint)? {
                     continue;
                 }
                 if matches!(
@@ -715,7 +710,8 @@ impl Agent {
                 continue;
             }
 
-            let assistant = Message::new(Role::Assistant, response.content.clone())
+            let assistant = response
+                .assistant_message()
                 .map_err(|error| AgentError::Protocol(error.to_string()))?;
             progress.transcript.push(assistant);
 
@@ -849,7 +845,7 @@ impl Agent {
 
     fn continue_provider_turn(
         &self,
-        response: ModelResponse,
+        response: &ModelResponse,
         progress: &mut AgentProgress,
         run: &RunContext,
         checkpoint: &mut Option<&mut CheckpointCursor>,
@@ -860,7 +856,8 @@ impl Agent {
         ) {
             return Ok(false);
         }
-        let assistant = Message::new(Role::Assistant, response.content)
+        let assistant = response
+            .assistant_message()
             .map_err(|error| AgentError::Protocol(error.to_string()))?;
         progress.transcript.push(assistant);
         save_checkpoint(

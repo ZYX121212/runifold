@@ -47,6 +47,7 @@ Official references:
    `openai-compatible`.
 5. Unknown vendor fields remain visible in provider events.
 6. Compatibility never implies that every model supports every feature.
+7. Forced function-tool choices without a declared tool fail locally; Chat Completions tool-role input requires a correlated tool result rather than free text.
 
 ## Why not one universal JSON client
 

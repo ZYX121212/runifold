@@ -6,6 +6,61 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-14
+
+### Added
+
+- Added explicit OpenAI background response creation, retrieval, cancellation,
+  deletion, cursor reattachment and native context compaction. Remote generation
+  state remains separate from Agent conversation commit acknowledgement.
+- Added native Responses WebSocket connections with bounded independent lanes,
+  steering events and a reusable canonical Model adapter through the existing
+  `openai-realtime` transport feature. Ambiguous sends are never replayed.
+- Added canonical custom-tool and client-tool-search calls/results, namespaced and
+  deferred Tool definitions, and scoped serializable async job/result correlation.
+  Default Agent Tool execution still awaits results at its existing turn boundary.
+- Added GPT Image 2/2.5 profiles and JSON image editing with validated references.
+
+
+### Fixed
+
+- Corrected the client Tool Search regression fixture to use valid function
+  metadata values, ensuring it tests unsupported Tool kinds rather than an
+  earlier metadata type error.
+- Preserved original OpenAI assistant message phases, IDs and boundaries through
+  canonical Agent history, durable checkpoint/transcript storage and replay.
+- Qualified namespaced Tool calls for correct registry dispatch and preserved
+  caller/output-kind correlation; Chat rejects unsupported Responses metadata.
+- Validated public GPT-6 reasoning, sampling and tool combinations before transport;
+  retained reported cache-write usage and cache diagnostics.
+- Rejected transparent JPEG image output before transport.
+- Kept Responses WebSocket failures scoped to their lane and invalidated expired
+  connections without replay; recognized documented GPT Image 2.5 dated snapshots.
+- Rejected function/custom-only metadata on client tool-search descriptors before
+  sending fields absent from the documented tool-search schema.
+- Preserved unknown retry safety for Responses WebSocket decoder failures after
+  dispatch and delayed atomic socket reuse until terminal size checks pass.
+- Bound delayed async Tool result routing to the original call, including absent
+  caller/output-type metadata, and checked correlation in restored snapshots.
+- Enforced cross-event Responses identity and function/message consistency,
+  rejected duplicate Tool call identities and preserved partial streamed messages
+  without promoting them to successful completion.
+- Closed compatible-metadata aliases in async result correlation and rejected
+  unknown Tool output kinds instead of silently replaying them as functions.
+- Preserved documented compaction options, rejected incompatible options, checked
+  returned image formats and omitted private content from decoder Debug output.
+- Resolved self-namespaced discovery calls to the advertised flat Tool registry
+  name in HTTP/WebSocket Models while preserving wire identity on replay and
+  rejecting ambiguous flat/explicit namespace definitions before transport.
+- Rejected Responses-specific Tool call/result and assistant-history semantics
+  when replaying through Chat Completions instead of silently discarding them.
+
+- Grouped Anthropic tool results into the following user turn with results before text, as required by Messages tool-use history.
+- Kept Gemini remote tool media in the structured function response, limited function-response media parts to inline data, and preserved scalar and error results as JSON objects.
+- Rejected OpenAI Chat tool-role text without a call ID and rejected OpenAI/Gemini forced tool choices without declared tools before sending provider requests.
+- Reconciled OpenAI Responses final text and refusal events with streamed deltas, rejecting disagreement, and rejected parseable JSON from incomplete structured responses.
+- Rejected unresolved OpenAI strict JSON Schema references before transport.
+
 ## [0.10.1] - 2026-09-13
 
 ### Added

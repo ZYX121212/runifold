@@ -36,7 +36,18 @@ async fn durable_turn_atomically_survives_reopen_and_resume() {
     let path = database_path();
     let store = Arc::new(SqliteStore::open(&path).expect("SQLite store opens"));
     let model = ScriptedModel::new();
-    model.enqueue(response_events("terminal", "persisted"));
+    let mut events = response_events("terminal", "persisted");
+    let metadata = BTreeMap::from([(
+        "openai.message_blocks".into(),
+        serde_json::json!([{"id":"msg_done","phase":"final_answer"}]),
+    )]);
+    if let Some(ModelStreamEvent::ResponseCompleted {
+        provider_metadata, ..
+    }) = events.last_mut()
+    {
+        provider_metadata.clone_from(&metadata);
+    }
+    model.enqueue(events);
     let agent = Agent::new(
         "durable-assistant",
         Arc::new(model.clone()),
@@ -78,6 +89,7 @@ async fn durable_turn_atomically_survives_reopen_and_resume() {
         .await
         .expect("transcript survives reopen");
     assert_eq!(transcript.len(), 2);
+    assert_eq!(transcript[1].message.metadata, metadata);
     let checkpoint = AgentCheckpoint::existing(checkpoint_id, reopened.clone());
     let (_, state) = checkpoint.load().expect("checkpoint survives reopen");
     assert!(matches!(
@@ -95,6 +107,15 @@ async fn durable_turn_atomically_survives_reopen_and_resume() {
         .await
         .expect("committed durable turn resumes without execution");
     assert_eq!(resumed.conversation_version.get(), 1);
+    assert_eq!(
+        resumed
+            .outcome
+            .transcript
+            .last()
+            .expect("assistant history survives")
+            .metadata,
+        metadata
+    );
     assert_eq!(model.recorded_requests().len(), 1);
 
     fs::remove_file(path).expect("temporary SQLite database is removable");

@@ -112,24 +112,34 @@ pub fn encode_request(
 
 fn encode_messages(request: &ModelRequest) -> Result<(Vec<Value>, Vec<Value>), ModelError> {
     let mut system = Vec::new();
-    let mut messages = Vec::new();
+    let mut messages: Vec<Value> = Vec::new();
     for message in &request.messages {
-        let target = if message.role == Role::System {
-            &mut system
-        } else {
-            &mut messages
-        };
         let mut content = Vec::new();
         for part in &message.content {
             content.push(encode_part(part, message.role)?);
         }
         if message.role == Role::System {
-            target.extend(content);
+            system.extend(content);
         } else {
-            target.push(json!({
-                "role": message_role(message.role)?,
-                "content": content
-            }));
+            let role = message_role(message.role)?;
+            if let Some(previous) = messages.last_mut()
+                && previous["role"] == role
+            {
+                let blocks = previous["content"]
+                    .as_array_mut()
+                    .ok_or_else(|| invalid("encoded Anthropic content must be an array"))?;
+                blocks.extend(content);
+            } else {
+                messages.push(json!({"role": role, "content": content}));
+            }
+        }
+    }
+    for message in &mut messages {
+        if message["role"] == "user" {
+            let blocks = message["content"]
+                .as_array_mut()
+                .ok_or_else(|| invalid("encoded Anthropic content must be an array"))?;
+            blocks.sort_by_key(|block| block["type"] != "tool_result");
         }
     }
     if messages.is_empty() {
@@ -400,6 +410,56 @@ mod tests {
 
         assert_eq!(body["messages"][1]["content"][0]["type"], "tool_use");
         assert_eq!(body["messages"][1]["content"][0]["input"]["id"], 7);
+    }
+
+    #[test]
+    fn groups_parallel_tool_results_before_user_text() {
+        let result = |id: &str| {
+            Message::new(
+                Role::Tool,
+                vec![ContentPart::ToolResult(ToolResult {
+                    call_id: id.into(),
+                    name: Some("lookup".into()),
+                    content: vec![ContentPart::text("ok")],
+                    structured_content: None,
+                    is_error: false,
+                    metadata: BTreeMap::new(),
+                })],
+            )
+            .unwrap()
+        };
+        let request = ModelRequest::new(
+            ModelRef::new("anthropic", "claude-test"),
+            Message::user("lookup"),
+        )
+        .message(
+            Message::new(
+                Role::Assistant,
+                ["call-1", "call-2"]
+                    .into_iter()
+                    .map(|id| {
+                        ContentPart::ToolCall(ToolCall {
+                            id: id.into(),
+                            name: "lookup".into(),
+                            arguments: json!({}),
+                            raw_arguments: None,
+                            metadata: BTreeMap::new(),
+                        })
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+        )
+        .message(Message::user("continue after results"))
+        .message(result("call-1"))
+        .message(result("call-2"));
+
+        let body = encode_request(&request, 100).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2]["content"][0]["tool_use_id"], "call-1");
+        assert_eq!(messages[2]["content"][1]["tool_use_id"], "call-2");
+        assert_eq!(messages[2]["content"][2]["text"], "continue after results");
     }
 
     #[test]

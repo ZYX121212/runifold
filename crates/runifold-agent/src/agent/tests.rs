@@ -342,6 +342,49 @@ fn agent_preserves_provider_tool_call_metadata_for_the_next_turn() {
 }
 
 #[test]
+fn provider_message_metadata_survives_checkpoint_and_completed_replay() {
+    let model = ScriptedModel::new();
+    let mut events = response_events(
+        "done",
+        vec![ContentPart::text("answer")],
+        FinishReason::Stop,
+    );
+    let metadata = BTreeMap::from([(
+        "openai.message_blocks".into(),
+        json!([{"id":"msg_done","phase":"final_answer"}]),
+    )]);
+    if let Some(ModelStreamEvent::ResponseCompleted {
+        provider_metadata, ..
+    }) = events.last_mut()
+    {
+        provider_metadata.clone_from(&metadata);
+    }
+    model.enqueue(events);
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    );
+    let checkpoint = AgentCheckpoint::new(Arc::new(InMemoryCheckpointStore::new()));
+    let run = root_run(Budget {
+        turns: Some(1),
+        ..Budget::default()
+    });
+    let outcome =
+        futures_executor::block_on(agent.run_checkpointed("start", &run, &checkpoint)).unwrap();
+    assert_eq!(outcome.transcript.last().unwrap().metadata, metadata);
+    let (_, state) = checkpoint.load().unwrap();
+    let round_trip: crate::AgentCheckpointState =
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    assert_eq!(round_trip.transcript.last().unwrap().metadata, metadata);
+    let replayed =
+        futures_executor::block_on(agent.resume(&checkpoint, &run, ResumePolicy::RejectAmbiguous))
+            .unwrap();
+    assert_eq!(replayed.transcript.last().unwrap().metadata, metadata);
+    assert_eq!(model.recorded_requests().len(), 1);
+}
+
+#[test]
 fn agent_continues_provider_pause_turn_with_preserved_assistant_context() {
     let model = ScriptedModel::new();
     let opaque = ContentPart::ProviderOpaque(runifold_model::ProviderData {

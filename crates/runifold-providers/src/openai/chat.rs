@@ -95,6 +95,7 @@ pub(crate) fn encode_chat_request_for(
                     .tools
                     .iter()
                     .map(|tool| -> Result<Value, ModelError> {
+                        validate_chat_tool_metadata(&tool.metadata, provider)?;
                         let (parameters, strict) = function_tool_schema(tool, provider)?;
                         Ok(json!({
                             "type": "function",
@@ -110,6 +111,14 @@ pub(crate) fn encode_chat_request_for(
             ),
         );
     }
+    if request.tools.is_empty()
+        && matches!(
+            request.tool_choice,
+            ToolChoice::Required | ToolChoice::Named { .. }
+        )
+    {
+        return Err(invalid("tool choice requires at least one tool"));
+    }
     if !request.tools.is_empty() || !matches!(request.tool_choice, ToolChoice::Auto) {
         body.insert(
             "tool_choice".into(),
@@ -123,7 +132,32 @@ pub(crate) fn encode_chat_request_for(
         );
     }
     merge_options(&mut body, request, provider)?;
+    super::encode::validate_model_parameters(&body, provider, true)?;
     Ok(Value::Object(body))
+}
+
+fn validate_chat_tool_metadata(
+    metadata: &runifold_model::ExtensionMap,
+    provider: &str,
+) -> Result<(), ModelError> {
+    if [
+        "namespace",
+        "tool_type",
+        "async",
+        "defer_loading",
+        "allowed_callers",
+        "caller",
+    ]
+    .iter()
+    .any(|field| {
+        metadata.contains_key(&format!("{provider}.{field}"))
+            || metadata.contains_key(&format!("openai-compatible.{field}"))
+    }) {
+        return Err(unsupported(
+            "use the Responses API for namespaced, custom, deferred or async tools",
+        ));
+    }
+    Ok(())
 }
 
 fn encode_chat_messages(
@@ -133,7 +167,20 @@ fn encode_chat_messages(
 ) -> Result<Vec<Value>, ModelError> {
     let mut messages = Vec::with_capacity(request.messages.len());
     for message in &request.messages {
-        if let [ContentPart::Text { text }] = message.content.as_slice() {
+        if message
+            .metadata
+            .contains_key(&format!("{provider}.message_blocks"))
+            || message
+                .metadata
+                .contains_key("openai-compatible.message_blocks")
+        {
+            return Err(unsupported(
+                "Responses assistant message boundaries and phases require the Responses API",
+            ));
+        }
+        if let [ContentPart::Text { text }] = message.content.as_slice()
+            && message.role != Role::Tool
+        {
             messages.push(json!({
                 "role": chat_role(message.role, dialect)?,
                 "content": text,
@@ -156,6 +203,7 @@ fn encode_chat_messages(
                     content.push(chat_text(&encode_content_envelope(part)?));
                 }
                 ContentPart::ToolCall(call) if message.role == Role::Assistant => {
+                    validate_chat_tool_metadata(&call.metadata, provider)?;
                     let mut encoded = json!({
                         "id": call.id,
                         "type": "function",
@@ -175,6 +223,7 @@ fn encode_chat_messages(
                     tool_calls.push(encoded);
                 }
                 ContentPart::ToolResult(result) => {
+                    validate_chat_tool_metadata(&result.metadata, provider)?;
                     flush_chat_message(
                         &mut messages,
                         message.role,
@@ -964,7 +1013,7 @@ mod tests {
 
     use runifold_model::{
         ContentPart, MediaSource, Message, ModelRef, ModelRequest, ModelStreamAccumulator,
-        OutputFormat, Role, ToolCall, ToolResult,
+        OutputFormat, Role, ToolCall, ToolChoice, ToolResult,
     };
     use schemars::JsonSchema;
     use serde_json::{Value, json};
@@ -994,6 +1043,32 @@ mod tests {
         assert_eq!(body["messages"][0]["content"], "hello");
         assert_eq!(body["stream"], true);
         assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn rejects_tool_role_text_without_call_id() {
+        let message = Message::new(Role::Tool, vec![ContentPart::text("orphan")]).unwrap();
+        let request = ModelRequest::new(ModelRef::new("openai", "chat-model"), message);
+
+        let error = encode_chat_request(&request, "openai").unwrap_err();
+
+        assert_eq!(
+            error.kind,
+            runifold_model::ModelErrorKind::UnsupportedFeature
+        );
+    }
+
+    #[test]
+    fn rejects_required_tool_choice_without_tools() {
+        let mut request = ModelRequest::new(
+            ModelRef::new("openai", "chat-model"),
+            Message::user("lookup"),
+        );
+        request.tool_choice = ToolChoice::Required;
+
+        let error = encode_chat_request(&request, "openai").unwrap_err();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
     }
 
     #[test]
@@ -1335,6 +1410,24 @@ mod tests {
                 metadata: BTreeMap::new(),
             })
         );
+    }
+
+    #[test]
+    fn parseable_json_from_length_limited_chat_is_not_structured_success() {
+        let response = decode_chunks_for(
+            "openai",
+            [json!({
+                "id":"chat-length",
+                "model":"test-model",
+                "choices":[{
+                    "index":0,
+                    "delta":{"content":"{\"ok\":true}"},
+                    "finish_reason":"length"
+                }]
+            })],
+        );
+
+        assert!(response.structured::<serde_json::Value>().is_err());
     }
 
     #[test]

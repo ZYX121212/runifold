@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
-use crate::{ContentPart, ModelResponse};
+use crate::{ContentPart, FinishReason, ModelResponse};
 
 /// Stable category for local structured-output validation failures.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -53,7 +53,8 @@ impl ModelResponse {
     /// # Errors
     ///
     /// Returns [`StructuredOutputError`] when text is absent, the model
-    /// refused, or the assembled JSON does not deserialize as `T`.
+    /// refused, generation did not finish normally, or the assembled JSON
+    /// does not deserialize as `T`.
     pub fn structured<T>(&self) -> Result<T, StructuredOutputError>
     where
         T: DeserializeOwned,
@@ -70,6 +71,13 @@ impl ModelResponse {
                 }
                 _ => {}
             }
+        }
+
+        if self.finish_reason != FinishReason::Stop {
+            return Err(StructuredOutputError::new(
+                StructuredOutputErrorKind::InvalidOutput,
+                "model did not complete the structured-output response",
+            ));
         }
 
         if body.trim().is_empty() {
@@ -157,5 +165,22 @@ mod tests {
         assert_eq!(error.kind, StructuredOutputErrorKind::InvalidOutput);
         assert_eq!(error.line, Some(1));
         assert!(error.column.is_some());
+    }
+
+    #[test]
+    fn parseable_text_from_incomplete_response_is_not_accepted() {
+        for reason in [
+            FinishReason::Length,
+            FinishReason::ToolCalls,
+            FinishReason::ContentFilter,
+        ] {
+            let mut response = response(vec![ContentPart::text("{\"value\":42}")]);
+            response.finish_reason = reason;
+
+            let error = response.structured::<Answer>().unwrap_err();
+
+            assert_eq!(error.kind, StructuredOutputErrorKind::InvalidOutput);
+            assert!(error.message.contains("did not complete"));
+        }
     }
 }
