@@ -1247,7 +1247,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(found, vec![memory]);
-        assert!(
+        assert_eq!(
             block_on(store.list_transcript(
                 other_id,
                 namespace,
@@ -1255,7 +1255,8 @@ mod tests {
                 ConversationWindow::new(4).unwrap(),
             ))
             .unwrap()
-            .is_empty()
+            .len(),
+            0
         );
     }
 }
