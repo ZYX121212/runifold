@@ -1,8 +1,8 @@
 //! Cohere v2 Rerank adapter.
 
-use std::fmt;
+use std::{fmt, num::NonZeroU32};
 
-use futures_util::{future::Either, pin_mut};
+use futures_util::{StreamExt, future::Either, pin_mut};
 use reqwest::Client;
 use runifold_retrieval::{
     RerankRequest, RerankResponse, Reranker, RerankerDescriptor, RetrievalContext, RetrievalError,
@@ -14,7 +14,7 @@ use serde_json::json;
 use thiserror::Error;
 use url::Url;
 
-const DEFAULT_BASE_URL: &str = "https://api.cohere.ai/";
+const DEFAULT_BASE_URL: &str = "https://api.cohere.com/";
 const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Invalid Cohere reranker configuration.
@@ -30,6 +30,9 @@ pub enum CohereConfigError {
     /// Base URL is invalid or not HTTP(S).
     #[error("invalid Cohere API base URL")]
     InvalidBaseUrl,
+    /// Priority is outside Cohere's inclusive 0 through 999 range.
+    #[error("Cohere Rerank priority must be between 0 and 999")]
+    InvalidPriority,
 }
 
 /// Cohere v2 implementation of Runifold's provider-neutral [`Reranker`].
@@ -40,6 +43,8 @@ pub struct CohereReranker {
     model: String,
     endpoint: Url,
     http: Client,
+    max_tokens_per_doc: Option<NonZeroU32>,
+    priority: Option<u16>,
 }
 
 impl CohereReranker {
@@ -74,7 +79,13 @@ impl CohereReranker {
             return Err(CohereConfigError::EmptyModel);
         }
         let mut base = Url::parse(base_url).map_err(|_| CohereConfigError::InvalidBaseUrl)?;
-        if !matches!(base.scheme(), "http" | "https") || base.cannot_be_a_base() {
+        if !matches!(base.scheme(), "http" | "https")
+            || base.cannot_be_a_base()
+            || !base.username().is_empty()
+            || base.password().is_some()
+            || base.query().is_some()
+            || base.fragment().is_some()
+        {
             return Err(CohereConfigError::InvalidBaseUrl);
         }
         if !base.path().ends_with('/') {
@@ -89,7 +100,28 @@ impl CohereReranker {
             model,
             endpoint,
             http: Client::new(),
+            max_tokens_per_doc: None,
+            priority: None,
         })
+    }
+
+    /// Limits per-document truncation for requests made by this reranker.
+    #[must_use]
+    pub fn with_max_tokens_per_doc(mut self, limit: NonZeroU32) -> Self {
+        self.max_tokens_per_doc = Some(limit);
+        self
+    }
+
+    /// Sets this reranker's request priority; lower values are handled first.
+    ///
+    /// # Errors
+    /// Rejects priorities above Cohere's documented maximum of 999.
+    pub fn with_priority(mut self, priority: u16) -> Result<Self, CohereConfigError> {
+        if priority > 999 {
+            return Err(CohereConfigError::InvalidPriority);
+        }
+        self.priority = Some(priority);
+        Ok(self)
     }
 
     /// Replaces the HTTP client for explicit transport policy or testing.
@@ -117,17 +149,19 @@ impl Reranker for CohereReranker {
                 .iter()
                 .map(|candidate| candidate.document.text.clone())
                 .collect::<Vec<_>>();
+            let mut body = json!({"model":self.model,"query":request.query,"documents":documents,"top_n":request.limit});
+            if let Some(limit) = self.max_tokens_per_doc {
+                body["max_tokens_per_doc"] = json!(limit.get());
+            }
+            if let Some(priority) = self.priority {
+                body["priority"] = json!(priority);
+            }
             let mut builder = self
                 .http
                 .post(self.endpoint.clone())
                 .bearer_auth(self.api_token.expose_secret())
                 .header("X-Client-Request-Id", context.invocation_id().to_string())
-                .json(&json!({
-                    "model": self.model,
-                    "query": request.query,
-                    "documents": documents,
-                    "top_n": request.limit,
-                }));
+                .json(&body);
             if let Some(remaining) = context.remaining() {
                 builder = builder.timeout(crate::reliability::request_timeout(remaining));
             }
@@ -152,17 +186,29 @@ impl Reranker for CohereReranker {
                     "Cohere Rerank response exceeds 4 MiB",
                 ));
             }
-            let cancellation = context.cancellation().cancelled();
-            let body = response.bytes();
-            pin_mut!(cancellation, body);
-            let bytes = match futures_util::future::select(cancellation, body).await {
-                Either::Left(_) => return Err(RetrievalError::Cancelled),
-                Either::Right((result, _)) => result.map_err(|error| transport_error(&error))?,
-            };
-            if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_RESPONSE_BYTES {
-                return Err(RetrievalError::provider(
-                    "Cohere Rerank response exceeds 4 MiB",
-                ));
+            let mut chunks = response.bytes_stream();
+            let mut bytes = Vec::new();
+            loop {
+                let cancellation = context.cancellation().cancelled();
+                let next = chunks.next();
+                pin_mut!(cancellation, next);
+                let chunk = match futures_util::future::select(cancellation, next).await {
+                    Either::Left(_) => return Err(RetrievalError::Cancelled),
+                    Either::Right((result, _)) => result
+                        .transpose()
+                        .map_err(|error| transport_error(&error))?,
+                };
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                if u64::try_from(bytes.len().saturating_add(chunk.len())).unwrap_or(u64::MAX)
+                    > MAX_RESPONSE_BYTES
+                {
+                    return Err(RetrievalError::provider(
+                        "Cohere Rerank response exceeds 4 MiB",
+                    ));
+                }
+                bytes.extend_from_slice(&chunk);
             }
             let payload: CohereResponse = serde_json::from_slice(&bytes)
                 .map_err(|_| RetrievalError::provider("Cohere Rerank response is invalid JSON"))?;

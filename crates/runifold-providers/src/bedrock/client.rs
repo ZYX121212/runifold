@@ -191,6 +191,7 @@ impl Model for BedrockClient {
                 .set_system((!encoded.system.is_empty()).then_some(encoded.system))
                 .inference_config(encoded.inference)
                 .set_tool_config(encoded.tools)
+                .set_output_config(encoded.output_config)
                 .set_additional_model_request_fields(encoded.additional_fields);
             let output = Box::pin(scoped(operation.send(), &context))
                 .await?
@@ -317,6 +318,8 @@ fn provider_error(code: Option<&str>, message: Option<&str>) -> ModelError {
 fn adapter_capabilities() -> ModelCapabilities {
     ModelCapabilities {
         streaming: FeatureSupport::new(SupportLevel::Native),
+        reasoning: FeatureSupport::new(SupportLevel::Native),
+        structured_output: FeatureSupport::new(SupportLevel::Native),
         image_input: FeatureSupport::new(SupportLevel::Emulated),
         audio_input: FeatureSupport::new(SupportLevel::Emulated),
         document_input: FeatureSupport::new(SupportLevel::Emulated),

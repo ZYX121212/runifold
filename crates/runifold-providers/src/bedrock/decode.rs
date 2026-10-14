@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use aws_sdk_bedrockruntime::types::{
     ContentBlockDelta, ContentBlockStart, ConverseStreamOutput, ReasoningContentBlockDelta,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use runifold_model::{
     ContentBlockKind, FinishReason, ModelError, ModelErrorKind, ModelRef, ModelStreamEvent,
     ModelUsage, ProviderEvent,
@@ -12,7 +13,6 @@ use runifold_model::{
 use serde_json::{Value, json};
 
 /// Stateful decoder for native Amazon Bedrock Converse Stream events.
-#[derive(Debug)]
 pub struct BedrockEventDecoder {
     model: String,
     phase: MessagePhase,
@@ -20,6 +20,7 @@ pub struct BedrockEventDecoder {
     finish_reason: FinishReason,
     pending_blocks: BTreeSet<u32>,
     open_blocks: BTreeSet<u32>,
+    redacted_blocks: BTreeMap<u32, Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,6 +29,13 @@ enum MessagePhase {
     Streaming,
     Stopped,
     Completed,
+}
+
+impl std::fmt::Debug for BedrockEventDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BedrockEventDecoder")
+            .finish_non_exhaustive()
+    }
 }
 
 impl BedrockEventDecoder {
@@ -40,6 +48,7 @@ impl BedrockEventDecoder {
             finish_reason: FinishReason::Unknown,
             pending_blocks: BTreeSet::new(),
             open_blocks: BTreeSet::new(),
+            redacted_blocks: BTreeMap::new(),
         }
     }
 
@@ -141,7 +150,20 @@ impl BedrockEventDecoder {
                         "Bedrock stopped unknown content block {index}"
                     )));
                 }
-                events.push(ModelStreamEvent::ContentBlockCompleted { index });
+                if let Some(bytes) = self.redacted_blocks.remove(&index) {
+                    events.push(ModelStreamEvent::ContentPartCompleted {
+                        index,
+                        part: runifold_model::ContentPart::ProviderOpaque(
+                            runifold_model::ProviderData {
+                                provider: "bedrock".into(),
+                                kind: "reasoning_redacted".into(),
+                                value: Value::String(STANDARD.encode(bytes)),
+                            },
+                        ),
+                    });
+                } else {
+                    events.push(ModelStreamEvent::ContentBlockCompleted { index });
+                }
                 (
                     "content_block_stop",
                     json!({"content_block_index": index}),
@@ -228,6 +250,10 @@ impl BedrockEventDecoder {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Exhaustive native delta mapping shares one block lifecycle"
+    )]
     fn decode_delta(
         &mut self,
         index: u32,
@@ -256,6 +282,35 @@ impl BedrockEventDecoder {
                 Ok((json!({"type": "tool_use", "input": tool.input()}), events))
             }
             ContentBlockDelta::ReasoningContent(reasoning) => {
+                if let ReasoningContentBlockDelta::RedactedContent(bytes) = reasoning {
+                    if self.open_blocks.contains(&index)
+                        && !self.redacted_blocks.contains_key(&index)
+                    {
+                        return Err(protocol(
+                            "Bedrock switched an open block to redacted reasoning",
+                        ));
+                    }
+                    self.pending_blocks.remove(&index);
+                    self.open_blocks.insert(index);
+                    let buffered = self.redacted_blocks.entry(index).or_default();
+                    if buffered.len().saturating_add(bytes.as_ref().len()) > 16 * 1024 * 1024 {
+                        return Err(protocol("Bedrock redacted reasoning exceeds 16 MiB"));
+                    }
+                    buffered.extend_from_slice(bytes.as_ref());
+                    return Ok((
+                        json!({"type":"reasoning_redacted"}),
+                        vec![provider_event(
+                            "reasoning_redacted",
+                            json!({"content_block_index":index}),
+                        )],
+                    ));
+                }
+                if self.redacted_blocks.contains_key(&index) {
+                    return Err(protocol(
+                        "Bedrock switched redacted reasoning to another kind",
+                    ));
+                }
+
                 let (kind, event, payload) = match reasoning {
                     ReasoningContentBlockDelta::Text(text) => (
                         ContentBlockKind::Reasoning {
@@ -279,22 +334,11 @@ impl BedrockEventDecoder {
                         },
                         json!({"type": "reasoning_signature", "signature": signature}),
                     ),
-                    ReasoningContentBlockDelta::RedactedContent(_) => (
-                        ContentBlockKind::Reasoning {
-                            signature: None,
-                            redacted: true,
-                        },
-                        provider_event("reasoning_redacted", json!({"content_block_index": index})),
-                        json!({"type": "reasoning_redacted"}),
-                    ),
-                    _ => (
-                        ContentBlockKind::Reasoning {
-                            signature: None,
-                            redacted: true,
-                        },
-                        provider_event("reasoning_unknown", json!({"content_block_index": index})),
-                        json!({"type": "reasoning_unknown"}),
-                    ),
+                    _ => {
+                        return Err(protocol(
+                            "Bedrock reasoning delta cannot be represented losslessly",
+                        ));
+                    }
                 };
                 self.ensure_started(index, kind, &mut events)?;
                 events.push(event);

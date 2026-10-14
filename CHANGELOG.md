@@ -6,6 +6,27 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+### Added
+
+- Added native Anthropic and Bedrock JSON Schema output, strict tool metadata,
+  native Anthropic PDF documents and explicit Cohere rerank truncation/priority.
+
+### Fixed
+
+- Updated rustls to 0.23.46 in workspace and standalone benchmark locks for
+  RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348 and RUSTSEC-2026-0349.
+  Also repaired the standalone benchmark h2 advisory and yanked chacha20 lock.
+- Preserved Anthropic/Bedrock private reasoning, Gemini signed function-call
+  parts, and DeepSeek/OpenRouter/Qwen/MiniMax/Zhipu thinking through persisted
+  assistant history and subsequent requests.
+- Preserved Ollama parallel tool-call/result IDs and opaque Gemini native parts
+  across persisted history and subsequent requests.
+- Corrected cached/thinking/tool-prompt usage accounting for Anthropic, Gemini,
+  DeepSeek and xAI; corrected Mistral seed and Groq output-limit field names.
+- Bounded Cohere streaming response reads and Bedrock encrypted reasoning,
+  protected private decoder Debug output and validated incompatible thinking
+  tool choices. See RFC 0077 for official sources and verification limits.
+
 ## [0.10.2] - 2026-10-14
 
 ### Added

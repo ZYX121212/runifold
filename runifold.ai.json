@@ -1048,7 +1048,7 @@
         "crates/runifold-provider-testkit/src/conformance.rs",
         "docs/rfcs/0028-provider-transport-reliability.md"
       ],
-      "source_sha256": "64f8cf18c55f387c1a134b0aab9cc3e5c57128e5890d4bde1ae90a397d647e2a"
+      "source_sha256": "3a7b3c58adc9b59485f1759c6ec681445fa9b0979303e7fd96277d9a7260244f"
     },
     "conversation": {
       "title": "Use conversation history",
@@ -1989,7 +1989,7 @@
       "crates/runifold-providers/Cargo.toml": "bea223c651cf977b4e14e603ea43b51f49455c9acdf7c60f57888d3caefc9a57",
       "crates/runifold-providers/src/anthropic.rs": "9745d39be70afd199b8ee303d7993e0ad9100b99f6d51497dcc4c53ac66d4865",
       "crates/runifold-providers/src/lib.rs": "fa03848c0d7370ffea3f7e65d28ec57dee700096429eeae3ce4d5b1e577cd309",
-      "crates/runifold-providers/tests/anthropic_http_cassette.rs": "64f8cf18c55f387c1a134b0aab9cc3e5c57128e5890d4bde1ae90a397d647e2a",
+      "crates/runifold-providers/tests/anthropic_http_cassette.rs": "3a7b3c58adc9b59485f1759c6ec681445fa9b0979303e7fd96277d9a7260244f",
       "crates/runifold-retrieval-pgvector/Cargo.toml": "706f76e14f30aafec86f3a3218f396531b9b1d72940ad38ff2b261c26e016418",
       "crates/runifold-retrieval-qdrant/Cargo.toml": "dde355fe3742ab09eda8da6fc6c4daacf9f224874388eb5c6cfb1bbf7e4f0b38",
       "crates/runifold-retrieval-text/Cargo.toml": "9d56fb9745b1326b48309a0ad687b7560e82969900770190106a5fe2c8819ca3",
@@ -2017,7 +2017,7 @@
       "crates/runifold/tests/ai_api_contract.rs": "351d7f34961f30622599243b68e555cd72e80c176cd0ce6588e19f05740e42e6",
       "crates/runifold/tests/typed_tool_macro.rs": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be",
       "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
-      "docs/PROVIDERS.md": "58001d0a92e27d8a3bb008349507fde59cf3c50d6d1a22776348f1f7b683870d",
+      "docs/PROVIDERS.md": "a311438de4271dd1545e38b025fab28e7ca565aee198b58e5582a2acb12a3223",
       "docs/RELEASING.md": "edf993da8c83ccc6f7885d14e014a649fdcc99cb01a7bd70840269956f76fb83",
       "docs/ai/catalog.json": "2aef16cfc2673f5bc383bfd942c80fbf8d57d01e46a288da6a027052ef4096f2",
       "docs/rfcs/0013-agent-callable-effects.md": "ee1dd43df9d5859e93a5b5f93dd01f6634b5e5e4dcbb07c16d887f4a5d89ef17",
@@ -2036,6 +2036,6 @@
       "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
       "scripts/semver-check.sh": "5b96ed39779dff7383e07c20fad7726ae727290c42343ecf11d38dae5b10117a"
     },
-    "digest": "ded112f39b039330332690cbecf5849a35ba3a58eafe0bb72add8af70f9cba57"
+    "digest": "2910c518cdd960471a20ff6f04aa96783c05fb9a69b2eb3282b96b275cfdf9e2"
   }
 }
