@@ -6,6 +6,8 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-14
+
 ### Added
 
 - Added native Anthropic and Bedrock JSON Schema output, strict tool metadata,

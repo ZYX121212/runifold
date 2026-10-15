@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "runifold",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "rust_version": "1.88",
   "generated_by": "python3 scripts/ai-knowledge.py --write",
   "architecture": {
@@ -1948,7 +1948,7 @@
     "algorithm": "sha256",
     "inputs": {
       "AGENTS.md": "b6d53481b80e9b150b4b3f8d28dee1890a017d2599d3b2c1909915803941c676",
-      "Cargo.toml": "67e290a24f2312f9a5b22eccdfaafd2e8d1389d5f6d458a2220ece09e6f7eaee",
+      "Cargo.toml": "e00f2b857829142e12cf7cf19688814dd0df6b31bb651fb291b6495a9388fde8",
       "ai/architecture.json": "b76f844d22f9b5020b79ad402d9d2985bb732e13958322cf4e778713b2212343",
       "ai/diagnostics.json": "350aca8f7a3ed38532f291764ecac5b1074eb0014c27ffc3d74d15516a4a4c97",
       "ai/schemas/runifold-ai.schema.json": "acac3f6396e0f24809d4ee26501c3aaa54421857c296b6a7c2dc195e26aaee60",
@@ -2017,7 +2017,7 @@
       "crates/runifold/tests/ai_api_contract.rs": "351d7f34961f30622599243b68e555cd72e80c176cd0ce6588e19f05740e42e6",
       "crates/runifold/tests/typed_tool_macro.rs": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be",
       "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
-      "docs/PROVIDERS.md": "a311438de4271dd1545e38b025fab28e7ca565aee198b58e5582a2acb12a3223",
+      "docs/PROVIDERS.md": "470ea6d9b29dc665e09d703aa6a2d9caad9942030bad197a4ab496f54bee4b1a",
       "docs/RELEASING.md": "edf993da8c83ccc6f7885d14e014a649fdcc99cb01a7bd70840269956f76fb83",
       "docs/ai/catalog.json": "2aef16cfc2673f5bc383bfd942c80fbf8d57d01e46a288da6a027052ef4096f2",
       "docs/rfcs/0013-agent-callable-effects.md": "ee1dd43df9d5859e93a5b5f93dd01f6634b5e5e4dcbb07c16d887f4a5d89ef17",
@@ -2036,6 +2036,6 @@
       "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
       "scripts/semver-check.sh": "5b96ed39779dff7383e07c20fad7726ae727290c42343ecf11d38dae5b10117a"
     },
-    "digest": "2910c518cdd960471a20ff6f04aa96783c05fb9a69b2eb3282b96b275cfdf9e2"
+    "digest": "797809ddad62a77fc4e043fa3b0247b48383366883e54f123f89f7286c44f052"
   }
 }

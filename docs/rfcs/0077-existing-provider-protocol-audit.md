@@ -1,6 +1,6 @@
 # RFC 0077: Existing provider protocol audit
 
-- Status: Implemented, pending release
+- Status: Implemented in 0.10.3
 - Reviewed: 2026-10-14
 - Scope: existing transport interfaces; independent Live, Interactions, hosted
   Agent, Files and Batch services are outside this audit.
@@ -78,8 +78,7 @@ contracts without vendor credentials. Native Anthropic/Gemini/Ollama use SSE or
 NDJSON internally for both application modes. Native model/schema support and
 real account integration still require opt-in live tests. Unsupported JSON
 Schema constraints are never silently stripped; vendor validation may reject
-schemas outside its supported subset. No release has been published by this
-change.
+schemas outside its supported subset. Release 0.10.3 includes these corrections.
 
 ## Local validation
 
