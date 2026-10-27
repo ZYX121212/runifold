@@ -10,16 +10,32 @@ pub fn failure(code: &str, kind: &str, safety: &str, message: &str, run: &RunCon
 }
 
 pub fn agent_error(error: &AgentError, run: &RunContext) -> Value {
-    let kind = format!("{:?}", error.run_error_kind());
+    let classification = error.run_error_kind();
+    let kind = format!("{classification:?}");
     let mut value = failure(
         error.diagnostic_code(),
         &kind,
         &format!("{:?}", error.retry_safety()),
-        "Native Agent execution failed; inspect the error code and safe diagnostics",
+        classification.recommendation(),
         run,
     );
     if let AgentError::Model(model) = error {
-        value["error"]["diagnostics"] = json!(model.diagnostic_metadata());
+        let diagnostics = model.diagnostic_metadata();
+        value["error"]["diagnostics"] = json!(diagnostics);
+        value["error"]["diagnostics"]["sdk.model_error_kind"] = json!(model.kind);
+        match diagnostics.get("http.status").and_then(Value::as_u64) {
+            Some(401 | 403) => {
+                value["error"]["message"] = json!(
+                    "Check provider credentials and endpoint permissions before starting another operation"
+                )
+            }
+            Some(429) => {
+                value["error"]["message"] = json!(
+                    "Review provider quota and retry-after diagnostics; preserve the native retry-safety decision"
+                )
+            }
+            _ => {}
+        }
     }
     value
 }

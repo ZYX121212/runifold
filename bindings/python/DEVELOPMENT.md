@@ -12,7 +12,8 @@ cargo clippy --manifest-path bindings/python/Cargo.toml --all-targets --all-feat
 
 Create a virtual environment, install maturin and the `[test]` extra, then build a
 wheel. Install that wheel before running `python -m pytest bindings/python/tests`.
-Run `python -m mypy --config-file bindings/python/pyproject.toml bindings/python/python/runifold`.
+Run `ruff check bindings/python/python bindings/python/tests bindings/python/examples`
+and `ruff format --check` on the same paths. Run `python -m mypy --config-file bindings/python/pyproject.toml bindings/python/python/runifold`.
 The tests exercise actual native Agents and all five HTTP protocol selections on
 loopback servers. No vendor credentials are needed.
 
@@ -41,7 +42,7 @@ Catch `RunifoldError` and inspect `code`, `kind`, `retry_safety`, `run_id`, `usa
 and `diagnostics`. `Safe` means the native boundary regards replay as safe;
 `Unknown` means do not automatically repeat a non-idempotent action. A cancelled
 local request may retain unknown remote execution and charge state. The binding
-preserves the native classification, including conservative classification of
+preserves all five native retry classifications, including conservative classification of
 queued cancellation. Do not infer replay safety from a Python exception class.
 Configuration/type errors before native execution use `ValueError`/`TypeError`.
 Client admission errors are typed and safe; shutdown of a still-running sync
@@ -52,8 +53,11 @@ capacity stays occupied until the blocking work actually returns.
 The SDK selects native streaming delivery for its Client runtime, including
 `agent.run()` which collects the canonical result. This allows `agent.stream()`
 to expose actual incremental events. It does not synthesize deltas from a final
-response. A custom base URL is the complete API prefix; include a trailing slash
-(e.g. `/v1/` for OpenAI/Anthropic and `/v1beta/` for Gemini).
+response. A custom base URL is the complete API prefix; a missing trailing slash is
+normalized without removing its last path segment (e.g. `/v1` for OpenAI/Anthropic
+and `/v1beta` for Gemini). Query and fragment syntax is retained for native
+validation. HTTP failures include the safe native model category and corrective
+actions without copying upstream messages.
 
 ## Supported surface
 
@@ -73,3 +77,8 @@ response. A custom base URL is the complete API prefix; include a trailing slash
 
 The explicit `runifold.testing` API uses the Rust scripted test provider. It is
 not an automatic production fallback.
+
+Linux CI builds x86_64 wheels in a manylinux_2_28 container and asks maturin to
+reject wheels incompatible with PyPI platform policy. macOS and Windows use
+native builds. The independent native lockfile is audited separately from the
+Rust publication workspace. These checks do not publish packages externally.

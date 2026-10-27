@@ -1,14 +1,23 @@
 """Installed-extension contracts: every execution below runs the Rust Agent."""
+
 import asyncio
 import contextvars
-from importlib.metadata import version
+import hashlib
 import json
 import threading
+from importlib.metadata import version
+from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
 import pytest
-
-from runifold import Budget, Client, RetrySafety, RunifoldError, ToolContext, ToolOutput, tool
+from pydantic import BaseModel, ConfigDict
+from runifold import (
+    Budget,
+    Client,
+    RetrySafety,
+    RunifoldError,
+    ToolContext,
+    tool,
+)
 from runifold.testing import recorded_requests, scripted_client, text, tool_call
 
 
@@ -34,21 +43,34 @@ async def eventually(predicate, timeout=2):
     async def poll():
         while not predicate():
             await asyncio.sleep(0.005)
+
     await asyncio.wait_for(poll(), timeout)
 
 
 async def test_installed_version_and_payload_free_fingerprints():
     async with scripted_client(text("ready")) as client:
         environment = client.environment()
-        assert environment["sdk_version"] == environment["native_version"] == version("runifold-sdk")
-        assert len(environment["native_lock_sha256"]) == len(environment["native_artifact_sha256"]) == 64
+        assert (
+            environment["sdk_version"] == environment["native_version"] == version("runifold-sdk")
+        )
+        assert (
+            len(environment["native_lock_sha256"])
+            == len(environment["native_artifact_sha256"])
+            == 64
+        )
+        expected_lock = hashlib.sha256(
+            (Path(__file__).parents[1] / "Cargo.lock").read_bytes()
+        ).hexdigest()
+        assert environment["native_lock_sha256"] == expected_lock
         assert all("/Users/" not in value for value in environment.values())
         assert (await client.agent("a").run("start")).text == "ready"
 
 
 async def test_typed_async_tool_runs_through_native_transcript_and_budget():
     async with scripted_client(tool_call("greet", {"name": "Ada"}), text("done")) as client:
-        result = await client.agent("greeter", tools=[greet]).run("greet", budget=Budget(turns=2, tool_calls=1))
+        result = await client.agent("greeter", tools=[greet]).run(
+            "greet", budget=Budget(turns=2, tool_calls=1)
+        )
         assert result.text == "done" and result.turns == 2 and result.tool_calls == 1
         assert result.usage["tokens"] == 4 and result.usage["tool_calls"] == 1
         assert "Hello, Ada!" in json.dumps(result.transcript)
@@ -66,7 +88,9 @@ async def test_sync_tool_preserves_explicit_structured_null():
 
 
 async def test_native_stream_retains_deltas_and_complete_outcome():
-    async with scripted_client(text("hello", chunks=["he", "llo"], metadata={"scripted.opaque": {"x": 1}})) as client:
+    async with scripted_client(
+        text("hello", chunks=["he", "llo"], metadata={"scripted.opaque": {"x": 1}})
+    ) as client:
         async with client.agent("streamer").stream("start") as stream:
             events = [event async for event in stream]
         assert "".join(event.text_delta for event in events) == "hello"
@@ -84,7 +108,10 @@ async def test_zero_budget_rejects_before_native_provider_work():
 
 
 async def test_pydantic_output_and_safe_validation_errors():
-    async with scripted_client(text('{"answer":"yes","score":3}'), text('{"answer":"private-value","score":"secret-value"}')) as client:
+    async with scripted_client(
+        text('{"answer":"yes","score":3}'),
+        text('{"answer":"private-value","score":"secret-value"}'),
+    ) as client:
         agent = client.agent("structured", output_type=Answer)
         result = await agent.run("start")
         assert result.parsed == Answer(answer="yes", score=3)
@@ -161,7 +188,9 @@ async def test_async_callback_cancel_and_deadline_are_bounded():
     client = scripted_client(tool_call("blocked", {}))
     try:
         with pytest.raises(RunifoldError) as caught:
-            await asyncio.wait_for(client.agent("deadline", tools=[blocked]).run("start", timeout=0.1), 1)
+            await asyncio.wait_for(
+                client.agent("deadline", tools=[blocked]).run("start", timeout=0.1), 1
+            )
         assert caught.value.kind == "DeadlineExceeded"
         assert entered.is_set()
         await asyncio.wait_for(stopped.wait(), 1)
@@ -174,7 +203,9 @@ async def test_checkpoint_reopens_and_completed_resume_does_not_execute(tmp_path
     async with scripted_client(text("persisted")) as client:
         original = await client.agent("durable").run_checkpointed("start", path=path)
     async with scripted_client() as reopened:
-        restored = await reopened.agent("durable").resume(path=path, checkpoint_id=original.checkpoint_id)
+        restored = await reopened.agent("durable").resume(
+            path=path, checkpoint_id=original.checkpoint_id
+        )
         assert restored.text == original.text and restored.usage == original.usage
         assert restored.checkpoint_id == original.checkpoint_id
         assert recorded_requests(reopened) == []
@@ -187,7 +218,12 @@ def test_client_reuse_across_event_loops_preserves_contextvars():
     async def inspect_trace() -> str:
         return trace.get()
 
-    client = scripted_client(tool_call("inspect_trace", {}), text("one"), tool_call("inspect_trace", {}), text("two"))
+    client = scripted_client(
+        tool_call("inspect_trace", {}),
+        text("one"),
+        tool_call("inspect_trace", {}),
+        text("two"),
+    )
 
     async def call(value):
         trace.set(value)
@@ -202,7 +238,11 @@ def test_client_reuse_across_event_loops_preserves_contextvars():
 def test_production_client_does_not_leak_endpoint_or_credentials():
     secret = "credential-do-not-print"
     with pytest.raises(ValueError) as caught:
-        Client(model="test", api_key=secret, base_url=f"https://example.invalid/?key={secret}")
+        Client(
+            model="test",
+            api_key=secret,
+            base_url=f"https://example.invalid/?key={secret}",
+        )
     assert secret not in str(caught.value)
     client = Client(model="test", api_key=secret, base_url="https://example.invalid/v1")
     assert secret not in repr(client)
@@ -211,54 +251,61 @@ def test_production_client_does_not_leak_endpoint_or_credentials():
 
 
 async def test_early_stream_close_releases_native_resources():
-    async with scripted_client(text('abcdef', chunks=['a','b','c','d','e','f']), delay_ms=20) as client:
-        async with client.agent('early').stream('hello') as stream:
+    async with scripted_client(
+        text("abcdef", chunks=["a", "b", "c", "d", "e", "f"]), delay_ms=20
+    ) as client:
+        async with client.agent("early").stream("hello") as stream:
             async for event in stream:
                 if event.text_delta:
                     break
-        assert client.snapshot()['active_runs'] == 0
-        assert all(pool['active'] == 0 for pool in client.snapshot()['model']['pools'])
+        assert client.snapshot()["active_runs"] == 0
+        assert all(pool["active"] == 0 for pool in client.snapshot()["model"]["pools"])
 
 
 async def test_run_admission_is_bounded_and_safe():
-    async with scripted_client(text('one'), delay_ms=20, run_concurrency=1) as client:
-        first = client.agent('first').start('one')
+    async with scripted_client(text("one"), delay_ms=20, run_concurrency=1) as client:
+        first = client.agent("first").start("one")
         with pytest.raises(RunifoldError) as caught:
-            client.agent('second').start('two')
-        assert client.snapshot()['limits']['run_concurrency'] == 1
-        assert caught.value.kind == 'AdmissionDenied'
+            client.agent("second").start("two")
+        assert client.snapshot()["limits"]["run_concurrency"] == 1
+        assert caught.value.kind == "AdmissionDenied"
         assert caught.value.retry_safety is RetrySafety.SAFE
         await first.aclose()
-        assert client.snapshot()['active_runs'] == 0
+        assert client.snapshot()["active_runs"] == 0
 
 
 async def test_checkpoint_rejects_changed_tool_contract(tmp_path):
-    path = str(tmp_path / 'schema.sqlite')
-    async with scripted_client(text('saved')) as client:
-        saved = await client.agent('stable', tools=[greet]).run_checkpointed('hello', path=path)
+    path = str(tmp_path / "schema.sqlite")
+    async with scripted_client(text("saved")) as client:
+        saved = await client.agent("stable", tools=[greet]).run_checkpointed("hello", path=path)
     async with scripted_client() as client:
         with pytest.raises(RunifoldError):
-            await client.agent('stable').resume(path=path, checkpoint_id=saved.checkpoint_id)
+            await client.agent("stable").resume(path=path, checkpoint_id=saved.checkpoint_id)
         assert recorded_requests(client) == []
 
 
 async def test_raw_callback_exception_is_not_exposed_and_write_is_not_repeated():
     calls = []
-    @tool(effect='non_idempotent_write')
+
+    @tool(effect="non_idempotent_write")
     async def write() -> str:
         calls.append(1)
-        raise RuntimeError('private password and payload')
-    async with scripted_client(tool_call('write', {}), text('handled')) as client:
-        result = await client.agent('writer', tools=[write]).run('write once')
+        raise RuntimeError("private password and payload")
+
+    async with scripted_client(tool_call("write", {}), text("handled")) as client:
+        result = await client.agent("writer", tools=[write]).run("write once")
         assert calls == [1]
-        assert 'private password' not in json.dumps(result.canonical)
+        assert "private password" not in json.dumps(result.canonical)
         assert result.tool_calls == 1
 
 
-async def test_cancelled_sqlite_startup_retains_admission_until_actual_completion(tmp_path):
+async def test_cancelled_sqlite_startup_retains_admission_until_actual_completion(
+    tmp_path,
+):
     import subprocess
     import sys
-    path = str(tmp_path / 'locked.sqlite')
+
+    path = str(tmp_path / "locked.sqlite")
     script = """
 import sqlite3, sys
 connection = sqlite3.connect(sys.argv[1])
@@ -271,26 +318,33 @@ connection.rollback()
 connection.close()
 """
     # Use a separate process so this is a real OS-level competing database lock.
-    holder = subprocess.Popen([sys.executable, '-u', '-c', script, path],
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    assert await asyncio.wait_for(asyncio.to_thread(holder.stdout.readline), 5) == 'locked\n'
-    client = scripted_client(text('unused'), run_concurrency=1)
+    holder = subprocess.Popen(
+        [sys.executable, "-u", "-c", script, path],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert await asyncio.wait_for(asyncio.to_thread(holder.stdout.readline), 5) == "locked\n"
+    client = scripted_client(text("unused"), run_concurrency=1)
     try:
-        task = asyncio.create_task(client.agent('locked').run_checkpointed('hello', path=path))
-        await eventually(lambda: client.snapshot()['active_checkpoint_operations'] == 1)
+        task = asyncio.create_task(client.agent("locked").run_checkpointed("hello", path=path))
+        await eventually(lambda: client.snapshot()["active_checkpoint_operations"] == 1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 1)
-        assert client.snapshot()['active_runs'] == 1
+        assert client.snapshot()["active_runs"] == 1
         with pytest.raises(RunifoldError) as caught:
-            client.agent('bounded').start('must not start another database operation')
-        assert caught.value.kind == 'AdmissionDenied'
+            client.agent("bounded").start("must not start another database operation")
+        assert caught.value.kind == "AdmissionDenied"
         with pytest.raises(TimeoutError):
             await client.aclose(timeout=0.05)
-        assert client.snapshot()['active_checkpoint_operations'] == 1
+        assert client.snapshot()["active_checkpoint_operations"] == 1
+        with pytest.raises(RunifoldError) as closed:
+            client.agent("closed").start("must remain closed")
+        assert closed.value.code == "runifold.client_closed"
         assert recorded_requests(client) == []
     finally:
         await asyncio.to_thread(holder.communicate, "release\n", timeout=5)
         await client.aclose(timeout=5)
-    assert client.snapshot()['active_runs'] == 0
-    assert client.snapshot()['active_checkpoint_operations'] == 0
+    assert client.snapshot()["active_runs"] == 0
+    assert client.snapshot()["active_checkpoint_operations"] == 0

@@ -1,11 +1,13 @@
 """Typed application values; execution and accounting remain native."""
+
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-import json
-from typing import Any, Generic, Mapping, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -18,6 +20,10 @@ def encode(value: Any) -> str:
 
 class RetrySafety(str, Enum):
     SAFE = "Safe"
+    REQUIRES_IDEMPOTENCY = "RequiresIdempotency"
+    UNSAFE_AFTER_VISIBLE_OUTPUT = "UnsafeAfterVisibleOutput"
+    UNSAFE_AFTER_SIDE_EFFECT = "UnsafeAfterSideEffect"
+    # Kept for the original SDK-local structured validation error contract.
     UNSAFE = "Unsafe"
     UNKNOWN = "Unknown"
 
@@ -51,8 +57,13 @@ class Budget:
                 raise ValueError("Budget limits must be nonnegative 64-bit integers or None")
 
     def to_native(self) -> dict[str, int | None]:
-        return {"tokens": self.tokens, "cost_microusd": self.cost_microusd,
-                "turns": self.turns, "tool_calls": self.tool_calls, "delegations": self.delegations}
+        return {
+            "tokens": self.tokens,
+            "cost_microusd": self.cost_microusd,
+            "turns": self.turns,
+            "tool_calls": self.tool_calls,
+            "delegations": self.delegations,
+        }
 
 
 @dataclass(frozen=True)
@@ -86,17 +97,33 @@ class Outcome(Generic[T]):
         parsed = None
         if output_type is not None:
             try:
-                parsed = TypeAdapter(output_type).validate_json(encode(message["parsed"]), strict=True)
+                parsed = TypeAdapter(output_type).validate_json(
+                    encode(message["parsed"]), strict=True
+                )
             except ValidationError as error:
                 # Pydantic's normal exception includes model output. Do not put
                 # that payload into exception text or the chained traceback.
-                raise RunifoldError({"code": "runifold.structured_output", "kind": "InvalidOutput",
-                    "retry_safety": "Unsafe", "run_id": message["run_id"], "usage": native["usage"],
-                    "message": "Structured response failed local type validation",
-                    "diagnostics": {"validation.error_count": error.error_count()}}) from None
-        return cls(run_id=message["run_id"], text=message["text"], usage=native["usage"],
-                   turns=native["turns"], tool_calls=native["tool_calls"],
-                   checkpoint_id=message.get("checkpoint_id"), parsed=parsed, _canonical=native)
+                raise RunifoldError(
+                    {
+                        "code": "runifold.structured_output",
+                        "kind": "InvalidOutput",
+                        "retry_safety": "Unsafe",
+                        "run_id": message["run_id"],
+                        "usage": native["usage"],
+                        "message": "Structured response failed local type validation",
+                        "diagnostics": {"validation.error_count": error.error_count()},
+                    }
+                ) from None
+        return cls(
+            run_id=message["run_id"],
+            text=message["text"],
+            usage=native["usage"],
+            turns=native["turns"],
+            tool_calls=native["tool_calls"],
+            checkpoint_id=message.get("checkpoint_id"),
+            parsed=parsed,
+            _canonical=native,
+        )
 
 
 @dataclass(frozen=True)

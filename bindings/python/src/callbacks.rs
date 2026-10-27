@@ -162,16 +162,12 @@ impl Tool for PythonTool {
                 )
             })? {
                 CallbackReply::Output { output } => {
-                    let structured = output.get("structured_content").cloned();
-                    let mut result: ToolOutput = serde_json::from_value(output).map_err(|_| {
+                    let result: ToolOutput = serde_json::from_value(output).map_err(|_| {
                         ToolError::local(
                             ToolErrorKind::InvalidOutput,
                             "Python callback returned invalid canonical content",
                         )
                     })?;
-                    // Preserve explicit JSON null separately from an absent
-                    // structured channel; Option<Value> alone cannot do this.
-                    result.structured_content = structured;
                     Ok(result)
                 }
                 CallbackReply::Error { error } => Err(error),

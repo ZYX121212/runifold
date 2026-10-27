@@ -2099,13 +2099,13 @@
     "freshness": {
       "algorithm": "sha256",
       "inputs": {
-        "AGENTS.md": "b6d53481b80e9b150b4b3f8d28dee1890a017d2599d3b2c1909915803941c676",
+        "AGENTS.md": "92eb34f1c9844e7805e47e30ce69595fc053cd236bffcd70e6083b5f74dd53ae",
         "Cargo.toml": "c51603257d313a7eff19330cde3c2c003d05948220c2577cee482bf419477e13",
         "ai/architecture.json": "b76f844d22f9b5020b79ad402d9d2985bb732e13958322cf4e778713b2212343",
         "ai/diagnostics.json": "169381e6d46c8c79a62094c9af94f64455d066829f10742312177e4202cef999",
         "ai/schemas/runifold-ai.schema.json": "acac3f6396e0f24809d4ee26501c3aaa54421857c296b6a7c2dc195e26aaee60",
         "ai/validation.json": "ba19551e6bb98b5e176af0ade0e15a8d5395db021d17cda45f39f51e131701bb",
-        "bindings/python/README.md": "0fa4657064b8837ba00c4ce5bc104d4bcc0cc8fe27dec235268578b376e0e988",
+        "bindings/python/README.md": "dd52f6f80f2c500b63a859a3e54b34364f746b7e452e3ef11d94e272ed65144d",
         "crates/runifold-agent/Cargo.toml": "08de8128a5db67eea256f00cf43a837d0c2b5625fb671e3b8cdc817eba9af85b",
         "crates/runifold-agent/src/agent.rs": "2876fa4c697314e713442025cf9d2098967e2ea500c54d0494570bba8ad52c24",
         "crates/runifold-agent/src/agent/callable.rs": "8eaa6dabdd3ae4b503ac461964dfb5b55a39732f6d829544d03d366de37f6d48",
@@ -2201,12 +2201,12 @@
         "docs/rfcs/0073-production-agent-sessions.md": "f65fa4aa23c567e7b80981fe42a04cde7b167dbf99d6fdbb1a34c3343c16f6ed",
         "docs/rfcs/0075-shared-model-request-scheduling.md": "ffb475c93832ca0b752a9afab856a3aa87835d61ac395f1aa34e0417a85102ac",
         "docs/rfcs/0078-budgeted-agent-context.md": "506607b90709ce57fbc392e33f8d024f46203825ff4da0bedd1b39cf23f624f8",
-        "docs/rfcs/0079-application-sdks.md": "6628e259925eb0386933c671fb42443685e4d7695bd23f211f16a69362a1b2d3",
+        "docs/rfcs/0079-application-sdks.md": "91066c739f3624aff7483ec9c72e45495f307ae9e64302ae88da4a61e311de62",
         "scripts/ai-check.py": "0eed3e3cc4db13cc0c51983690d5949260e0f9b9b80ce18e4e376f29567bb89d",
         "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
         "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
       },
-      "digest": "3817a4ee2fac3bb63bcae4c916ba79b1b0b71e1dea5725d169e7f63a8e620779"
+      "digest": "bf0d5ba8e36f0dae200e8536a887851a623c109a553f5d3ca739239ffd52e034"
     }
   },
   "documents": {
