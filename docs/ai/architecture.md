@@ -15,6 +15,8 @@ Within `crates/runifold-agent/src/`:
 
 - `builder.rs`: fluent registration and build validation.
 - `agent/execution.rs`: loop scheduling and model turns.
+- `agent/context.rs` and `agent/context_runtime.rs`: opt-in input budgets, atomic
+  context selection and checkpointed per-turn projection reports.
 - `agent/callable.rs`: Tools, delegation, concurrency and effect integration.
 - `agent/review.rs`, `terminal_review.rs`: review gates and public reviewer contracts.
 - `completion.rs`, `structured.rs`: terminal requirements and typed decoding.

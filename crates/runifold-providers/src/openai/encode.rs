@@ -29,6 +29,7 @@ pub(crate) fn encode_request_for(
     request: &ModelRequest,
     provider: &str,
 ) -> Result<Value, ModelError> {
+    let _ = tool_dispatch_aliases(request, provider)?;
     if request.messages.is_empty() {
         return Err(invalid("a model request must contain at least one message"));
     }
@@ -71,32 +72,305 @@ pub(crate) fn encode_request_for(
     );
 
     let provider_tools = encode_provider_tools(request, provider)?;
+    if request.tools.is_empty()
+        && provider_tools.is_empty()
+        && matches!(
+            request.tool_choice,
+            ToolChoice::Required | ToolChoice::Named { .. }
+        )
+    {
+        return Err(invalid("tool choice requires at least one tool"));
+    }
     if !request.tools.is_empty() || !provider_tools.is_empty() {
         let mut tools = request
             .tools
             .iter()
-            .map(|tool| -> Result<Value, ModelError> {
-                let (parameters, strict) = function_tool_schema(tool, provider)?;
-                Ok(json!({
-                    "type": "function",
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": parameters,
-                    "strict": strict
-                }))
-            })
+            .map(|tool| encode_function_tool(tool, provider))
             .collect::<Result<Vec<_>, _>>()?;
+        tools = group_function_tools(tools)?;
         tools.extend(provider_tools);
         body.insert("tools".into(), Value::Array(tools));
     }
     body.insert(
         "tool_choice".into(),
-        encode_tool_choice(&request.tool_choice)?,
+        encode_request_tool_choice(request, provider)?,
     );
     body.insert("text".into(), encode_output_format(&request.output_format)?);
     merge_provider_options(&mut body, request, provider)?;
+    validate_model_parameters(&body, provider, false)?;
 
     Ok(Value::Object(body))
+}
+
+pub(super) fn validate_model_parameters(
+    body: &Map<String, Value>,
+    provider: &str,
+    chat: bool,
+) -> Result<(), ModelError> {
+    if provider != "openai" {
+        return Ok(());
+    }
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let family = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"]
+        .into_iter()
+        .find(|family| {
+            model == *family
+                || model.strip_prefix(family).is_some_and(|suffix| {
+                    suffix.len() == 11
+                        && suffix.starts_with("-20")
+                        && suffix.bytes().enumerate().all(|(index, byte)| {
+                            if matches!(index, 0 | 5 | 8) {
+                                byte == b'-'
+                            } else {
+                                byte.is_ascii_digit()
+                            }
+                        })
+                })
+        });
+    let Some(family) = family else {
+        return Ok(());
+    };
+    let effort = if chat {
+        body.get("reasoning_effort")
+    } else {
+        body.get("reasoning")
+            .and_then(|reasoning| reasoning.get("effort"))
+    };
+    let effort = effort
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| invalid("reasoning effort must be a string"))
+        })
+        .transpose()?
+        .unwrap_or("medium");
+    let requires_reasoning = matches!(family, "gpt-6-astra" | "gpt-6.1-sol");
+    if !matches!(effort, "none" | "low" | "medium" | "high" | "xhigh" | "max")
+        || (requires_reasoning && effort == "none")
+    {
+        return Err(invalid(
+            "selected GPT-6 model does not support that reasoning effort; use a supported effort such as low or medium",
+        ));
+    }
+    if effort != "none"
+        && (["temperature", "top_p", "top_logprobs"]
+            .iter()
+            .any(|key| body.contains_key(*key))
+            || (chat && body.contains_key("logprobs"))
+            || body
+                .get("include")
+                .and_then(Value::as_array)
+                .is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|value| value == "message.output_text.logprobs")
+                }))
+    {
+        return Err(invalid(
+            "GPT-6 reasoning requests do not accept sampling or logprob parameters; remove them rather than silently changing the request",
+        ));
+    }
+    if chat
+        && body
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty())
+        && (requires_reasoning || effort != "none")
+    {
+        return Err(invalid(
+            "use the Responses API for tools with this GPT-6 reasoning configuration",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn wire_tool_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+pub(crate) fn tool_dispatch_aliases(
+    request: &ModelRequest,
+    provider: &str,
+) -> Result<std::collections::BTreeMap<String, String>, ModelError> {
+    let mut aliases = std::collections::BTreeMap::new();
+    for tool in &request.tools {
+        if wire_tool_component(&tool.name)
+            && provider_metadata_string(&tool.metadata, provider, "tool_type")?.as_deref()
+                != Some("tool_search")
+            && provider_metadata_string(&tool.metadata, provider, "namespace")?.is_none()
+        {
+            let qualified = format!("{0}.{0}", tool.name);
+            if request.tools.iter().any(|other| other.name == qualified) {
+                return Err(invalid(
+                    "flat and namespaced tools have an ambiguous self-namespace identity; rename one tool",
+                ));
+            }
+            aliases.insert(qualified, tool.name.clone());
+        }
+    }
+    Ok(aliases)
+}
+
+pub(crate) fn apply_tool_dispatch_aliases(
+    events: &mut [runifold_model::ModelStreamEvent],
+    aliases: &std::collections::BTreeMap<String, String>,
+) {
+    use runifold_model::{ContentBlockKind, ModelStreamEvent};
+    for event in events {
+        let name = match event {
+            ModelStreamEvent::ContentBlockStarted {
+                kind: ContentBlockKind::ToolCall { name, .. },
+                ..
+            } => name,
+            ModelStreamEvent::ContentPartCompleted {
+                part: ContentPart::ToolCall(call),
+                ..
+            } => &mut call.name,
+            _ => continue,
+        };
+        if let Some(canonical) = aliases.get(name) {
+            name.clone_from(canonical);
+        }
+    }
+}
+
+fn encode_function_tool(
+    tool: &runifold_model::ToolSpec,
+    provider: &str,
+) -> Result<Value, ModelError> {
+    let kind = provider_metadata_string(&tool.metadata, provider, "tool_type")?;
+    let mut value = match kind.as_deref() {
+        Some("custom") => {
+            if tool.input_schema.get("type").and_then(Value::as_str) != Some("string") {
+                return Err(invalid(
+                    "custom tools require a canonical string input schema",
+                ));
+            }
+            let format = tool
+                .metadata
+                .get(&format!("{provider}.format"))
+                .cloned()
+                .unwrap_or_else(|| json!({"type":"text"}));
+            if !matches!(
+                format.get("type").and_then(Value::as_str),
+                Some("text" | "grammar")
+            ) {
+                return Err(invalid("custom tool format must be text or grammar"));
+            }
+            if format["type"] == "grammar"
+                && (!matches!(
+                    format.get("syntax").and_then(Value::as_str),
+                    Some("lark" | "regex")
+                ) || format.get("definition").and_then(Value::as_str).is_none_or(
+                    |definition| definition.is_empty() || definition.len() > 256 * 1024,
+                ))
+            {
+                return Err(invalid(
+                    "custom grammar requires lark/regex syntax and a bounded nonempty definition",
+                ));
+            }
+            json!({"type":"custom","name":tool.name,"description":tool.description,"format":format})
+        }
+        Some("tool_search") => {
+            if tool.name != "tool_search" {
+                return Err(invalid(
+                    "client tool search must be registered as tool_search",
+                ));
+            }
+            json!({"type":"tool_search","execution":"client","description":tool.description,"parameters":tool.input_schema})
+        }
+        None | Some("function") => {
+            let (parameters, strict) = function_tool_schema(tool, provider)?;
+            json!({"type":"function","name":tool.name,"description":tool.description,"parameters":parameters,"strict":strict})
+        }
+        Some(_) => return Err(invalid("unsupported local tool wire type")),
+    };
+    for field in ["namespace", "defer_loading", "allowed_callers", "async"] {
+        let key = format!("{provider}.{field}");
+        if let Some(option) = tool
+            .metadata
+            .get(&key)
+            .or_else(|| tool.metadata.get(&format!("openai-compatible.{field}")))
+        {
+            if kind.as_deref() == Some("tool_search") {
+                return Err(invalid(format!(
+                    "client tool search does not support `{field}`; put function/custom metadata on the tools returned by search",
+                )));
+            }
+            match field {
+                "namespace" if option.as_str().is_some_and(wire_tool_component) => {}
+                "defer_loading" | "async" if option.is_boolean() => {}
+                "allowed_callers"
+                    if option.as_array().is_some_and(|values| {
+                        !values.is_empty()
+                            && values.iter().all(|value| {
+                                matches!(value.as_str(), Some("direct" | "programmatic"))
+                            })
+                    }) => {}
+                _ => return Err(invalid(format!("invalid function tool metadata `{key}`"))),
+            }
+            value[field] = option.clone();
+        }
+    }
+    if let Some(namespace) = value.get("namespace").and_then(Value::as_str) {
+        let prefix = format!("{namespace}.");
+        let name = tool
+            .name
+            .strip_prefix(&prefix)
+            .ok_or_else(|| invalid("namespaced tool must be registered with its qualified name"))?;
+        if !wire_tool_component(name) {
+            return Err(invalid(
+                "namespaced tool names must be bounded ASCII identifiers",
+            ));
+        }
+        let description =
+            provider_metadata_string(&tool.metadata, provider, "namespace_description")?
+                .unwrap_or_else(|| format!("Tools registered in {namespace}."));
+        value["name"] = Value::String(name.into());
+        value["namespace_description"] = Value::String(description);
+    }
+    Ok(value)
+}
+
+fn group_function_tools(tools: Vec<Value>) -> Result<Vec<Value>, ModelError> {
+    let mut grouped: Vec<Value> = Vec::new();
+    for mut tool in tools {
+        if let Some(namespace) = tool
+            .as_object_mut()
+            .and_then(|tool| tool.remove("namespace"))
+        {
+            let description = tool
+                .as_object_mut()
+                .and_then(|tool| tool.remove("namespace_description"))
+                .ok_or_else(|| invalid("namespace description is missing"))?;
+            if let Some(existing) = grouped
+                .iter_mut()
+                .find(|item| item["type"] == "namespace" && item["name"] == namespace)
+            {
+                if existing["description"] != description {
+                    return Err(invalid(
+                        "tools in the same namespace must use the same namespace_description",
+                    ));
+                }
+                existing["tools"]
+                    .as_array_mut()
+                    .ok_or_else(|| invalid("namespace tools must be an array"))?
+                    .push(tool);
+            } else {
+                grouped.push(json!({"type":"namespace", "name":namespace, "description":description, "tools":[tool]}));
+            }
+        } else {
+            grouped.push(tool);
+        }
+    }
+    Ok(grouped)
 }
 
 fn encode_provider_tools(request: &ModelRequest, provider: &str) -> Result<Vec<Value>, ModelError> {
@@ -123,17 +397,43 @@ fn encode_provider_tools(request: &ModelRequest, provider: &str) -> Result<Vec<V
         .collect()
 }
 
-fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
+fn message_blocks<'a>(
+    message: &'a runifold_model::Message,
+    provider: &str,
+) -> Result<Option<&'a Vec<Value>>, ModelError> {
+    message
+        .metadata
+        .get(&format!("{provider}.message_blocks"))
+        .or_else(|| message.metadata.get("openai-compatible.message_blocks"))
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| invalid("assistant message block metadata must be an array"))
+        })
+        .transpose()
+}
+
+pub(crate) fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
     let mut input = Vec::new();
     for message in &request.messages {
         let mut message_content = Vec::new();
+        let blocks = message_blocks(message, &request.model.provider)?;
+        let mut text_index = 0;
+        let mut descriptor = None;
         for part in &message.content {
+            if matches!(part, ContentPart::Text { .. } | ContentPart::Refusal { .. }) {
+                let next = blocks.and_then(|blocks| blocks.get(text_index));
+                if next != descriptor {
+                    flush_message(&mut input, message.role, &mut message_content, descriptor)?;
+                    descriptor = next;
+                }
+                text_index += 1;
+            }
             match part {
                 ContentPart::Text { text } => {
-                    let part_type = if message.role == Role::Assistant {
-                        "output_text"
-                    } else {
-                        "input_text"
+                    let part_type = match message.role {
+                        Role::Assistant => "output_text",
+                        _ => "input_text",
                     };
                     message_content.push(json!({"type": part_type, "text": text}));
                 }
@@ -150,7 +450,7 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                     )?);
                 }
                 ContentPart::ToolCall(call) => {
-                    flush_message(&mut input, message.role, &mut message_content)?;
+                    flush_message(&mut input, message.role, &mut message_content, descriptor)?;
                     let arguments = call
                         .raw_arguments
                         .clone()
@@ -162,7 +462,7 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                     )?);
                 }
                 ContentPart::ToolResult(result) => {
-                    flush_message(&mut input, message.role, &mut message_content)?;
+                    flush_message(&mut input, message.role, &mut message_content, descriptor)?;
                     input.push(encode_tool_result(result, &request.model.provider)?);
                 }
                 ContentPart::ProviderOpaque(data)
@@ -170,7 +470,7 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                         || data.provider == "openai-compatible")
                         && data.kind == "input_item" =>
                 {
-                    flush_message(&mut input, message.role, &mut message_content)?;
+                    flush_message(&mut input, message.role, &mut message_content, descriptor)?;
                     input.push(data.value.clone());
                 }
                 ContentPart::Audio { .. } | ContentPart::ResourceLink { .. } => {
@@ -185,10 +485,11 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                         "reasoning round trips require an OpenAI input_item escape hatch",
                     ));
                 }
+                ContentPart::Refusal { text } if message.role == Role::Assistant => {
+                    message_content.push(json!({"type":"refusal", "refusal": text}));
+                }
                 ContentPart::Refusal { .. } => {
-                    return Err(unsupported(
-                        "refusal round trips are not accepted as generic message input",
-                    ));
+                    return Err(unsupported("refusal input requires an assistant message"));
                 }
                 ContentPart::Citation(_) => {
                     return Err(unsupported("citations cannot be sent as message input"));
@@ -205,7 +506,12 @@ fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
                 }
             }
         }
-        flush_message(&mut input, message.role, &mut message_content)?;
+        flush_message(&mut input, message.role, &mut message_content, descriptor)?;
+        if blocks.is_some_and(|blocks| blocks.len() != text_index) {
+            return Err(invalid(
+                "assistant message block metadata no longer matches its content",
+            ));
+        }
     }
     Ok(input)
 }
@@ -222,6 +528,25 @@ fn encode_function_call(
         ("arguments".into(), Value::String(arguments)),
         ("status".into(), Value::String("completed".into())),
     ]);
+    match provider_metadata_string(&call.metadata, provider, "tool_type")?.as_deref() {
+        Some("custom_tool_call") => {
+            let input = call
+                .arguments
+                .as_str()
+                .ok_or_else(|| invalid("custom tool canonical arguments must be a string"))?;
+            item.remove("arguments");
+            item.insert("type".into(), json!("custom_tool_call"));
+            item.insert("input".into(), json!(input));
+        }
+        Some("tool_search_call") => {
+            item.remove("name");
+            item.insert("arguments".into(), call.arguments.clone());
+            item.insert("type".into(), json!("tool_search_call"));
+            item.insert("execution".into(), json!("client"));
+        }
+        None => {}
+        Some(_) => return Err(invalid("unsupported tool call replay type")),
+    }
     if let Some(id) = provider_metadata_string(&call.metadata, provider, "id")? {
         item.insert("id".into(), Value::String(id));
     }
@@ -232,6 +557,22 @@ fn encode_function_call(
             "completed tool call `{}` cannot replay provider status `{status}`",
             call.id
         )));
+    }
+    if let Some(namespace) = provider_metadata_string(&call.metadata, provider, "namespace")? {
+        let prefix = format!("{namespace}.");
+        let name = call
+            .name
+            .strip_prefix(&prefix)
+            .or_else(|| (call.name == namespace).then_some(call.name.as_str()))
+            .ok_or_else(|| invalid("namespaced tool call must use its qualified canonical name"))?;
+        item.insert("name".into(), Value::String(name.into()));
+        item.insert("namespace".into(), Value::String(namespace));
+    }
+    if let Some(value) = call.metadata.get(&format!("{provider}.async")) {
+        if !value.is_boolean() {
+            return Err(invalid("tool async metadata must be boolean"));
+        }
+        item.insert("async".into(), value.clone());
     }
     if let Some(caller) = provider_caller(&call.metadata, provider)? {
         item.insert("caller".into(), caller);
@@ -256,15 +597,18 @@ fn provider_caller(
             "tool correlation metadata `{provider_key}` must be an object"
         ))
     })?;
-    if caller_object.get("type").and_then(Value::as_str) != Some("program")
-        || caller_object
+    let valid = match caller_object.get("type").and_then(Value::as_str) {
+        Some("direct") => true,
+        Some("program") => caller_object
             .get("caller_id")
             .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-    {
-        return Err(invalid(format!(
-            "tool correlation metadata `{provider_key}` must identify a program caller"
-        )));
+            .is_some_and(|id| !id.is_empty()),
+        _ => false,
+    };
+    if !valid {
+        return Err(invalid(
+            "tool correlation metadata must identify a direct or program caller",
+        ));
     }
     Ok(Some(caller.clone()))
 }
@@ -294,6 +638,7 @@ fn flush_message(
     input: &mut Vec<Value>,
     role: Role,
     content: &mut Vec<Value>,
+    descriptor: Option<&Value>,
 ) -> Result<(), ModelError> {
     if content.is_empty() {
         return Ok(());
@@ -305,12 +650,31 @@ fn flush_message(
     });
     if role == Role::Assistant {
         message["status"] = Value::String("completed".into());
+        if let Some(descriptor) = descriptor {
+            let descriptor = descriptor
+                .as_object()
+                .ok_or_else(|| invalid("assistant message block descriptor must be an object"))?;
+            for field in ["id", "phase"] {
+                if let Some(value) = descriptor.get(field) {
+                    if value.as_str().is_none_or(str::is_empty) {
+                        return Err(invalid(
+                            "assistant message identity and phase must be nonempty strings",
+                        ));
+                    }
+                    message[field] = value.clone();
+                }
+            }
+        }
+    } else if descriptor.is_some() {
+        return Err(invalid(
+            "assistant message block metadata cannot be used on another role",
+        ));
     }
     input.push(message);
     Ok(())
 }
 
-fn encode_image(source: &MediaSource, provider: &str) -> Result<Value, ModelError> {
+pub(super) fn encode_image(source: &MediaSource, provider: &str) -> Result<Value, ModelError> {
     if let MediaSource::ProviderFile {
         provider: owner,
         file_id,
@@ -392,6 +756,16 @@ fn require_provider_file_owner(owner: &str, provider: &str) -> Result<(), ModelE
 }
 
 fn encode_tool_result(result: &ToolResult, provider: &str) -> Result<Value, ModelError> {
+    let kind = provider_metadata_string(&result.metadata, provider, "tool_type")?;
+    if !matches!(
+        kind.as_deref(),
+        None | Some("custom_tool_call" | "tool_search_call")
+    ) {
+        return Err(invalid("unsupported tool result replay type"));
+    }
+    if kind.as_deref() == Some("tool_search_call") {
+        return encode_search_result(result);
+    }
     let mut text = Vec::new();
     let mut rich = Vec::new();
     for part in &result.content {
@@ -462,10 +836,56 @@ fn encode_tool_result(result: &ToolResult, provider: &str) -> Result<Value, Mode
         "call_id": result.call_id,
         "output": output
     });
+    if kind.as_deref() == Some("custom_tool_call") {
+        item["type"] = json!("custom_tool_call_output");
+    }
     if let Some(caller) = provider_caller(&result.metadata, provider)? {
         item["caller"] = caller;
     }
     Ok(item)
+}
+
+fn encode_search_result(result: &ToolResult) -> Result<Value, ModelError> {
+    let tools = result
+        .structured_content
+        .as_ref()
+        .and_then(|value| {
+            value
+                .as_array()
+                .or_else(|| value.get("tools").and_then(Value::as_array))
+        })
+        .ok_or_else(|| invalid("client tool search must return a structured tools array"))?;
+    if result.is_error {
+        return Err(invalid(
+            "failed client tool search cannot be presented as successful discovery",
+        ));
+    }
+    Ok(
+        json!({"type":"tool_search_output","execution":"client","call_id":result.call_id,"status":"completed","tools":tools}),
+    )
+}
+
+fn encode_request_tool_choice(request: &ModelRequest, provider: &str) -> Result<Value, ModelError> {
+    let mut choice = encode_tool_choice(&request.tool_choice)?;
+    if let ToolChoice::Named { name } = &request.tool_choice
+        && let Some(tool) = request.tools.iter().find(|tool| tool.name == *name)
+    {
+        if provider_metadata_string(&tool.metadata, provider, "namespace")?.is_some() {
+            return Err(unsupported(
+                "the documented forced-tool schema has no namespace selector; use an explicitly narrowed tool set with Required",
+            ));
+        }
+        match provider_metadata_string(&tool.metadata, provider, "tool_type")?.as_deref() {
+            Some("custom") => choice["type"] = json!("custom"),
+            Some("tool_search") => {
+                return Err(unsupported(
+                    "client tool search does not have a documented named-tool choice; use Required with an explicit tool set",
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(choice)
 }
 
 fn encode_tool_choice(choice: &ToolChoice) -> Result<Value, ModelError> {
@@ -608,7 +1028,7 @@ mod tests {
 
     use runifold_model::{
         ContentPart, MediaSource, Message, ModelErrorKind, ModelRef, ModelRequest, OutputFormat,
-        ProviderToolSpec, ResponseMode, Role, ToolCall, ToolResult, ToolSpec,
+        ProviderToolSpec, ResponseMode, Role, ToolCall, ToolChoice, ToolResult, ToolSpec,
     };
     use schemars::{JsonSchema, schema_for};
 
@@ -665,6 +1085,19 @@ mod tests {
         assert_eq!(encoded["tools"][0]["strict"], false);
         assert_eq!(encoded["text"]["format"]["type"], "json_schema");
         assert_eq!(encoded["input"][0]["content"][0]["type"], "input_text");
+    }
+
+    #[test]
+    fn rejects_required_tool_choice_without_tools() {
+        let mut request = ModelRequest::new(
+            ModelRef::new("openai", "test-model"),
+            Message::user("lookup"),
+        );
+        request.tool_choice = ToolChoice::Required;
+
+        let error = encode_request(&request).unwrap_err();
+
+        assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
     }
 
     #[test]

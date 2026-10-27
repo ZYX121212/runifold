@@ -60,9 +60,9 @@ impl std::fmt::Debug for ModelRoute {
 
 /// Explicit authority for selecting another physical model after a failure.
 ///
-/// Safe errors are always eligible. Errors with unknown retry safety are
+/// Safe provider errors are eligible. Errors with unknown retry safety are
 /// eligible only when their kind is explicitly added. Cancellation and errors
-/// marked unsafe are never eligible.
+/// marked unsafe are never eligible. Local admission denial is never routed around.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModelFallbackPolicy {
     unknown_safety_kinds: Vec<ModelErrorKind>,
@@ -79,7 +79,7 @@ impl ModelFallbackPolicy {
     /// Allows fallback for one error kind whose retry safety is unknown.
     ///
     /// This is explicit authority to risk duplicate provider cost. It never
-    /// overrides cancellation or an error marked unsafe.
+    /// overrides cancellation, local admission denial, or an error marked unsafe.
     #[must_use]
     pub fn allow_unknown(mut self, kind: ModelErrorKind) -> Self {
         if !self.unknown_safety_kinds.contains(&kind) {
@@ -89,7 +89,10 @@ impl ModelFallbackPolicy {
     }
 
     fn permits(&self, error: &ModelError) -> bool {
-        if error.kind == ModelErrorKind::Cancelled {
+        if matches!(
+            error.kind,
+            ModelErrorKind::Cancelled | ModelErrorKind::AdmissionDenied
+        ) {
             return false;
         }
         match error.retry_safety {
@@ -172,7 +175,17 @@ impl ModelRouterBuilder {
     /// Enables an independent circuit breaker for every physical route.
     #[must_use]
     pub fn circuit_breaker(mut self, config: CircuitBreakerConfig) -> Self {
-        self.circuit_breaker = Some(config);
+        self.circuit_breaker = config.is_enabled().then_some(config);
+        self
+    }
+
+    /// Disables route-health suppression without changing retry/fallback policy.
+    ///
+    /// A router's clones normally share health for each physical route. Use this
+    /// when that fault-sharing scope is inappropriate for independent tasks.
+    #[must_use]
+    pub fn without_circuit_breaker(mut self) -> Self {
+        self.circuit_breaker = None;
         self
     }
 

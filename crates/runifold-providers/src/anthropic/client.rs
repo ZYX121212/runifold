@@ -308,7 +308,8 @@ fn transport_error(error: &reqwest::Error, deadline: Option<Instant>) -> ModelEr
     } else {
         ModelErrorKind::Transport
     };
-    let mut model_error = ModelError::local(kind, format!("Anthropic transport failed: {error}"));
+    let mut model_error =
+        ModelError::local(kind, crate::reliability::transport_failure_message(error));
     model_error.provider = Some("anthropic".into());
     crate::reliability::classify_transport(error, &mut model_error);
     model_error
@@ -325,10 +326,7 @@ fn http_error(
         .as_ref()
         .and_then(|payload| payload.get("error"))
         .unwrap_or(&Value::Null);
-    let message = error.get("message").and_then(Value::as_str).map_or_else(
-        || format!("Anthropic returned HTTP {status}"),
-        std::convert::Into::into,
-    );
+    let message = crate::reliability::http_failure_message(status);
     let mut model_error = ModelError::local(ModelErrorKind::Provider, message);
     model_error.provider = Some("anthropic".into());
     crate::reliability::classify_status(status, &mut model_error);

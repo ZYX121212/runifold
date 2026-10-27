@@ -91,5 +91,5 @@ async fn rejects_midstream_provider_errors() {
         .unwrap_err();
 
     assert_eq!(error.kind, ModelErrorKind::Provider);
-    assert_eq!(error.message, "model runner crashed");
+    assert!(!error.to_string().contains("model runner crashed"));
 }

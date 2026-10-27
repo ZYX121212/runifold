@@ -112,15 +112,20 @@ impl CapabilitySet {
 
     /// Returns whether every capability in this set is also granted by
     /// `authority`.
+    ///
+    /// Grants must retain the complete parent descriptor. Selecting fewer
+    /// capabilities attenuates authority; redefining an existing ID does not.
     pub fn is_subset_of(&self, authority: &Self) -> bool {
-        self.entries.keys().all(|id| authority.contains(*id))
+        self.first_missing_from(authority).is_none()
     }
 
-    /// Returns the first capability not granted by `authority`.
+    /// Returns the first capability absent from or inconsistent with `authority`.
+    ///
+    /// A matching ID with a different descriptor is not the same grant.
     pub fn first_missing_from(&self, authority: &Self) -> Option<&CapabilityDescriptor> {
         self.entries
             .values()
-            .find(|capability| !authority.contains(capability.id))
+            .find(|capability| authority.get(capability.id) != Some(*capability))
     }
 
     /// Iterates over granted capabilities.
@@ -160,6 +165,37 @@ mod tests {
             effect: EffectClass::Pure,
             risk: RiskLevel::Low,
             metadata: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn subset_checks_reject_redefined_grants_with_the_same_identity() {
+        let granted = capability("granted");
+        let mut authority = CapabilitySet::new();
+        authority.grant(granted.clone());
+        let mutations: [fn(&mut CapabilityDescriptor); 8] = [
+            |item| item.name = "different-tool".into(),
+            |item| item.version = "2".into(),
+            |item| item.kind = CapabilityKind::Agent,
+            |item| item.input_schema = json!({"type": "string"}),
+            |item| item.output_schema = json!({"type": "integer"}),
+            |item| item.effect = EffectClass::NonIdempotentWrite,
+            |item| item.risk = RiskLevel::Critical,
+            |item| {
+                item.metadata.insert("policy.scope".into(), json!("other"));
+            },
+        ];
+        for mutate in mutations {
+            let mut redefined = granted.clone();
+            mutate(&mut redefined);
+            let mut requested = CapabilitySet::new();
+            requested.grant(redefined.clone());
+            assert!(requested.contains(granted.id), "identity is unchanged");
+            assert!(
+                !requested.is_subset_of(&authority),
+                "a grant cannot redefine its contract"
+            );
+            assert_eq!(requested.first_missing_from(&authority), Some(&redefined));
         }
     }
 

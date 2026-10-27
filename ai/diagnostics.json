@@ -115,7 +115,7 @@
       "causes": [
         "The CapabilityDenied boundary rejected the operation; inspect the safe typed error and execution state."
       ],
-      "canonical_fix": "Grant only the effect capability intended for this Run.",
+      "canonical_fix": "Use the current granted capability descriptor and its effect classification. Do not relabel writes to enable safe retries.",
       "recipe": "add-effect",
       "validation": [
         "cargo test -p runifold-effect --locked"
@@ -676,6 +676,36 @@
       "recipe": "public-api-change",
       "validation": [
         "cargo test -p runifold-cli --locked"
+      ]
+    },
+    {
+      "code": "RF-PROVIDER-010",
+      "title": "AdmissionDenied",
+      "meaning": "A local model request was rejected before physical provider dispatch.",
+      "source": "crates/runifold-model/src/error.rs",
+      "symbol": "ModelErrorKind::AdmissionDenied",
+      "causes": [
+        "The finite waiting queue is full, the token reservation is missing or impossible, admission identities are exhausted, or scheduler wrappers are nested."
+      ],
+      "canonical_fix": "Inspect runifold.scheduler.reason. Reduce producer concurrency or request size, supply a reviewed token estimator, or explicitly increase configured limits. Admission denial is safe but is never automatically retried or routed around.",
+      "recipe": "schedule-model-requests",
+      "validation": [
+        "cargo test -p runifold-model scheduling:: --locked"
+      ]
+    },
+    {
+      "code": "RF-AI-ENVIRONMENT-001",
+      "title": "EnvironmentFingerprintUnavailable",
+      "meaning": "A complete locked source/resolution identity could not be established.",
+      "source": "crates/runifold-cli/src/ai/environment.rs",
+      "symbol": "EnvironmentOptions",
+      "causes": [
+        "Missing lock or offline dependency sources, unsupported source files, or concurrent source changes."
+      ],
+      "canonical_fix": "Resolve the intended dependencies separately, keep Cargo.lock and sources stable, then rerun runifold ai environment with the intended features and target. Do not interpret declaration ranges as resolved versions.",
+      "recipe": "schedule-model-requests",
+      "validation": [
+        "cargo test -p runifold-cli --test environment --locked"
       ]
     }
   ]

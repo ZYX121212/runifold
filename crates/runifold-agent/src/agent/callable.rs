@@ -76,7 +76,7 @@ impl Agent {
                 let correlation_metadata = call
                     .metadata
                     .iter()
-                    .filter(|(key, _)| key.ends_with(".caller"))
+                    .filter(|(key, _)| key.ends_with(".caller") || key.ends_with(".tool_type"))
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect();
                 progress.transcript.push(tool_result_message(

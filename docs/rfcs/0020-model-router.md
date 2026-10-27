@@ -77,9 +77,18 @@ Successful responses retain a canonical provider event containing:
 - distinct attempt identity;
 - safe summaries of prior failures.
 
-Failure summaries contain route, target, error kind, and retry safety. Error
-messages and model content are not copied. When routing fails, the same
-summaries are attached to `ModelError.metadata`.
+Failure summaries contain route, target, error kind, retry safety, a stable
+`diagnostic_code`, and bounded `diagnostics` from
+`ModelError::diagnostic_metadata`. The projection retains validated HTTP status,
+retry timing, known provider error type/code classifications, and local request
+lifecycle facts. Unknown classifications are omitted; request IDs, parameter
+names, messages, arbitrary metadata and model content are not copied. This is
+an allowlist of values as well as keys, not a string truncation policy.
+
+Successful fallback retains every prior attempt's projection. When routing
+fails, the same summaries are attached to `ModelError.metadata` while the final
+error retains its original metadata and retry safety. The projection is for
+diagnosis and cannot authorize retry or imply that upstream execution stopped.
 
 ## Capabilities
 

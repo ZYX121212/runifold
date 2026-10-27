@@ -29,6 +29,8 @@ jobs:
         run: |
           python3 scripts/ai-knowledge.py --check
           python3 scripts/test-ai-system.py
+          python3 scripts/test-soak-evidence.py
+          python3 scripts/test-semver-baseline.py
           python3 scripts/ai-check.py --json
 
       - name: Verify CLI and public diagnostic contracts
@@ -265,6 +267,11 @@ jobs:
           cargo +1.88.0 test -p runifold-core \
             --target wasm32-unknown-unknown \
             --test wasm_edge \
+            --locked
+          cargo +1.88.0 test -p runifold \
+            --target wasm32-unknown-unknown \
+            --no-default-features \
+            --test wasm_model_scheduling \
             --locked
 
       - name: Install pinned headless Chrome and WebDriver

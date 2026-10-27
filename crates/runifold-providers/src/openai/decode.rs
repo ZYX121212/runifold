@@ -11,7 +11,6 @@ use serde_json::Value;
 use super::OpenAiResponsesDialect;
 
 /// Stateful translator from `OpenAI` Responses SSE payloads to canonical events.
-#[derive(Debug)]
 pub struct OpenAiEventDecoder {
     provider: String,
     dialect: OpenAiResponsesDialect,
@@ -19,13 +18,34 @@ pub struct OpenAiEventDecoder {
     completed: bool,
     next_index: u32,
     block_indices: BTreeMap<String, u32>,
+    content_values: BTreeMap<u32, String>,
+    message_blocks: BTreeMap<u32, Value>,
+    custom_inputs: BTreeMap<u32, String>,
+    function_inputs: BTreeMap<u32, String>,
+    tool_identities: BTreeMap<u32, Value>,
+    completed_tool_items: BTreeSet<u32>,
+    tool_call_ids: BTreeSet<String>,
     open_content_indices: BTreeSet<u32>,
     open_tool_indices: BTreeSet<u32>,
     saw_tool_call: bool,
+    incomplete_message_index: Option<u64>,
     request_id: Option<String>,
     last_sequence_number: Option<u64>,
     response_id: Option<String>,
     response_model: Option<String>,
+}
+
+impl std::fmt::Debug for OpenAiEventDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiEventDecoder")
+            .field("provider", &self.provider)
+            .field("dialect", &self.dialect)
+            .field("started", &self.started)
+            .field("completed", &self.completed)
+            .field("open_content_blocks", &self.open_content_indices.len())
+            .field("open_tool_calls", &self.open_tool_indices.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl OpenAiEventDecoder {
@@ -43,9 +63,17 @@ impl OpenAiEventDecoder {
             completed: false,
             next_index: 0,
             block_indices: BTreeMap::new(),
+            content_values: BTreeMap::new(),
+            message_blocks: BTreeMap::new(),
+            custom_inputs: BTreeMap::new(),
+            function_inputs: BTreeMap::new(),
+            tool_identities: BTreeMap::new(),
+            completed_tool_items: BTreeSet::new(),
+            tool_call_ids: BTreeSet::new(),
             open_content_indices: BTreeSet::new(),
             open_tool_indices: BTreeSet::new(),
             saw_tool_call: false,
+            incomplete_message_index: None,
             request_id: None,
             last_sequence_number: None,
             response_id: None,
@@ -126,6 +154,18 @@ impl OpenAiEventDecoder {
             .ok_or_else(|| protocol("OpenAI stream event is missing a string `type`"))?
             .to_owned();
         self.validate_sequence_number(&payload)?;
+        if let Some(id) = payload.get("response_id").filter(|id| !id.is_null()) {
+            let id = id
+                .as_str()
+                .ok_or_else(|| protocol("event response identity must be a string"))?;
+            if self
+                .response_id
+                .as_deref()
+                .is_some_and(|expected| expected != id)
+            {
+                return Err(protocol("OpenAI event changed response identity"));
+            }
+        }
         if self.completed {
             return Err(protocol(format!(
                 "OpenAI event `{event_type}` arrived after response completion"
@@ -136,10 +176,14 @@ impl OpenAiEventDecoder {
             "response.created" => self.response_started(&payload),
             "response.content_part.added" => self.content_part_started(&payload),
             "response.output_text.delta" => self.text_delta(&payload),
+            "response.output_text.done" => self.output_text_done(&payload),
             "response.refusal.delta" => self.refusal_delta(&payload),
+            "response.refusal.done" => self.refusal_done(&payload),
             "response.content_part.done" => self.content_part_completed(&payload),
             "response.output_item.added" => self.output_item_started(&payload),
             "response.output_item.done" => self.output_item_completed(&payload),
+            "response.custom_tool_call_input.delta" => self.custom_input_delta(&payload),
+            "response.custom_tool_call_input.done" => self.custom_input_done(&payload),
             "response.function_call_arguments.delta" => self.tool_arguments_delta(&payload),
             "response.function_call_arguments.done" => self.tool_call_completed(&payload),
             "response.completed" => self.response_completed(&payload, false),
@@ -198,23 +242,108 @@ impl OpenAiEventDecoder {
         let key = content_key(output_index, content_index);
         let index = self.allocate(key)?;
         self.open_content_indices.insert(index);
-        Ok(vec![ModelStreamEvent::ContentBlockStarted { index, kind }])
+        self.content_values.insert(index, String::new());
+        self.message_blocks.insert(index, serde_json::json!({}));
+        let is_refusal = matches!(kind, ContentBlockKind::Refusal);
+        let mut events = vec![ModelStreamEvent::ContentBlockStarted { index, kind }];
+        let initial_value = if is_refusal {
+            part.get("refusal")
+        } else {
+            part.get("text")
+        };
+        if let Some(value) = initial_value
+            && let Some(value) = value.as_str().filter(|value| !value.is_empty())
+        {
+            self.content_values
+                .get_mut(&index)
+                .ok_or_else(|| protocol("OpenAI content value state is missing"))?
+                .push_str(value);
+            events.push(if is_refusal {
+                ModelStreamEvent::RefusalDelta {
+                    index,
+                    text: value.into(),
+                }
+            } else {
+                ModelStreamEvent::TextDelta {
+                    index,
+                    text: value.into(),
+                }
+            });
+        }
+        Ok(events)
     }
 
-    fn text_delta(&self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
+    fn text_delta(&mut self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
         let index = self.content_index(payload)?;
+        if !self.open_content_indices.contains(&index) {
+            return Err(protocol("text delta targeted a completed content block"));
+        }
+        self.content_values
+            .get_mut(&index)
+            .ok_or_else(|| protocol("OpenAI text delta targeted a closed content block"))?
+            .push_str(string(payload, "delta")?);
         Ok(vec![ModelStreamEvent::TextDelta {
             index,
             text: string(payload, "delta")?.into(),
         }])
     }
 
-    fn refusal_delta(&self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
+    fn refusal_delta(&mut self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
         let index = self.content_index(payload)?;
+        if !self.open_content_indices.contains(&index) {
+            return Err(protocol("refusal delta targeted a completed content block"));
+        }
+        self.content_values
+            .get_mut(&index)
+            .ok_or_else(|| protocol("OpenAI refusal delta targeted a closed content block"))?
+            .push_str(string(payload, "delta")?);
         Ok(vec![ModelStreamEvent::RefusalDelta {
             index,
             text: string(payload, "delta")?.into(),
         }])
+    }
+
+    fn output_text_done(&mut self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        self.reconcile_content(payload, "text", false)
+    }
+
+    fn refusal_done(&mut self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        self.reconcile_content(payload, "refusal", true)
+    }
+
+    fn reconcile_content(
+        &mut self,
+        payload: &Value,
+        field: &str,
+        refusal: bool,
+    ) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        let index = self.content_index(payload)?;
+        let final_value = string(payload, field)?;
+        if !self.open_content_indices.contains(&index) {
+            return Err(protocol("final content targeted a completed block"));
+        }
+        let accumulated = self
+            .content_values
+            .get_mut(&index)
+            .ok_or_else(|| protocol("OpenAI final content targeted a closed block"))?;
+        let suffix = final_value
+            .strip_prefix(accumulated.as_str())
+            .ok_or_else(|| protocol("OpenAI final content disagrees with its streamed deltas"))?;
+        let events = if suffix.is_empty() {
+            Vec::new()
+        } else if refusal {
+            vec![ModelStreamEvent::RefusalDelta {
+                index,
+                text: suffix.into(),
+            }]
+        } else {
+            vec![ModelStreamEvent::TextDelta {
+                index,
+                text: suffix.into(),
+            }]
+        };
+        accumulated.push_str(suffix);
+        Ok(events)
     }
 
     fn content_part_completed(
@@ -232,13 +361,30 @@ impl OpenAiEventDecoder {
                 payload.clone(),
             )]);
         }
+        let mut events = Vec::new();
+        if let Some(part) = payload.get("part") {
+            match part.get("type").and_then(Value::as_str) {
+                Some("output_text") if part.get("text").is_some() => {
+                    let mut final_payload = payload.clone();
+                    final_payload["text"] = part["text"].clone();
+                    events.extend(self.reconcile_content(&final_payload, "text", false)?);
+                }
+                Some("refusal") if part.get("refusal").is_some() => {
+                    let mut final_payload = payload.clone();
+                    final_payload["refusal"] = part["refusal"].clone();
+                    events.extend(self.reconcile_content(&final_payload, "refusal", true)?);
+                }
+                _ => {}
+            }
+        }
         let index = self.content_index(payload)?;
         if !self.open_content_indices.remove(&index) {
             return Err(protocol(format!(
                 "OpenAI completed content block {index} more than once"
             )));
         }
-        Ok(vec![ModelStreamEvent::ContentBlockCompleted { index }])
+        events.push(ModelStreamEvent::ContentBlockCompleted { index });
+        Ok(events)
     }
 
     fn output_item_started(
@@ -246,7 +392,8 @@ impl OpenAiEventDecoder {
         payload: &Value,
     ) -> Result<Vec<ModelStreamEvent>, ModelError> {
         let item = object(payload, "item")?;
-        if string(item, "type")? != "function_call" {
+        let item_type = string(item, "type")?;
+        if !matches!(item_type, "function_call" | "custom_tool_call") {
             return Ok(vec![provider_event(
                 "response.output_item.added",
                 payload.clone(),
@@ -256,25 +403,52 @@ impl OpenAiEventDecoder {
         let output_index = integer(payload, "output_index")?;
         let item_id = string(item, "id")?;
         let call_id = optional_string(item, "call_id").unwrap_or_else(|| item_id.into());
-        let name = string(item, "name")?;
+        if call_id.is_empty() || !self.tool_call_ids.insert(call_id.clone()) {
+            return Err(protocol("tool call identity is empty or reused"));
+        }
+        if self
+            .block_indices
+            .contains_key(&tool_output_key(output_index))
+        {
+            return Err(protocol("tool output index was reused"));
+        }
+        let name = qualified_tool_name(item)?;
         let index = self.allocate(tool_key(item_id))?;
         self.block_indices
             .insert(tool_output_key(output_index), index);
         self.open_tool_indices.insert(index);
+        self.tool_identities.insert(index, item.clone());
+        if item_type == "custom_tool_call" {
+            self.custom_inputs
+                .insert(index, optional_string(item, "input").unwrap_or_default());
+        } else {
+            self.function_inputs.insert(
+                index,
+                optional_string(item, "arguments").unwrap_or_default(),
+            );
+        }
         self.saw_tool_call = true;
-        Ok(vec![
+        let mut events = vec![
             ModelStreamEvent::ContentBlockStarted {
                 index,
-                kind: ContentBlockKind::ToolCall {
-                    id: call_id,
-                    name: name.into(),
-                },
+                kind: ContentBlockKind::ToolCall { id: call_id, name },
             },
             ModelStreamEvent::ContentBlockMetadata {
                 index,
                 metadata: function_call_metadata(&self.provider, item),
             },
-        ])
+        ];
+        if let Some(arguments) = self
+            .function_inputs
+            .get(&index)
+            .filter(|value| !value.is_empty())
+        {
+            events.push(ModelStreamEvent::ToolArgumentsDelta {
+                index,
+                json: arguments.clone(),
+            });
+        }
+        Ok(events)
     }
 
     fn output_item_completed(
@@ -283,9 +457,26 @@ impl OpenAiEventDecoder {
     ) -> Result<Vec<ModelStreamEvent>, ModelError> {
         let item = object(payload, "item")?;
         let item_type = string(item, "type")?;
-        if item_type != "function_call" {
+        if item_type == "tool_search_call"
+            && item.get("execution").and_then(Value::as_str) == Some("client")
+        {
+            return self.complete_client_search(payload, item);
+        }
+        if !matches!(item_type, "function_call" | "custom_tool_call") {
             if item_type == "message" {
-                require_completed_item(item, "streamed message")?;
+                require_terminal_message(item, true)?;
+                let output_index = integer(payload, "output_index")?;
+                if item["status"] == "incomplete" {
+                    self.incomplete_message_index = Some(output_index);
+                }
+                self.validate_message_completion(output_index, item)?;
+                let descriptor = message_descriptor(item)?;
+                let prefix = format!("content:{output_index}:");
+                for (key, index) in &self.block_indices {
+                    if key.starts_with(&prefix) && self.message_blocks.contains_key(index) {
+                        self.message_blocks.insert(*index, descriptor.clone());
+                    }
+                }
                 return Ok(vec![provider_event(
                     "response.output_item.done",
                     payload.clone(),
@@ -318,9 +509,32 @@ impl OpenAiEventDecoder {
         }
         require_completed_item(item, "streamed function call")?;
         let index = self.tool_index(payload)?;
+        if !self.completed_tool_items.insert(index) {
+            return Err(protocol("tool output item completed more than once"));
+        }
+        self.validate_tool_completion(index, item)?;
         let mut events = Vec::new();
         if self.open_tool_indices.remove(&index) {
-            if let Some(arguments) = optional_string(item, "arguments") {
+            let arguments = if item_type == "custom_tool_call" {
+                let input = string(item, "input")?;
+                if let Some(accumulated) = self.custom_inputs.remove(&index)
+                    && !input.starts_with(&accumulated)
+                {
+                    return Err(protocol(
+                        "custom tool final input disagrees with its deltas",
+                    ));
+                }
+                Some(
+                    serde_json::to_string(input)
+                        .map_err(|_| protocol("custom input could not be encoded"))?,
+                )
+            } else {
+                Some(
+                    optional_string(item, "arguments")
+                        .unwrap_or_else(|| self.function_inputs[&index].clone()),
+                )
+            };
+            if let Some(arguments) = arguments {
                 events.push(ModelStreamEvent::ToolArgumentsCompleted {
                     index,
                     json: arguments,
@@ -335,8 +549,153 @@ impl OpenAiEventDecoder {
         Ok(events)
     }
 
-    fn tool_arguments_delta(&self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
+    fn validate_tool_completion(&self, index: u32, item: &Value) -> Result<(), ModelError> {
+        let original = self
+            .tool_identities
+            .get(&index)
+            .ok_or_else(|| protocol("completed tool has no original identity"))?;
+        for field in ["id", "call_id", "name", "namespace", "type"] {
+            if original.get(field).filter(|value| !value.is_null())
+                != item.get(field).filter(|value| !value.is_null())
+            {
+                return Err(protocol(
+                    "completed tool changed its original identity or namespace",
+                ));
+            }
+        }
+        let item_type = string(item, "type")?;
+        if item_type == "function_call"
+            && let Some(arguments) = item.get("arguments")
+        {
+            let arguments = arguments
+                .as_str()
+                .ok_or_else(|| protocol("function arguments must be a string"))?;
+            let accumulated = &self.function_inputs[&index];
+            let agrees = if self.open_tool_indices.contains(&index) {
+                arguments.starts_with(accumulated)
+            } else {
+                arguments == accumulated
+            };
+            if !agrees {
+                return Err(protocol(
+                    "function completed item disagrees with its final arguments",
+                ));
+            }
+        }
+        if item_type == "custom_tool_call" {
+            let input = string(item, "input")?;
+            if let Some(accumulated) = self.custom_inputs.get(&index) {
+                let agrees = if self.open_tool_indices.contains(&index) {
+                    input.starts_with(accumulated)
+                } else {
+                    input == accumulated
+                };
+                if !agrees {
+                    return Err(protocol(
+                        "custom tool completed item disagrees with its final input",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn complete_client_search(
+        &mut self,
+        payload: &Value,
+        item: &Value,
+    ) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        require_completed_item(item, "client tool search")?;
+        let call = client_search_call(&self.provider, item)?;
+        if let ContentPart::ToolCall(call) = &call
+            && !self.tool_call_ids.insert(call.id.clone())
+        {
+            return Err(protocol("tool call identity was reused"));
+        }
+        let index = self.allocate(format!("search:{}", integer(payload, "output_index")?))?;
+        self.saw_tool_call = true;
+        Ok(vec![ModelStreamEvent::ContentPartCompleted {
+            index,
+            part: call,
+        }])
+    }
+
+    fn validate_message_completion(
+        &self,
+        output_index: u64,
+        item: &Value,
+    ) -> Result<(), ModelError> {
+        let Some(content) = item.get("content").and_then(Value::as_array) else {
+            return Ok(());
+        };
+        for (content_index, part) in content.iter().enumerate() {
+            let field = match part["type"].as_str() {
+                Some("output_text") => "text",
+                Some("refusal") => "refusal",
+                _ => continue,
+            };
+            let index = self.lookup(&content_key(output_index, content_index as u64))?;
+            if self.open_content_indices.contains(&index)
+                || self.content_values.get(&index).map(String::as_str) != Some(string(part, field)?)
+            {
+                return Err(protocol(
+                    "completed message disagrees with its streamed content",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn custom_input_delta(&mut self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
         let index = self.tool_index(payload)?;
+        if !self.open_tool_indices.contains(&index) {
+            return Err(protocol("custom input targeted a completed tool"));
+        }
+        self.custom_inputs
+            .get_mut(&index)
+            .ok_or_else(|| protocol("custom input targeted a closed or different tool"))?
+            .push_str(string(payload, "delta")?);
+        Ok(Vec::new())
+    }
+
+    fn custom_input_done(&mut self, payload: &Value) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        let index = self.tool_index(payload)?;
+        let input = string(payload, "input")?;
+        let accumulated = self
+            .custom_inputs
+            .remove(&index)
+            .ok_or_else(|| protocol("custom input completed an unknown tool"))?;
+        if !input.starts_with(&accumulated) {
+            return Err(protocol(
+                "custom tool final input disagrees with its deltas",
+            ));
+        }
+        if !self.open_tool_indices.remove(&index) {
+            return Err(protocol("custom tool completed more than once"));
+        }
+        self.custom_inputs.insert(index, input.into());
+        Ok(vec![
+            ModelStreamEvent::ToolArgumentsCompleted {
+                index,
+                json: serde_json::to_string(input)
+                    .map_err(|_| protocol("custom input could not be encoded"))?,
+            },
+            ModelStreamEvent::ContentBlockCompleted { index },
+        ])
+    }
+
+    fn tool_arguments_delta(
+        &mut self,
+        payload: &Value,
+    ) -> Result<Vec<ModelStreamEvent>, ModelError> {
+        let index = self.tool_index(payload)?;
+        if !self.open_tool_indices.contains(&index) {
+            return Err(protocol("function arguments targeted a completed tool"));
+        }
+        self.function_inputs
+            .get_mut(&index)
+            .ok_or_else(|| protocol("function arguments targeted a different tool type"))?
+            .push_str(string(payload, "delta")?);
         Ok(vec![ModelStreamEvent::ToolArgumentsDelta {
             index,
             json: string(payload, "delta")?.into(),
@@ -348,18 +707,32 @@ impl OpenAiEventDecoder {
         payload: &Value,
     ) -> Result<Vec<ModelStreamEvent>, ModelError> {
         let index = self.tool_index(payload)?;
+        let accumulated = self
+            .function_inputs
+            .get_mut(&index)
+            .ok_or_else(|| protocol("function arguments completed a different tool type"))?;
+        if let Some(arguments) = payload.get("arguments") {
+            let arguments = arguments
+                .as_str()
+                .ok_or_else(|| protocol("function arguments must be a string"))?;
+            if !arguments.starts_with(accumulated.as_str()) {
+                return Err(protocol(
+                    "function final arguments disagree with their deltas",
+                ));
+            }
+            *accumulated = arguments.into();
+        }
+        let arguments = accumulated.clone();
         if !self.open_tool_indices.remove(&index) {
             return Err(protocol(format!(
                 "OpenAI completed tool-call block {index} more than once"
             )));
         }
         let mut events = Vec::new();
-        if let Some(arguments) = optional_string(payload, "arguments") {
-            events.push(ModelStreamEvent::ToolArgumentsCompleted {
-                index,
-                json: arguments,
-            });
-        }
+        events.push(ModelStreamEvent::ToolArgumentsCompleted {
+            index,
+            json: arguments,
+        });
         events.extend([
             ModelStreamEvent::ContentBlockMetadata {
                 index,
@@ -398,6 +771,11 @@ impl OpenAiEventDecoder {
                 "OpenAI incomplete response contained function calls that are not safe to execute",
             ));
         }
+        if !incomplete && self.incomplete_message_index.is_some() {
+            return Err(protocol(
+                "completed response contains an incomplete message",
+            ));
+        }
         let response = payload.get("response").unwrap_or(&Value::Null);
         self.validate_terminal_identity(response)?;
         validate_terminal_status(response, incomplete, self.dialect)?;
@@ -409,12 +787,19 @@ impl OpenAiEventDecoder {
         } else {
             FinishReason::Stop
         };
+        let mut metadata = response_metadata(response, &self.provider);
+        if !self.message_blocks.is_empty() {
+            metadata.insert(
+                format!("{}.message_blocks", self.provider),
+                Value::Array(self.message_blocks.values().cloned().collect()),
+            );
+        }
         self.completed = true;
         Ok(vec![
             ModelStreamEvent::UsageUpdated { usage },
             ModelStreamEvent::ResponseCompleted {
                 finish_reason,
-                provider_metadata: response_metadata(response),
+                provider_metadata: metadata,
             },
         ])
     }
@@ -495,9 +880,15 @@ impl OpenAiEventDecoder {
     }
 
     fn tool_index(&self, payload: &Value) -> Result<u32, ModelError> {
-        if let Some(item_id) = payload.get("item_id").and_then(Value::as_str)
-            && let Ok(index) = self.lookup(&tool_key(item_id))
-        {
+        if let Some(item_id) = payload.get("item_id").and_then(Value::as_str) {
+            let index = self.lookup(&tool_key(item_id))?;
+            if let Some(output_index) = payload.get("output_index").and_then(Value::as_u64)
+                && self.lookup(&tool_output_key(output_index))? != index
+            {
+                return Err(protocol(
+                    "tool item identity disagrees with its output index",
+                ));
+            }
             return Ok(index);
         }
         self.lookup(&tool_output_key(integer(payload, "output_index")?))
@@ -560,10 +951,14 @@ fn is_known_success_event(event_type: &str) -> bool {
         "response.created"
             | "response.content_part.added"
             | "response.output_text.delta"
+            | "response.output_text.done"
             | "response.refusal.delta"
+            | "response.refusal.done"
             | "response.content_part.done"
             | "response.output_item.added"
             | "response.output_item.done"
+            | "response.custom_tool_call_input.delta"
+            | "response.custom_tool_call_input.done"
             | "response.function_call_arguments.delta"
             | "response.function_call_arguments.done"
             | "response.completed"
@@ -687,7 +1082,29 @@ pub(crate) fn decode_complete_response_for(
     events.push(ModelStreamEvent::UsageUpdated { usage });
     events.push(ModelStreamEvent::ResponseCompleted {
         finish_reason,
-        provider_metadata: response_metadata(payload),
+        provider_metadata: {
+            let mut metadata = response_metadata(payload, provider);
+            let mut blocks = Vec::new();
+            for item in output {
+                if item.get("type").and_then(Value::as_str) == Some("message") {
+                    let descriptor = message_descriptor(item)?;
+                    if let Some(content) = item.get("content").and_then(Value::as_array) {
+                        for part in content {
+                            if matches!(
+                                part.get("type").and_then(Value::as_str),
+                                Some("output_text" | "refusal")
+                            ) {
+                                blocks.push(descriptor.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            if !blocks.is_empty() {
+                metadata.insert(format!("{provider}.message_blocks"), Value::Array(blocks));
+            }
+            metadata
+        },
     });
     Ok(events)
 }
@@ -700,19 +1117,49 @@ fn decode_complete_output(
     events: &mut Vec<ModelStreamEvent>,
 ) -> Result<bool, ModelError> {
     let mut saw_tool_call = false;
+    let mut call_ids = BTreeSet::new();
     for item in output {
+        if matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("function_call" | "custom_tool_call")
+        ) || (item["type"] == "tool_search_call" && item["execution"] == "client")
+        {
+            let id = optional_string(item, "call_id")
+                .or_else(|| optional_string(item, "id"))
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| protocol("tool call has no nonempty identity"))?;
+            if !call_ids.insert(id) {
+                return Err(protocol("tool call identity was reused"));
+            }
+        }
         match item.get("type").and_then(Value::as_str) {
             Some("message") => {
                 decode_complete_message(provider, item, response_incomplete, next_index, events)?;
             }
-            Some("function_call") => {
+            Some("tool_search_call")
+                if item.get("execution").and_then(Value::as_str) == Some("client") =>
+            {
+                require_completed_item(item, "client tool search")?;
+                let index = take_index(next_index)?;
+                events.push(ModelStreamEvent::ContentPartCompleted {
+                    index,
+                    part: client_search_call(provider, item)?,
+                });
+                saw_tool_call = true;
+            }
+            Some("function_call" | "custom_tool_call") => {
                 require_completed_item(item, "complete function call")?;
                 let index = take_index(next_index)?;
                 let id = optional_string(item, "call_id")
                     .or_else(|| optional_string(item, "id"))
                     .ok_or_else(|| protocol("complete function call is missing an identity"))?;
-                let name = string(item, "name")?.to_owned();
-                let arguments = string(item, "arguments")?.to_owned();
+                let name = qualified_tool_name(item)?;
+                let arguments = if item["type"] == "custom_tool_call" {
+                    serde_json::to_string(string(item, "input")?)
+                        .map_err(|_| protocol("custom input could not be encoded"))?
+                } else {
+                    string(item, "arguments")?.to_owned()
+                };
                 events.push(ModelStreamEvent::ContentBlockStarted {
                     index,
                     kind: ContentBlockKind::ToolCall { id, name },
@@ -890,6 +1337,9 @@ fn decode_usage(usage: Option<&Value>) -> ModelUsage {
         reasoning_tokens: usage
             .get("output_tokens_details")
             .map_or(0, |details| unsigned(details, "reasoning_tokens")),
+        cache_write_tokens: usage
+            .get("input_tokens_details")
+            .map_or(0, |details| unsigned(details, "cache_write_tokens")),
         cached_input_tokens: usage
             .get("input_tokens_details")
             .map_or(0, |details| unsigned(details, "cached_tokens")),
@@ -910,22 +1360,93 @@ fn incomplete_reason(response: &Value) -> FinishReason {
     }
 }
 
-fn response_metadata(response: &Value) -> BTreeMap<String, Value> {
+fn response_metadata(response: &Value, provider: &str) -> BTreeMap<String, Value> {
     let mut metadata = BTreeMap::new();
-    for name in ["status", "service_tier"] {
+    for name in [
+        "status",
+        "service_tier",
+        "prompt_cache_diagnostics",
+        "reasoning",
+    ] {
         if let Some(value) = response.get(name) {
-            metadata.insert(format!("openai.{name}"), value.clone());
+            metadata.insert(format!("{provider}.{name}"), value.clone());
         }
     }
     metadata
 }
 
+fn client_search_call(provider: &str, item: &Value) -> Result<ContentPart, ModelError> {
+    let arguments = item
+        .get("arguments")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| protocol("client tool search arguments must be an object"))?
+        .clone();
+    Ok(ContentPart::ToolCall(runifold_model::ToolCall {
+        id: string(item, "call_id")?.into(),
+        name: "tool_search".into(),
+        arguments,
+        raw_arguments: None,
+        metadata: function_call_metadata(provider, item),
+    }))
+}
+
+fn message_descriptor(item: &Value) -> Result<Value, ModelError> {
+    let mut metadata = serde_json::Map::new();
+    for key in ["id", "phase"] {
+        if let Some(value) = item.get(key).filter(|value| !value.is_null()) {
+            if value.as_str().is_none_or(str::is_empty) {
+                return Err(protocol(
+                    "assistant message identity and phase must be nonempty strings",
+                ));
+            }
+            metadata.insert(key.into(), value.clone());
+        }
+    }
+    Ok(Value::Object(metadata))
+}
+
+fn qualified_tool_name(item: &Value) -> Result<String, ModelError> {
+    if item
+        .get("async")
+        .is_some_and(|value| !value.is_null() && !value.is_boolean())
+    {
+        return Err(protocol("tool async flag must be a boolean"));
+    }
+    let name = string(item, "name")?;
+    if name.is_empty() {
+        return Err(protocol("tool name must be nonempty"));
+    }
+    match item.get("namespace").filter(|value| !value.is_null()) {
+        None => Ok(name.into()),
+        Some(namespace) => {
+            let namespace = namespace
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| protocol("function namespace must be a nonempty string"))?;
+            if !super::encode::wire_tool_component(namespace)
+                || !super::encode::wire_tool_component(name)
+            {
+                return Err(protocol(
+                    "namespaced tool components must be bounded ASCII identifiers",
+                ));
+            }
+            Ok(format!("{namespace}.{name}"))
+        }
+    }
+}
+
 fn function_call_metadata(provider: &str, item: &Value) -> BTreeMap<String, Value> {
     let mut metadata = BTreeMap::new();
-    for name in ["id", "status", "caller"] {
+    for name in ["id", "status", "caller", "namespace", "async"] {
         if let Some(value) = item.get(name).filter(|value| !value.is_null()) {
             metadata.insert(format!("{provider}.{name}"), value.clone());
         }
+    }
+    if matches!(
+        item.get("type").and_then(Value::as_str),
+        Some("custom_tool_call" | "tool_search_call")
+    ) {
+        metadata.insert(format!("{provider}.tool_type"), item["type"].clone());
     }
     metadata
 }
@@ -970,16 +1491,13 @@ fn warning_event(code: &str, message: String) -> ModelStreamEvent {
     }
 }
 
-fn provider_failure(provider: &str, payload: &Value) -> ModelError {
+pub(super) fn provider_failure(provider: &str, payload: &Value) -> ModelError {
     let error = payload
         .get("response")
         .and_then(|response| response.get("error"))
         .or_else(|| payload.get("error"))
         .unwrap_or(payload);
-    let message = error
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("OpenAI response failed");
+    let message = "provider reported a failed response; inspect structured error classification";
     let mut model_error = ModelError::local(ModelErrorKind::Provider, message);
     model_error.provider = Some(provider.into());
     for name in ["type", "code", "param"] {
@@ -1115,6 +1633,111 @@ mod tests {
         assert_eq!(response.usage.input_tokens, 3);
         assert_eq!(response.usage.reasoning_tokens, 1);
         assert_eq!(response.usage.cached_input_tokens, 1);
+    }
+
+    #[test]
+    fn final_text_event_reconciles_missing_suffix() {
+        let response = decode_response([
+            serde_json::json!({
+                "type":"response.created",
+                "response":{"id":"resp","model":"model"}
+            }),
+            serde_json::json!({
+                "type":"response.content_part.added",
+                "output_index":0,"content_index":0,
+                "part":{"type":"output_text","text":""}
+            }),
+            serde_json::json!({
+                "type":"response.output_text.delta",
+                "output_index":0,"content_index":0,"delta":"{\"ok\":"
+            }),
+            serde_json::json!({
+                "type":"response.output_text.done",
+                "output_index":0,"content_index":0,"text":"{\"ok\":true}"
+            }),
+            serde_json::json!({
+                "type":"response.content_part.done",
+                "output_index":0,"content_index":0,
+                "part":{"type":"output_text","text":"{\"ok\":true}"}
+            }),
+            serde_json::json!({
+                "type":"response.completed",
+                "response":{"status":"completed","usage":{}}
+            }),
+        ]);
+
+        assert_eq!(response.text(), "{\"ok\":true}");
+        assert_eq!(
+            response.structured::<serde_json::Value>().unwrap()["ok"],
+            true
+        );
+    }
+
+    #[test]
+    fn final_text_disagreement_is_a_protocol_error() {
+        let mut decoder = OpenAiEventDecoder::new();
+        decoder
+            .decode(serde_json::json!({
+                "type":"response.created",
+                "response":{"id":"resp","model":"model"}
+            }))
+            .unwrap();
+        decoder
+            .decode(serde_json::json!({
+                "type":"response.content_part.added",
+                "output_index":0,"content_index":0,
+                "part":{"type":"output_text","text":""}
+            }))
+            .unwrap();
+        decoder
+            .decode(serde_json::json!({
+                "type":"response.output_text.delta",
+                "output_index":0,"content_index":0,"delta":"hello"
+            }))
+            .unwrap();
+
+        let error = decoder
+            .decode(serde_json::json!({
+                "type":"response.output_text.done",
+                "output_index":0,"content_index":0,"text":"different"
+            }))
+            .unwrap_err();
+
+        assert_eq!(error.kind, ModelErrorKind::Protocol);
+    }
+
+    #[test]
+    fn final_refusal_event_is_preserved_without_deltas() {
+        let response = decode_response([
+            serde_json::json!({
+                "type":"response.created",
+                "response":{"id":"resp","model":"model"}
+            }),
+            serde_json::json!({
+                "type":"response.content_part.added",
+                "output_index":0,"content_index":0,
+                "part":{"type":"refusal","refusal":""}
+            }),
+            serde_json::json!({
+                "type":"response.refusal.done",
+                "output_index":0,"content_index":0,"refusal":"I cannot help."
+            }),
+            serde_json::json!({
+                "type":"response.content_part.done",
+                "output_index":0,"content_index":0,
+                "part":{"type":"refusal","refusal":"I cannot help."}
+            }),
+            serde_json::json!({
+                "type":"response.completed",
+                "response":{"status":"completed","usage":{}}
+            }),
+        ]);
+
+        assert!(matches!(
+            response.content.as_slice(),
+            [ContentPart::Refusal { text }] if text == "I cannot help."
+        ));
+        assert!(response.structured::<serde_json::Value>().is_err());
     }
 
     #[test]
@@ -1605,6 +2228,32 @@ mod tests {
     }
 
     #[test]
+    fn parseable_json_from_incomplete_responses_is_not_structured_success() {
+        let events = super::decode_complete_response(
+            "openai",
+            &serde_json::json!({
+                "id":"resp","model":"model","status":"incomplete",
+                "output":[{
+                    "type":"message","status":"incomplete",
+                    "content":[{"type":"output_text","text":"{\"ok\":true}"}]
+                }],
+                "incomplete_details":{"reason":"max_output_tokens"},
+                "usage":{}
+            }),
+            None,
+        )
+        .unwrap();
+        let mut accumulator = ModelStreamAccumulator::new();
+        let response = events
+            .into_iter()
+            .find_map(|event| accumulator.push(event).unwrap())
+            .unwrap();
+
+        assert_eq!(response.finish_reason, FinishReason::Length);
+        assert!(response.structured::<serde_json::Value>().is_err());
+    }
+
+    #[test]
     fn streamed_incomplete_function_call_item_is_not_executable() {
         let mut decoder = OpenAiEventDecoder::new();
         decoder
@@ -1828,7 +2477,7 @@ mod tests {
                     "error":{
                         "type":"provider_error",
                         "code":"server_error",
-                        "message":"generation failed",
+                        "message":"private upstream prompt",
                         "param":"tools[0]"
                     }
                 }
@@ -1836,7 +2485,7 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.provider.as_deref(), Some("custom-openai"));
-        assert_eq!(error.message, "generation failed");
+        assert!(!error.to_string().contains("private upstream prompt"));
         assert_eq!(error.metadata["custom-openai.error.type"], "provider_error");
         assert_eq!(error.metadata["custom-openai.error.code"], "server_error");
         assert_eq!(error.metadata["custom-openai.error.param"], "tools[0]");

@@ -1,0 +1,49 @@
+name: Workflow upgrade compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-upgrade-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upgrade:
+    name: Durable upgrade and historical reader contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source and historical tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+
+      - name: Cache Cargo
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-workflow-upgrade-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Verify durable upgrade and real historical reader
+        run: |
+          rm -f target/reliability-evidence/workflow-upgrade.json
+          python3 scripts/test-workflow-upgrade.py
+          python3 scripts/verify-workflow-upgrade.py
+
+      - name: Upload compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workflow-upgrade-${{ github.sha }}
+          path: target/reliability-evidence/workflow-upgrade.json
+          if-no-files-found: error
+          retention-days: 90

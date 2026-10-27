@@ -60,6 +60,35 @@ search, automatic Code Interpreter, image generation, and remote MCP through
 `OpenAiHostedTool`. The generic `ProviderToolSpec` remains available for
 forward-compatible options; the encoder still owns the wire-level `type`.
 
+## OpenAI continuation and remote lifecycle
+
+Original assistant `phase`, message IDs and boundaries survive both response
+modes, Agent history and durable replay. Use `ModelResponse::assistant_message`
+when assembling history manually. Register namespaced Tools by their qualified
+`namespace.name` and set `openai.namespace` on the descriptor. Additional explicit
+metadata enables `defer_loading`, `allowed_callers`, `async`, custom tools and
+client-side tool search; discoverability never grants capabilities.
+
+For remote background generation, use `client.control_plane()` and its
+`create_background_response`, `create_background_stream`, `get_response`, `stream_response`, `cancel_response`
+and `delete_response` methods. Persist the returned response ID before continuing.
+Reattachment requires creation with `stream=true` (use `create_background_stream`),
+uses the saved event cursor and does not create new generation. `store=false` is
+preserved; provider temporary retention is not durable application storage.
+`compact_response` returns a complete replacement input window, without changing
+the application's stored conversation history.
+
+Native `openai-realtime` builds additionally expose `connect_responses_websocket`
+for explicit lane multiplexing/steering and `responses_websocket_model` for the
+ordinary ProviderRuntime/Agent path. Responses WebSocket is distinct from Realtime;
+the new surface is native-only. Interrupted requests are never automatically replayed.
+
+`OpenAiAsyncToolState` preserves pending-call/result correlation across host restart.
+It does not start jobs. The default Agent still awaits Tools at its turn boundary;
+applications that launch jobs early own their lifecycle, persist them and use the
+existing authority/Effect mechanisms. See [the continuation contract](rfcs/0076-openai-continuation-contracts.md)
+for supported paths and executable acceptance tests.
+
 ## Independent media tasks
 
 `runifold-model` exposes provider-neutral `ImageGenerationModel`, `SpeechModel`,
@@ -68,6 +97,10 @@ The `openai` feature implements all three using `/images/generations`,
 `/audio/speech`, and multipart `/audio/transcriptions`. Inputs and outputs are
 bounded, lifecycle cancellation/deadlines are honored, and provider HTTP errors
 retain the normalized model error contract.
+`OpenAiClient::edit_image` additionally supports GPT Image JSON edits with explicit
+reference images and optional masks. GPT Image 2 and 2.5 profiles include current
+format/background fields; transparent JPEG output is rejected locally.
+
 Image, speech, and transcription request dialects are selected through exact
 `ModelRef` entries in `OpenAiMediaCapabilityCatalog`. Public OpenAI GPT Image,
 DALL-E, TTS, Whisper, and GPT transcription models have explicit built-in
@@ -122,7 +155,7 @@ trigger projection; malformed input and ownership failures remain fail-closed.
 | OpenAI Responses / Ark | text, image input, file input; structured content is preserved as JSON text when required by the wire format | audio and media that the endpoint cannot encode use the canonical envelope |
 | OpenAI Chat-compatible | text | image, audio, document, resource, and extension content use the canonical envelope |
 | Anthropic Messages | text and image | audio, document, resource, and extension content use the canonical envelope |
-| Gemini GenerateContent | structured response plus native inline/file image, audio, and document parts | media unsupported by the endpoint and extension content use the canonical envelope |
+| Gemini GenerateContent | structured response plus native inline image, audio, and document parts | media unsupported by the endpoint and extension content use the canonical envelope |
 | Amazon Bedrock Converse | text, native JSON, image, and document | audio and media unsupported by Converse use the canonical envelope |
 | Ollama Chat | text plus inline images where supported | every rich part also has a canonical envelope; audio, document, resource, and extension content remain available through it |
 
@@ -360,6 +393,32 @@ capabilities fail before transport. Applications can pass a reviewed
 provider-neutral `ProviderRuntimeProfile` to
 `ProviderModelExt::runtime_with_profile` when a deployment needs an explicit
 override, including strict capability enforcement.
+
+Capacity sharing and circuit health are separate scopes. For independent batch
+tasks, preserve the adapter's `runtime_profile()` and apply
+`without_circuit_breaker()` before `runtime_with_profile`. Alternatively, retain
+a shared breaker and select `CircuitFailurePolicy::ServiceAvailability`: only
+configured transport failures and Provider HTTP 429/5xx errors establish service
+unavailability. Unknown Provider statuses and request/output failures are excluded.
+This is opt-in; existing defaults and unknown-safety retry authority do not change.
+As before, a failed half-open probe conservatively reopens until the next cooldown.
+
+`runtime.profile().diagnostic_snapshot()` serializes effective delivery,
+capability, retry and circuit policy, including unknown-safety exceptions. It
+omits private Provider option keys and values and is not a resolved build/vendor
+fingerprint. Pair it with `scheduler.snapshot()` when capacity is configured.
+For failures, `ModelError::diagnostic_metadata()` and each routed attempt's
+`diagnostics` retain bounded operational facts without raw error messages,
+request IDs, parameter names or response bodies. Scheduler errors distinguish
+queue/execution time and local slot release; a Provider invocation or local
+cancellation does not prove remote receipt, termination or zero cost.
+
+Native OpenAI-compatible, Anthropic, Gemini and Ollama HTTP/stream failures do
+not reflect untrusted upstream message text in ordinary error Display output.
+Transport messages also omit request URLs and query values. Status, known error
+classifications and retry safety remain available. Embedding errors use the same
+safe HTTP/transport messages. Provider metadata remains explicit diagnostic data;
+use `diagnostic_metadata()` rather than dumping arbitrary metadata into logs.
 
 Chat request fields also follow an explicit endpoint dialect. Verified public
 OpenAI configurations use `max_completion_tokens` and request the final

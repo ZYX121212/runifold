@@ -1,5 +1,6 @@
 //! OpenAI-compatible Responses, Chat Completions, and embeddings.
 
+mod async_tools;
 mod chat;
 mod client;
 mod config;
@@ -27,8 +28,15 @@ mod realtime_session_transport;
 mod realtime_transport;
 #[cfg(all(feature = "openai-realtime", target_arch = "wasm32"))]
 mod realtime_webrtc;
+#[cfg(all(feature = "openai-realtime", not(target_arch = "wasm32")))]
+mod responses_ws;
 mod schema;
+#[cfg(all(feature = "openai-realtime", not(target_arch = "wasm32")))]
+pub use responses_ws::{
+    OpenAiResponsesConnection, OpenAiResponsesEvent, OpenAiResponsesWebSocketModel,
+};
 
+pub use async_tools::OpenAiAsyncToolState;
 pub use chat::{ChatCompletionsDecoder, encode_chat_request};
 pub use client::OpenAiClient;
 pub use config::{
@@ -36,9 +44,11 @@ pub use config::{
     OpenAiConfigError, OpenAiResponsesDialect, OpenAiWireProtocol,
 };
 pub use control::{
-    OpenAiBatch, OpenAiBatchEndpoint, OpenAiBatchRequest, OpenAiBatchStatus, OpenAiControlError,
-    OpenAiControlFuture, OpenAiControlPlane, OpenAiFile, OpenAiFileDeletion, OpenAiFilePurpose,
-    OpenAiFileStatus, OpenAiFileUpload, OpenAiFileWaitPolicy, OpenAiModelInfo,
+    OpenAiBackgroundStream, OpenAiBatch, OpenAiBatchEndpoint, OpenAiBatchRequest,
+    OpenAiBatchStatus, OpenAiCompactedResponse, OpenAiControlError, OpenAiControlFuture,
+    OpenAiControlPlane, OpenAiFile, OpenAiFileDeletion, OpenAiFilePurpose, OpenAiFileStatus,
+    OpenAiFileUpload, OpenAiFileWaitPolicy, OpenAiModelInfo, OpenAiResponseEventStream,
+    OpenAiResponseStatus, OpenAiStoredResponse,
 };
 #[cfg(feature = "openai-realtime")]
 pub use control::{OpenAiRealtimeClientSecret, OpenAiRealtimeClientSecretRequest};
@@ -47,8 +57,8 @@ pub use embedding::OpenAiEmbeddingModel;
 pub use encode::encode_request;
 pub use hosted_tool::{OpenAiHostedTool, OpenAiHostedToolError};
 pub use media::{
-    OpenAiImageWireProfile, OpenAiMediaCapabilityCatalog, OpenAiSpeechWireProfile,
-    OpenAiTranscriptionWireProfile,
+    OpenAiImageEditRequest, OpenAiImageWireProfile, OpenAiMediaCapabilityCatalog,
+    OpenAiSpeechWireProfile, OpenAiTranscriptionWireProfile,
 };
 #[cfg(feature = "openai-realtime")]
 pub use realtime::{

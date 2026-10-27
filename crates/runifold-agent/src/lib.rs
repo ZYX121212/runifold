@@ -14,7 +14,11 @@ mod stream;
 mod structured;
 mod terminal_review;
 
-pub use agent::{Agent, AgentConfig, AgentFuture, ToolErrorPolicy};
+pub use agent::{
+    Agent, AgentConfig, AgentFuture, ContextBudget, ContextComponentDescriptor, ContextError,
+    ContextGroup, ContextGroupKind, ContextManager, ContextPlan, ContextSelectionStrategy,
+    ContextTokenCounter, RecentContext, SerializedBytesCounter, ToolErrorPolicy,
+};
 pub use builder::{AgentBuildError, AgentBuilder, AgentPromptError};
 pub use checkpoint::{
     AgentCheckpoint, AgentCheckpointPhase, AgentCheckpointState, AgentRecoveryContract,

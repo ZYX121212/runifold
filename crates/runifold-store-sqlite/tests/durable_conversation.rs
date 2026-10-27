@@ -32,11 +32,74 @@ const CRASH_TEST_NAME: &str = "committed_turn_recovers_after_process_exit_before
 const CRASH_EXIT_CODE: i32 = 87;
 
 #[tokio::test]
+async fn unsupported_session_schemas_survive_reopen_without_execution_or_rewrite() {
+    use runifold_agent::{AgentSession, AgentSessionError};
+    let path = database_path();
+    let namespace = MemoryNamespace::parse("session.upgrade").unwrap();
+    for schema in [0, 1, 2, 4, u32::MAX] {
+        let conversation = ConversationId::new();
+        let store = Arc::new(SqliteStore::open(&path).unwrap());
+        store.create(conversation, namespace.clone()).await.unwrap();
+        let old = Checkpoint::initial(
+            conversation.as_checkpoint_id(),
+            RunId::new(),
+            "runifold.conversation.admission",
+            schema,
+            serde_json::json!({"legacy":"opaque-private-state"}),
+        );
+        CheckpointStore::compare_and_swap(store.as_ref(), &old, None).unwrap();
+        drop(store);
+        let reopened = Arc::new(SqliteStore::open(&path).unwrap());
+        let model = ScriptedModel::new();
+        let session = AgentSession::new(
+            durable_agent(model.clone()),
+            reopened.clone(),
+            conversation,
+            namespace.clone(),
+            ConversationContextPolicy::new(ConversationWindow::new(8).unwrap()),
+        );
+        let result = session
+            .run(CheckpointId::new(), "new work", &root_run())
+            .await;
+        assert!(matches!(result, Err(AgentSessionError::InvalidAdmission)));
+        assert!(model.recorded_requests().is_empty());
+        assert_eq!(
+            CheckpointStore::load(reopened.as_ref(), conversation.as_checkpoint_id()).unwrap(),
+            old
+        );
+        assert!(
+            reopened
+                .list_transcript(
+                    conversation,
+                    namespace.clone(),
+                    None,
+                    ConversationWindow::new(8).unwrap()
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
 async fn durable_turn_atomically_survives_reopen_and_resume() {
     let path = database_path();
     let store = Arc::new(SqliteStore::open(&path).expect("SQLite store opens"));
     let model = ScriptedModel::new();
-    model.enqueue(response_events("terminal", "persisted"));
+    let mut events = response_events("terminal", "persisted");
+    let metadata = BTreeMap::from([(
+        "openai.message_blocks".into(),
+        serde_json::json!([{"id":"msg_done","phase":"final_answer"}]),
+    )]);
+    if let Some(ModelStreamEvent::ResponseCompleted {
+        provider_metadata, ..
+    }) = events.last_mut()
+    {
+        provider_metadata.clone_from(&metadata);
+    }
+    model.enqueue(events);
     let agent = Agent::new(
         "durable-assistant",
         Arc::new(model.clone()),
@@ -78,6 +141,7 @@ async fn durable_turn_atomically_survives_reopen_and_resume() {
         .await
         .expect("transcript survives reopen");
     assert_eq!(transcript.len(), 2);
+    assert_eq!(transcript[1].message.metadata, metadata);
     let checkpoint = AgentCheckpoint::existing(checkpoint_id, reopened.clone());
     let (_, state) = checkpoint.load().expect("checkpoint survives reopen");
     assert!(matches!(
@@ -95,6 +159,15 @@ async fn durable_turn_atomically_survives_reopen_and_resume() {
         .await
         .expect("committed durable turn resumes without execution");
     assert_eq!(resumed.conversation_version.get(), 1);
+    assert_eq!(
+        resumed
+            .outcome
+            .transcript
+            .last()
+            .expect("assistant history survives")
+            .metadata,
+        metadata
+    );
     assert_eq!(model.recorded_requests().len(), 1);
 
     fs::remove_file(path).expect("temporary SQLite database is removable");
@@ -687,4 +760,395 @@ async fn admission_binds_agent_before_first_execution_checkpoint() {
     assert_eq!(model.recorded_requests().len(), 1);
     drop((changed, session, store, connection));
     fs::remove_file(path).expect("remove database");
+}
+
+#[tokio::test]
+async fn managed_context_summary_and_request_reports_survive_session_reopen() {
+    use runifold_agent::{
+        AgentSession, ContextBudget, ContextGroupKind, ContextManager, ConversationSummaryPassLimit,
+    };
+    let path = database_path();
+    let store = Arc::new(SqliteStore::open(&path).expect("store"));
+    let model = ScriptedModel::new();
+    for index in 0..3 {
+        model.enqueue(response_events(&format!("turn-{index}"), "answer"));
+    }
+    let summaries = ScriptedModel::new();
+    summaries.enqueue(response_events(
+        "summary",
+        "Retain the first evidence source and unresolved question.",
+    ));
+    let manager = ContextManager::new(ContextBudget::new(8_000, 500, 500).expect("context budget"));
+    let agent = Agent::builder(
+        "analyst",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "script"),
+    )
+    .context_manager(manager.clone())
+    .build()
+    .expect("agent");
+    let summary_agent = Agent::builder(
+        "summary",
+        Arc::new(summaries.clone()),
+        ModelRef::new("test", "script"),
+    )
+    .context_manager(manager)
+    .build()
+    .expect("summary agent");
+    let id = ConversationId::new();
+    let namespace = MemoryNamespace::parse("context.reopen").expect("namespace");
+    let policy = ConversationContextPolicy::new(ConversationWindow::new(2).expect("window"));
+    let limit = ConversationSummaryPassLimit::new(4).expect("summary limit");
+    let session = AgentSession::new(agent.clone(), store.clone(), id, namespace.clone(), policy)
+        .with_summary_agent(summary_agent.clone(), limit);
+    for input in ["first evidence", "second evidence"] {
+        session
+            .run(CheckpointId::new(), input, &root_run())
+            .await
+            .expect("turn commits");
+    }
+    let request = CheckpointId::new();
+    let outcome = session
+        .run(request, "third evidence", &root_run())
+        .await
+        .expect("summarize and commit");
+    let plans = outcome.outcome.context_plans().expect("plans");
+    let summary = plans[0]
+        .groups
+        .iter()
+        .find(|group| group.kind == ContextGroupKind::Summary)
+        .expect("summary retained");
+    assert_eq!(summary.summary_through, Some(2));
+    assert!(summary.required && summary.selected);
+    drop(session);
+    drop(store);
+    let reopened = Arc::new(SqliteStore::open(&path).expect("reopen"));
+    let session = AgentSession::new(agent, reopened.clone(), id, namespace.clone(), policy)
+        .with_summary_agent(summary_agent, limit);
+    assert!(matches!(
+        session
+            .run(request, "different evidence", &root_run())
+            .await,
+        Err(runifold_agent::AgentSessionError::RequestMismatch)
+    ));
+    let replay = session
+        .run(request, "third evidence", &root_run())
+        .await
+        .expect("completed replay");
+    assert_eq!(replay.outcome, outcome.outcome);
+    assert_eq!(model.recorded_requests().len(), 3);
+    assert_eq!(summaries.recorded_requests().len(), 1);
+    let transcript = reopened
+        .list_transcript(
+            id,
+            namespace,
+            None,
+            ConversationWindow::new(20).expect("window"),
+        )
+        .await
+        .expect("full archive");
+    assert_eq!(transcript.len(), 6);
+    assert!(transcript.iter().all(|entry| {
+        !entry
+            .message
+            .metadata
+            .contains_key("runifold.context.plans.v1")
+    }));
+    drop(session);
+    drop(reopened);
+    fs::remove_file(path).expect("remove database");
+}
+
+#[tokio::test]
+async fn managed_context_interrupted_request_recovers_original_projection_after_reopen() {
+    use runifold_agent::{AgentSession, ContextBudget, ContextManager, ResumePolicy};
+    let path = database_path();
+    let store = Arc::new(SqliteStore::open(&path).expect("store"));
+    let model = ScriptedModel::new();
+    model.enqueue_error(runifold_model::ModelError::local(
+        runifold_model::ModelErrorKind::Provider,
+        "interrupted",
+    ));
+    model.enqueue(response_events("recovery", "done"));
+    let agent = Agent::builder(
+        "analyst",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "script"),
+    )
+    .context("Original reference material.")
+    .context_manager(ContextManager::new(
+        ContextBudget::new(4_000, 500, 500).expect("budget"),
+    ))
+    .build()
+    .expect("agent");
+    let id = ConversationId::new();
+    let namespace = MemoryNamespace::parse("context.interrupted").expect("namespace");
+    let policy = ConversationContextPolicy::new(ConversationWindow::new(8).expect("window"));
+    let request = CheckpointId::new();
+    let session = AgentSession::new(agent.clone(), store.clone(), id, namespace.clone(), policy);
+    assert!(
+        session
+            .run(request, "original input", &root_run())
+            .await
+            .is_err()
+    );
+    // The failed future has returned: its previous owner can no longer dispatch.
+    let usage = session.recovery_usage(request).expect("accounting floor");
+    let revision = CheckpointStore::load(store.as_ref(), id.as_checkpoint_id())
+        .expect("admission")
+        .revision;
+    drop(session);
+    drop(store);
+    let reopened = Arc::new(SqliteStore::open(&path).expect("reopen"));
+    let session = AgentSession::new(agent, reopened.clone(), id, namespace, policy);
+    let run = RunContext::root(
+        BudgetTracker::restore(Budget::default(), usage).expect("restored budget"),
+        CapabilitySet::new(),
+    );
+    let recovered = session
+        .recover_after_owner_exit(
+            request,
+            "original input",
+            &run,
+            revision,
+            ResumePolicy::RetryInterruptedTurn,
+        )
+        .await
+        .expect("explicit recovery");
+    assert_eq!(
+        recovered
+            .outcome
+            .context_plans()
+            .expect("original plan")
+            .len(),
+        1
+    );
+    let requests = model.recorded_requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0], requests[1]);
+    drop(session);
+    drop(reopened);
+    fs::remove_file(path).expect("remove database");
+}
+
+#[tokio::test]
+async fn managed_session_continues_when_history_window_starts_with_a_tool_result() {
+    use runifold_agent::{AgentSession, ContextGroupKind, ConversationSummaryPassLimit};
+    use runifold_model::Role;
+    let store = Arc::new(SqliteStore::open_in_memory().expect("store"));
+    let id = ConversationId::new();
+    let namespace = MemoryNamespace::parse("context.partial-window").expect("namespace");
+    store
+        .create(id, namespace.clone())
+        .await
+        .expect("conversation");
+    store
+        .append(
+            namespace.clone(),
+            ConversationAppend {
+                conversation_id: id,
+                expected_version: ConversationVersion::new(0),
+                messages: context_tool_history(),
+            },
+        )
+        .await
+        .expect("seed complete turn");
+    let main = ScriptedModel::new();
+    main.enqueue(response_events("new", "updated analysis"));
+    let summaries = ScriptedModel::new();
+    summaries.enqueue(response_events(
+        "summary",
+        "The previous request called archived_tool; consult original evidence for its result.",
+    ));
+    summaries.enqueue(response_events(
+        "summary-tail",
+        "The original evidence supports the old conclusion; retain it for the new analysis.",
+    ));
+    let agent = context_managed_agent("main", &main);
+    let summary = context_managed_agent("summary", &summaries);
+    let session = AgentSession::new(
+        agent,
+        store.clone(),
+        id,
+        namespace.clone(),
+        ConversationContextPolicy::new(ConversationWindow::new(2).expect("window")),
+    )
+    .with_summary_agent(
+        summary,
+        ConversationSummaryPassLimit::new(4).expect("pass limit"),
+    );
+    let request_id = CheckpointId::new();
+    let outcome = session
+        .run(request_id, "new evidence", &root_run())
+        .await
+        .expect("continue analysis");
+    let plans = outcome.outcome.context_plans().expect("plans");
+    assert!(
+        !plans[0]
+            .groups
+            .iter()
+            .any(|group| group.kind == ContextGroupKind::IncompleteHistory)
+    );
+    assert_eq!(
+        plans[0]
+            .groups
+            .iter()
+            .find(|group| group.kind == ContextGroupKind::Summary)
+            .expect("complete prior summary")
+            .summary_through,
+        Some(4)
+    );
+    let requests = main.recorded_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].messages.len(), 2); // Committed summary and new input.
+    assert!(
+        !requests[0]
+            .messages
+            .iter()
+            .any(|message| message.role == Role::Tool)
+    );
+    assert_eq!(summaries.recorded_requests().len(), 2);
+    assert!(summaries.recorded_requests()[1].messages.iter().flat_map(|message| &message.content).any(|part| matches!(part, ContentPart::Text { text } if text.contains("original evidence") && text.contains("old conclusion"))));
+    let replay = session
+        .run(request_id, "new evidence", &root_run())
+        .await
+        .expect("replay");
+    assert_eq!(replay.outcome, outcome.outcome);
+    let transcript = store
+        .list_transcript(
+            id,
+            namespace,
+            None,
+            ConversationWindow::new(20).expect("window"),
+        )
+        .await
+        .expect("archive");
+    assert_eq!(transcript.len(), 6);
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry.message.role == Role::Tool)
+    );
+}
+
+fn context_tool_history() -> Vec<Message> {
+    use runifold_model::{Role, ToolCall, ToolResult};
+    vec![
+        Message::user("original request"),
+        Message::new(
+            Role::Assistant,
+            vec![ContentPart::ToolCall(ToolCall {
+                id: "old-tool".into(),
+                name: "archived_tool".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: None,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .expect("call"),
+        Message::new(
+            Role::Tool,
+            vec![ContentPart::ToolResult(ToolResult {
+                call_id: "old-tool".into(),
+                name: Some("archived_tool".into()),
+                content: vec![ContentPart::text("original evidence")],
+                structured_content: None,
+                is_error: false,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .expect("result"),
+        Message::new(Role::Assistant, vec![ContentPart::text("old conclusion")]).expect("answer"),
+    ]
+}
+
+#[tokio::test]
+async fn managed_session_without_summarizer_reports_excluded_partial_history() {
+    use runifold_agent::{AgentSession, ContextBudget, ContextGroupKind, ContextManager};
+    let store = Arc::new(SqliteStore::open_in_memory().expect("store"));
+    let id = ConversationId::new();
+    let namespace = MemoryNamespace::parse("context.partial-no-summarizer").expect("namespace");
+    store
+        .create(id, namespace.clone())
+        .await
+        .expect("conversation");
+    store
+        .append(
+            namespace.clone(),
+            ConversationAppend {
+                conversation_id: id,
+                expected_version: ConversationVersion::new(0),
+                messages: context_tool_history(),
+            },
+        )
+        .await
+        .expect("original history");
+    store
+        .commit_summary(
+            namespace.clone(),
+            ConversationSummaryCommit {
+                conversation_id: id,
+                expected_version: ConversationVersion::new(1),
+                through_sequence: ConversationSequence::new(2).expect("sequence"),
+                content: "Previous request called archived_tool.".into(),
+            },
+        )
+        .await
+        .expect("previously committed partial summary");
+    let model = ScriptedModel::new();
+    model.enqueue(response_events("new", "continued"));
+    let agent = Agent::builder(
+        "analyst",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "script"),
+    )
+    .context_manager(ContextManager::new(
+        ContextBudget::new(8_000, 500, 500).expect("budget"),
+    ))
+    .build()
+    .expect("agent");
+    let session = AgentSession::new(
+        agent,
+        store.clone(),
+        id,
+        namespace.clone(),
+        ConversationContextPolicy::new(ConversationWindow::new(2).expect("window")),
+    );
+    let outcome = session
+        .run(CheckpointId::new(), "new evidence", &root_run())
+        .await
+        .expect("explicit fallback");
+    let plans = outcome.outcome.context_plans().expect("plans");
+    let prefix = plans[0]
+        .groups
+        .iter()
+        .find(|group| group.kind == ContextGroupKind::IncompleteHistory)
+        .expect("exclusion reason");
+    assert!(!prefix.selected);
+    assert_eq!(prefix.message_indices.len(), 2);
+    assert_eq!(model.recorded_requests()[0].messages.len(), 2);
+    let transcript = store
+        .list_transcript(
+            id,
+            namespace,
+            None,
+            ConversationWindow::new(20).expect("window"),
+        )
+        .await
+        .expect("archive");
+    assert_eq!(transcript.len(), 6);
+}
+
+fn context_managed_agent(name: &str, model: &ScriptedModel) -> Agent {
+    use runifold_agent::{ContextBudget, ContextManager};
+    Agent::builder(
+        name,
+        Arc::new(model.clone()),
+        ModelRef::new("test", "script"),
+    )
+    .context_manager(ContextManager::new(
+        ContextBudget::new(8_000, 500, 500).expect("budget"),
+    ))
+    .build()
+    .expect("managed agent")
 }

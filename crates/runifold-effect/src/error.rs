@@ -5,7 +5,7 @@ use thiserror::Error;
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum EffectExecutorErrorKind {
-    /// The owning Run lacks the required capability.
+    /// The owning Run lacks the capability or grants a different effect class.
     CapabilityDenied,
     /// An idempotency key was reused for different work.
     IdempotencyConflict,

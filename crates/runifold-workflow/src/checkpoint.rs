@@ -507,7 +507,10 @@ impl WorkflowCheckpointCursor {
         &mut self,
         state: &WorkflowCheckpointState,
     ) -> Result<(), WorkflowError> {
-        let next = self.envelope.next(serialize(state)?)?;
+        let mut next = self.envelope.next(serialize(state)?)?;
+        // Reading a supported legacy schema is non-mutating. The first
+        // successful advance writes the current schema and payload together.
+        next.schema_version = CHECKPOINT_SCHEMA_VERSION;
         self.handle
             .compare_and_swap(&next, Some(self.envelope.revision))
             .await?;
@@ -616,6 +619,59 @@ mod tests {
             revision.state.phase,
             WorkflowCheckpointPhase::Ready
         ));
+    }
+
+    #[test]
+    fn first_advance_of_a_legacy_checkpoint_writes_the_current_schema() {
+        for schema_version in [3, 4] {
+            let mut source = in_flight_checkpoint();
+            source.schema_version = schema_version;
+            source.payload["phase"] = json!({"state": "ready"});
+            let store = Arc::new(runifold_core::InMemoryCheckpointStore::new());
+            store
+                .compare_and_swap(&source, None)
+                .expect("legacy checkpoint");
+            let handle = WorkflowCheckpoint::existing(source.id, store.clone());
+            let (loaded, mut state) = handle.load().expect("legacy schema remains readable");
+            assert_eq!(store.load(source.id).expect("read-only load"), source);
+            let mut cursor = WorkflowCheckpointCursor::loaded(&handle, loaded);
+            state.phase = WorkflowCheckpointPhase::StepInFlight {
+                step: StepId::parse("charge").expect("step"),
+            };
+
+            futures_executor::block_on(cursor.save(&state))
+                .expect("upgrade and advance atomically");
+
+            let saved = store.load(source.id).expect("advanced checkpoint");
+            assert_eq!(saved.schema_version, CHECKPOINT_SCHEMA_VERSION);
+            assert_eq!(saved.revision, source.revision + 1);
+            assert_eq!(saved.id, source.id);
+            assert_eq!(saved.run_id, source.run_id);
+            assert_eq!(saved.payload["usage"], source.payload["usage"]);
+        }
+    }
+
+    #[test]
+    fn failed_legacy_upgrade_does_not_advance_the_cursor_or_replace_the_winner() {
+        let mut source = in_flight_checkpoint();
+        source.schema_version = 4;
+        let store = Arc::new(runifold_core::InMemoryCheckpointStore::new());
+        store
+            .compare_and_swap(&source, None)
+            .expect("legacy checkpoint");
+        let handle = WorkflowCheckpoint::existing(source.id, store.clone());
+        let (loaded, state) = handle.load().expect("read legacy state");
+        let mut cursor = WorkflowCheckpointCursor::loaded(&handle, loaded);
+        let winner = source
+            .next(source.payload.clone())
+            .expect("competing revision");
+        store
+            .compare_and_swap(&winner, Some(source.revision))
+            .expect("competing writer");
+
+        assert!(futures_executor::block_on(cursor.save(&state)).is_err());
+        assert_eq!(cursor.envelope, source);
+        assert_eq!(store.load(source.id).expect("winning checkpoint"), winner);
     }
 
     #[test]

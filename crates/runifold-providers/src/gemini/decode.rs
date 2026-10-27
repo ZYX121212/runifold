@@ -367,10 +367,7 @@ fn finish_reason(reason: &str) -> FinishReason {
 }
 
 fn provider_error(value: &Value) -> ModelError {
-    let message = value
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("Gemini returned an error");
+    let message = "provider reported a failed response; inspect structured error classification";
     let mut error = ModelError::local(ModelErrorKind::Provider, message);
     error.provider = Some("gemini".into());
     if let Some(status) = value.get("status") {

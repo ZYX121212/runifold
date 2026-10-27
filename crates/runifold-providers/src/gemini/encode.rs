@@ -98,6 +98,8 @@ pub fn encode_request(request: &ModelRequest) -> Result<Value, ModelError> {
             "toolConfig".into(),
             json!({"functionCallingConfig": tool_choice(&request.tool_choice)?}),
         );
+    } else if !matches!(request.tool_choice, ToolChoice::Auto | ToolChoice::None) {
+        return Err(invalid("tool choice requires at least one tool"));
     }
     merge_options(&mut body, request)?;
     Ok(Value::Object(body))
@@ -259,31 +261,25 @@ fn encode_tool_result(result: &ToolResult) -> Result<Value, ModelError> {
             ContentPart::Text { text: value } => text.push(Value::String(value.clone())),
             ContentPart::Image { source }
             | ContentPart::Audio { source }
-            | ContentPart::Document { source, .. } => match encode_media(source) {
-                Ok(part) => media.push(part),
-                Err(error) if error.kind == ModelErrorKind::UnsupportedFeature => {
-                    text.push(Value::String(encode_content_envelope(part)?));
+            | ContentPart::Document { source, .. } => match source {
+                MediaSource::Base64 { media_type, data } => {
+                    validate_inline_media(media_type, data)?;
+                    media.push(json!({"inlineData":{"mimeType":media_type,"data":data}}));
                 }
-                Err(error) => return Err(error),
+                _ => text.push(Value::String(encode_content_envelope(part)?)),
             },
-            ContentPart::ResourceLink {
-                uri, media_type, ..
-            } => match encode_media(&MediaSource::Url {
-                url: uri.clone(),
-                media_type: media_type.clone(),
-            }) {
-                Ok(part) => media.push(part),
-                Err(error) if error.kind == ModelErrorKind::UnsupportedFeature => {
-                    text.push(Value::String(encode_content_envelope(part)?));
-                }
-                Err(error) => return Err(error),
-            },
+            ContentPart::ResourceLink { .. } => {
+                text.push(Value::String(encode_content_envelope(part)?));
+            }
             _ => text.push(Value::String(encode_content_envelope(part)?)),
         }
     }
     let response = match (&result.structured_content, text.is_empty()) {
-        (Some(structured), true) => structured.clone(),
-        (Some(structured), false) => json!({
+        (Some(structured), true) if structured.is_object() && !result.is_error => {
+            structured.clone()
+        }
+        (Some(structured), true) if !result.is_error => json!({"result": structured}),
+        (Some(structured), _) => json!({
             "type": "runifold.tool_result.v1",
             "structuredContent": structured,
             "content": text,
@@ -364,7 +360,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use runifold_model::{
-        ContentPart, MediaSource, Message, ModelRef, ModelRequest, Role, ToolResult,
+        ContentPart, MediaSource, Message, ModelRef, ModelRequest, Role, ToolChoice, ToolResult,
     };
     use serde_json::json;
 
@@ -383,6 +379,19 @@ mod tests {
 
         assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be exact");
         assert_eq!(body["contents"][0]["role"], "user");
+    }
+
+    #[test]
+    fn rejects_required_tool_choice_without_tools() {
+        let mut request = ModelRequest::new(
+            ModelRef::new("gemini", "gemini-test"),
+            Message::user("lookup"),
+        );
+        request.tool_choice = ToolChoice::Required;
+
+        let error = encode_request(&request).unwrap_err();
+
+        assert_eq!(error.kind, runifold_model::ModelErrorKind::InvalidRequest);
     }
 
     #[test]
@@ -474,6 +483,92 @@ mod tests {
         let response = &body["contents"][0]["parts"][0]["functionResponse"];
         assert_eq!(response["response"], serde_json::json!({"objects":1}));
         assert_eq!(response["parts"][0]["inlineData"]["mimeType"], "image/png");
+    }
+
+    #[test]
+    fn remote_tool_media_stays_in_structured_response() {
+        let message = Message::new(
+            Role::Tool,
+            vec![ContentPart::ToolResult(ToolResult {
+                call_id: "call-remote".into(),
+                name: Some("inspect".into()),
+                content: vec![ContentPart::Image {
+                    source: MediaSource::Url {
+                        url: "https://example.com/image.png".into(),
+                        media_type: Some("image/png".into()),
+                    },
+                }],
+                structured_content: None,
+                is_error: false,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("gemini", "gemini-test"),
+            message,
+        ))
+        .unwrap();
+        let response = &body["contents"][0]["parts"][0]["functionResponse"];
+
+        assert!(response.get("parts").is_none());
+        assert!(
+            response["response"]["output"][0]
+                .as_str()
+                .unwrap()
+                .contains("https://example.com/image.png")
+        );
+    }
+
+    #[test]
+    fn scalar_structured_tool_result_is_wrapped_as_object() {
+        let message = Message::new(
+            Role::Tool,
+            vec![ContentPart::ToolResult(ToolResult {
+                call_id: "call-scalar".into(),
+                name: Some("count".into()),
+                content: Vec::new(),
+                structured_content: Some(json!(7)),
+                is_error: false,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("gemini", "gemini-test"),
+            message,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            body["contents"][0]["parts"][0]["functionResponse"]["response"],
+            json!({"result": 7})
+        );
+    }
+
+    #[test]
+    fn structured_tool_error_preserves_error_flag() {
+        let message = Message::new(
+            Role::Tool,
+            vec![ContentPart::ToolResult(ToolResult {
+                call_id: "call-error".into(),
+                name: Some("lookup".into()),
+                content: Vec::new(),
+                structured_content: Some(json!({"code": "missing"})),
+                is_error: true,
+                metadata: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+        let body = encode_request(&ModelRequest::new(
+            ModelRef::new("gemini", "gemini-test"),
+            message,
+        ))
+        .unwrap();
+        let response = &body["contents"][0]["parts"][0]["functionResponse"]["response"];
+
+        assert_eq!(response["isError"], true);
+        assert_eq!(response["structuredContent"]["code"], "missing");
     }
 
     #[test]

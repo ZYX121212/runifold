@@ -10,12 +10,18 @@ responses are valuable, but they are not labelled as production verification.
 | --- | --- | --- |
 | Provider stream parsing and cancellation | Real loopback HTTP/SSE/NDJSON/binary EventStream cassettes | Mandatory |
 | Provider concurrency isolation | Repeated concurrent loopback requests | Mandatory |
+| Request resource stability | 16896 mixed requests, per-round queue/capacity release, exact physical-attempt accounting and warmed RSS growth at most 8 MiB | Native Linux/macOS workspace test; repeated by soak |
 | PostgreSQL workflow and conversation persistence | Disposable real PostgreSQL/pgvector containers | Mandatory |
 | PostgreSQL outage and restart recovery | Stop/restart of the same writable container layer | Mandatory |
 | SQLite forced process-kill recovery | Parent kills a synchronized child after the durable effect boundary; completed work replays once | Mandatory |
 | External Effect outcome reconciliation | Uncertain handler failures remain `Started`; completed, proven-not-executed, unresolved, and lookup-failure branches are fail-closed contracts | Mandatory |
+| Effect classification authority | Requested classification must match the grant before persistence, recovery, reconciliation or replay | Covered by Effect crate tests in CI |
+| SQLite Effect completion-write failure | Database trigger rejects completion after external file publication; reopen refuses unsafe retry and reconciles the receipt without republishing | Covered by SQLite integration tests in CI |
 | SQLite WorkflowStore recovery | Forced worker kill, fenced lease takeover, budget adoption, HITL, history, and fork survive reopen | Mandatory |
 | SQLite concurrent workflow claim | Independent connections produce exactly one fenced winner | Mandatory |
+| SQLite concurrent Effect recovery | Independent connections reconcile the same Started revision; one local commit wins and the stale caller cannot dispatch | Covered by SQLite integration tests in CI; does not fence a live remote owner |
+| Workflow upgrade compatibility | Schema v3/v4 advance to v5 through SQLite and real PostgreSQL; stale drained owners fail; actual v0.7.2 reader rejects upgraded state | Dedicated configured CI gate; local results recorded in `workflow-upgrade.json` |
+| Child grant integrity | Complete parent descriptors retained across normal/reserved child Runs, Gateway and Workflow; redefinition rejected before child work | Covered by kernel and facade tests in CI |
 | SQLite Session admission and summaries | Request replay, cross-connection admission, dropped-stream recovery, pre-checkpoint definition binding and checkpointed summary faults | Mandatory |
 | Durable publication reference | Separate local publisher, forced process kill before Effect acknowledgement, revoked grants and receipt reconciliation without republication | Mandatory |
 | SQLite durable Agent conversation | Transcript and terminal checkpoint commit atomically; reopen resumes without another model call | Mandatory |
@@ -31,6 +37,12 @@ responses are valuable, but they are not labelled as production verification.
 | Ark strict structured Responses, hosted/function tools, and delivery modes | Two live Ark requests plus content-free evidence | Manual opt-in |
 | AWS S3 IAM/KMS integration | Not yet verified | Planned |
 | Multi-hour network/database soak | Scheduled three-hour repetition of real PostgreSQL, SQLite Session, Effect, and Provider fault suites with credential-free evidence | Scheduled |
+
+Soak evidence schema 3 identifies the actual source contents and separates short
+checks from release eligibility. Only a completed, unchanged-source run of at
+least the requested 180-minute release duration may set `release_eligible=true`.
+A short-run pass, old schema, unknown revision or configured workflow is not a
+three-hour acceptance result. See [the evidence contract](rfcs/0067-reliability-evidence-gates.md).
 | Browser Service Workers | Not yet verified | Planned |
 | Reproducible Rig framework benchmark | Scheduled 100×1000 paired rounds, alternating order, raw artifacts, bootstrap confidence intervals, and non-regression enforcement | Scheduled |
 | Independent third-party reproduction | Requires an external maintainer to run and attest the public benchmark contract | External evidence required |
@@ -96,6 +108,7 @@ The executable smoke test covers:
 
 - UUID v7 Run identity generation through the JavaScript randomness source;
 - child Run identity and authority attenuation;
+- rejection of redefined child capability descriptors under the same ID;
 - hierarchical cancellation propagation;
 - atomic budget rejection without partial accounting.
 
@@ -146,6 +159,11 @@ explicit dispatch and external API authority. A missing key is a hard failure
 after dispatch rather than a skipped test.
 
 ## Claim policy
+
+A scoped source audit, its local verification, and remaining acceptance gaps are
+recorded in [Production readiness review](PRODUCTION-READINESS.md). CI status
+above describes configured gates; consult successful workflow artifacts for
+the tested revision before treating a release as accepted.
 
 A feature is not moved to `Mandatory` from prose, mocked tests, or one local
 success. It requires a bounded reproducible command, pinned dependencies,

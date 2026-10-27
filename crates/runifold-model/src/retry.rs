@@ -54,7 +54,7 @@ pub enum ModelRetryPolicyError {
 }
 
 /// Explicit same-route retry and backoff authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelRetryPolicy {
     max_attempts: u32,
     initial_backoff: Duration,
@@ -119,7 +119,7 @@ impl ModelRetryPolicy {
     /// Allows retry for one error kind whose retry safety is unknown.
     ///
     /// This is explicit authority to risk another provider charge. It never
-    /// overrides cancellation or an error marked unsafe.
+    /// overrides cancellation, local admission denial, or an error marked unsafe.
     #[must_use]
     pub fn allow_unknown(mut self, kind: ModelErrorKind) -> Self {
         if !self.unknown_safety_kinds.contains(&kind) {
@@ -154,7 +154,10 @@ impl ModelRetryPolicy {
     }
 
     pub(crate) fn permits(&self, error: &ModelError) -> bool {
-        if error.kind == ModelErrorKind::Cancelled {
+        if matches!(
+            error.kind,
+            ModelErrorKind::Cancelled | ModelErrorKind::AdmissionDenied
+        ) {
             return false;
         }
         match error.retry_safety {

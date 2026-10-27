@@ -19,7 +19,8 @@ Start at `src/lib.rs` and follow its module declarations and calls.
 
 Extend deterministic composition, durable steps, workers, leases, timers and signals within this crate; consult current public exports before adding another abstraction.
 
-
+- Read supported legacy checkpoint schemas without rewriting them; the first successful state advance promotes schema and payload together to the current version.
+- Unknown schemas fail closed. Drain old workers and explicitly initialize database schema before admitting new workers; validate with scripts/verify-workflow-upgrade.py.
 
 Public exports are in the crate entry point. Consult
 [the architecture map](../../docs/ai/architecture.md) before crossing a crate boundary.

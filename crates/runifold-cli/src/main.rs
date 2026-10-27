@@ -79,6 +79,8 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum AiCommand {
+    /// Fingerprint locked resolved dependencies and actual local source contents offline.
+    Environment(EnvironmentArgs),
     /// Show the compact bundled knowledge index, optionally with project inspection.
     Context {
         #[arg(long)]
@@ -110,6 +112,23 @@ enum AiCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Debug, Args)]
+struct EnvironmentArgs {
+    #[arg(long, default_value = "Cargo.toml")]
+    manifest_path: PathBuf,
+    #[arg(long, value_delimiter = ',')]
+    features: Vec<String>,
+    #[arg(long, conflicts_with = "features")]
+    all_features: bool,
+    #[arg(long)]
+    no_default_features: bool,
+    /// Cargo target filter; absent means Cargo's unfiltered metadata graph.
+    #[arg(long)]
+    target: Option<String>,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -202,10 +221,27 @@ enum BudgetCommand {
     Explain { budget: PathBuf, usage: PathBuf },
 }
 
+async fn environment_command(arguments: EnvironmentArgs) -> Result<bool> {
+    let json = arguments.json;
+    let options = ai::EnvironmentOptions {
+        manifest_path: arguments.manifest_path,
+        features: arguments.features,
+        all_features: arguments.all_features,
+        no_default_features: arguments.no_default_features,
+        target: arguments.target,
+    };
+    tokio::task::spawn_blocking(move || ai::environment(&options, json)).await?
+}
+
 #[tokio::main]
 async fn main() -> Result<std::process::ExitCode> {
     match Cli::parse().command {
         Command::Ai { command } => match command {
+            AiCommand::Environment(arguments) => {
+                if !environment_command(arguments).await? {
+                    return Ok(std::process::ExitCode::FAILURE);
+                }
+            }
             AiCommand::Context {
                 json,
                 manifest_path: None,

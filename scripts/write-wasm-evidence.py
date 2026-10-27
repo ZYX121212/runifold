@@ -43,6 +43,7 @@ def main() -> None:
         "runtime_assertions": [
             "uuid-v7-identity",
             "child-authority-attenuation",
+            "child-capability-descriptor-integrity",
             "hierarchical-cancellation",
             "atomic-budget-rejection",
         ],

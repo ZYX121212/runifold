@@ -74,7 +74,9 @@ pub use runifold_agent::{
     AgentDescriptor, AgentError, AgentEventStream, AgentGateway, AgentOutcome, AgentPromptError,
     AgentRecoveryContract, AgentRegistrationError, AgentRoute, AgentSession, AgentSessionError,
     AgentStreamEvent, AutomaticConversationSummary, CallableKind, CompletionRequirement,
-    CompositeTerminalReviewMode, CompositeTerminalReviewer, ConversationAppend,
+    CompositeTerminalReviewMode, CompositeTerminalReviewer, ContextBudget,
+    ContextComponentDescriptor, ContextError, ContextGroup, ContextGroupKind, ContextManager,
+    ContextPlan, ContextSelectionStrategy, ContextTokenCounter, ConversationAppend,
     ConversationContextPolicy, ConversationCreateOutcome, ConversationId, ConversationSequence,
     ConversationStore, ConversationStoreError, ConversationStoreErrorKind, ConversationStoreFuture,
     ConversationSummarizer, ConversationSummarizerError, ConversationSummarizerFuture,
@@ -84,15 +86,15 @@ pub use runifold_agent::{
     DurableConversationCheckpoint, DurableConversationCommit, DurableConversationEventStream,
     DurableConversationRequest, DurableConversationStore, GatewayDecision, GatewayError,
     GatewayErrorKind, GatewayFuture, GatewayMiddleware, GatewayNext, GatewayPolicy,
-    InMemoryConversationStore, MemoryNamespace, PolicyMiddleware, ResumePolicy, SemanticMemory,
-    SemanticMemoryId, SemanticMemoryQuery, SemanticMemorySearchOutcome, SemanticMemorySource,
-    SemanticMemoryUpsert, SemanticMemoryUpsertOutcome, StructuredAgent, StructuredAgentError,
-    StructuredAgentOutcome, TerminalRequirementFailure, TerminalRequirementFailureKind,
-    TerminalReviewError, TerminalReviewFuture, TerminalReviewPolicy, TerminalReviewRequest,
-    TerminalReviewVerdict, TerminalReviewVerdictKind, TerminalReviewer, TerminalReviewerDescriptor,
-    TerminalRuleReviewer, ToolErrorPolicy, TurnReviewError, TurnReviewFuture, TurnReviewPolicy,
-    TurnReviewRequest, TurnReviewScope, TurnReviewVerdict, TurnReviewer, TurnReviewerDescriptor,
-    TurnRuleReviewer,
+    InMemoryConversationStore, MemoryNamespace, PolicyMiddleware, RecentContext, ResumePolicy,
+    SemanticMemory, SemanticMemoryId, SemanticMemoryQuery, SemanticMemorySearchOutcome,
+    SemanticMemorySource, SemanticMemoryUpsert, SemanticMemoryUpsertOutcome,
+    SerializedBytesCounter, StructuredAgent, StructuredAgentError, StructuredAgentOutcome,
+    TerminalRequirementFailure, TerminalRequirementFailureKind, TerminalReviewError,
+    TerminalReviewFuture, TerminalReviewPolicy, TerminalReviewRequest, TerminalReviewVerdict,
+    TerminalReviewVerdictKind, TerminalReviewer, TerminalReviewerDescriptor, TerminalRuleReviewer,
+    ToolErrorPolicy, TurnReviewError, TurnReviewFuture, TurnReviewPolicy, TurnReviewRequest,
+    TurnReviewScope, TurnReviewVerdict, TurnReviewer, TurnReviewerDescriptor, TurnRuleReviewer,
 };
 pub use runifold_core::{
     AuthorityAmplification, Budget, BudgetExceeded, BudgetReservation, BudgetReservationMismatch,
@@ -113,19 +115,22 @@ pub use runifold_macros::tool;
 pub use runifold_model::{
     Artifact, ArtifactError, ArtifactFuture, ArtifactPage, ArtifactRef, ArtifactResolvingModel,
     ArtifactScope, ArtifactStore, ArtifactWrite, BatchProfile, CapabilityAudit,
-    CapabilityAuditEntry, CircuitBreakerConfig, CircuitBreakerConfigError, CircuitState,
-    ContentPart, DEFAULT_MAX_ARTIFACT_BYTES, FeaturePolicy, GeneratedImage, GenerationOptions,
-    ImageFormat, ImageGenerationModel, ImageGenerationRequest, ImageGenerationResponse,
-    InMemoryArtifactStore, InteractiveProfile, MAX_ARTIFACT_IDEMPOTENCY_KEY_BYTES,
-    MAX_ARTIFACT_NAME_BYTES, MAX_ARTIFACT_PAGE_SIZE, MediaSource, Message, Model, ModelCallContext,
-    ModelCapabilityCatalog, ModelEventStream, ModelFallbackPolicy, ModelRef, ModelRequest,
-    ModelResponse, ModelRetryPolicy, ModelRetryPolicyError, ModelRoute, ModelRouteHealth,
-    ModelRouter, ModelRouterBuildError, ModelRouterBuilder, OutputFormat, ProductionProfile,
-    ProviderModel, ProviderRuntimeProfile, ProviderToolSpec, ResponseMode, RetryJitter,
-    RouterClock, RouterSleepFuture, RouterSleeper, RuntimeProfilePreset, SpeechFormat, SpeechModel,
-    SpeechRequest, SpeechResponse, StructuredOutputError, StructuredOutputErrorKind, SupportLevel,
-    SystemRouterClock, SystemRouterSleeper, TranscriptionModel, TranscriptionRequest,
-    TranscriptionResponse,
+    CapabilityAuditEntry, CircuitBreakerConfig, CircuitBreakerConfigError, CircuitFailurePolicy,
+    CircuitState, ContentPart, DEFAULT_MAX_ARTIFACT_BYTES, FeaturePolicy, GeneratedImage,
+    GenerationOptions, ImageFormat, ImageGenerationModel, ImageGenerationRequest,
+    ImageGenerationResponse, InMemoryArtifactStore, InteractiveProfile,
+    MAX_ARTIFACT_IDEMPOTENCY_KEY_BYTES, MAX_ARTIFACT_NAME_BYTES, MAX_ARTIFACT_PAGE_SIZE,
+    MediaSource, Message, Model, ModelCallContext, ModelCapabilityCatalog, ModelCapacityLimits,
+    ModelCapacityPoolId, ModelCapacitySnapshot, ModelEventStream, ModelFallbackPolicy,
+    ModelRateLimit, ModelRef, ModelRequest, ModelResponse, ModelRetryPolicy, ModelRetryPolicyError,
+    ModelRoute, ModelRouteHealth, ModelRouter, ModelRouterBuildError, ModelRouterBuilder,
+    ModelScheduler, ModelSchedulerConfig, ModelSchedulerConfigError, ModelSchedulerSnapshot,
+    ModelSchedulingError, ModelTokenEstimator, ModelTokenSettlement, OutputFormat,
+    ProductionProfile, ProviderModel, ProviderRuntimeProfile, ProviderToolSpec, ResponseMode,
+    RetryJitter, RouterClock, RouterSleepFuture, RouterSleeper, RuntimePolicySnapshot,
+    RuntimeProfilePreset, ScheduledModel, SpeechFormat, SpeechModel, SpeechRequest, SpeechResponse,
+    StructuredOutputError, StructuredOutputErrorKind, SupportLevel, SystemRouterClock,
+    SystemRouterSleeper, TranscriptionModel, TranscriptionRequest, TranscriptionResponse,
 };
 #[cfg(feature = "runtime")]
 pub use runifold_retrieval::{
@@ -183,6 +188,23 @@ pub use schemars::{JsonSchema, schema_for};
 /// Model rather than provider-specific behavior.
 #[cfg(feature = "runtime")]
 pub trait ProviderModelExt: ProviderModel + Sized + 'static {
+    /// Binds this physical provider to shared capacity before retry and routing.
+    ///
+    /// Reuse the scheduler across providers sharing account/deployment quotas.
+    /// Call `.runtime(model)` on the returned wrapper for the canonical Agent
+    /// path. Token-limited bindings also require `.token_estimator(...)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for empty, duplicate, or unknown pool bindings.
+    fn scheduled(
+        self,
+        scheduler: &ModelScheduler,
+        pools: impl IntoIterator<Item = ModelCapacityPoolId>,
+    ) -> Result<ScheduledModel<Self>, ModelSchedulerConfigError> {
+        scheduler.bind(self, pools)
+    }
+
     /// Starts an Agent builder using this adapter's canonical provider identity.
     fn agent(self, name: impl Into<String>, model: impl Into<String>) -> AgentBuilder {
         let model_ref = self.model_ref(model);
@@ -538,6 +560,45 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, crate::ModelRouterBuildError::EmptyTarget);
+    }
+
+    #[test]
+    fn runtime_profile_disables_shared_breaker_without_authorizing_unknown_retries() {
+        for enabled in [false, true] {
+            let inner = ScriptedModel::new();
+            for _ in 0..2 {
+                inner.enqueue_error(crate::model::ModelError::local(
+                    crate::model::ModelErrorKind::Provider,
+                    "failed",
+                ));
+            }
+            let profile = ProviderRuntimeProfile::conservative().circuit_breaker(
+                crate::CircuitBreakerConfig::new(1, std::time::Duration::from_secs(30)).unwrap(),
+            );
+            let profile = if enabled {
+                profile
+            } else {
+                profile.without_circuit_breaker()
+            };
+            let runtime = ProfiledModel {
+                inner: inner.clone(),
+            }
+            .runtime_with_profile("model", profile)
+            .unwrap();
+            for caller in [runtime.clone(), runtime.clone()] {
+                let request =
+                    ModelRequest::new(ModelRef::new("profiled", "model"), Message::user("hello"));
+                assert!(
+                    futures_executor::block_on(caller.invoke(request, ModelCallContext::new()))
+                        .is_err()
+                );
+            }
+            assert_eq!(inner.recorded_requests().len(), if enabled { 1 } else { 2 });
+            assert_eq!(
+                runtime.profile().selected_circuit_breaker().is_enabled(),
+                enabled
+            );
+        }
     }
 
     #[test]

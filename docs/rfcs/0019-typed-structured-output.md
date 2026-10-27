@@ -45,6 +45,11 @@ request configuration itself guarantees a valid response.
 4. rejects missing or whitespace-only text;
 5. deserializes locally with `serde_json`.
 
+The local decoder only accepts a normally completed model response. Parseable
+JSON from a length-limited, filtered, or tool-call response is not a completed
+structured result. Strict OpenAI schemas also validate that local `$ref`
+targets resolve to schema nodes before transport.
+
 `AgentOutcome::into_structured::<T>` returns `StructuredAgentOutcome<T>`.
 The wrapper retains the original canonical outcome alongside the decoded
 value, so typing does not discard transcript, usage, warnings, provider

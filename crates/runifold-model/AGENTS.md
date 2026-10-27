@@ -5,7 +5,7 @@ Read ../../AGENTS.md first. This guide adds local boundaries.
 
 ## Purpose
 
-Owns: Provider-neutral content, model invocation, streams, routing and retry contracts.
+Owns: Provider-neutral content, model invocation, streams, routing, retry and shared physical-request scheduling.
 
 Does not own: Vendor wire types and Agent tool loops.
 
@@ -14,10 +14,11 @@ Does not own: Vendor wire types and Agent tool loops.
 Start at `src/invocation.rs` and follow its module declarations and calls.
 
 - `src/invocation.rs`
+- `src/scheduling.rs`
 
 ## Extension points
 
-Extend provider-neutral content, model invocation, streams, routing and retry contracts within this crate; consult current public exports before adding another abstraction.
+Extend provider-neutral content, model invocation, streams, routing, retry and shared physical-request scheduling within this crate; consult current public exports before adding another abstraction.
 
 
 

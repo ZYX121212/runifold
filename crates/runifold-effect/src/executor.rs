@@ -93,6 +93,8 @@ impl EffectExecutor {
     /// This closes the common crash window where the remote side committed but
     /// the local `Completed` record did not. It does not create a distributed
     /// transaction: unresolved remote state still returns `Ambiguous`.
+    /// A `NotExecuted` proof must exclude still-active previous attempts; a
+    /// missing receipt is not sufficient. See [`EffectReconciliation::NotExecuted`].
     ///
     /// # Errors
     ///
@@ -300,10 +302,19 @@ impl std::fmt::Debug for EffectExecutor {
 }
 
 fn preflight(request: &EffectRequest, run: &RunContext) -> Result<(), EffectExecutorError> {
-    if !run.capabilities().contains(request.capability_id) {
+    let capability = run
+        .capabilities()
+        .get(request.capability_id)
+        .ok_or_else(|| {
+            EffectExecutorError::new(
+                EffectExecutorErrorKind::CapabilityDenied,
+                "Run is not granted the effect capability",
+            )
+        })?;
+    if capability.effect != request.effect_class {
         return Err(EffectExecutorError::new(
             EffectExecutorErrorKind::CapabilityDenied,
-            "Run is not granted the effect capability",
+            "effect classification differs from the granted capability; use the current capability descriptor",
         ));
     }
     if run.cancellation().is_cancelled() {
@@ -833,6 +844,128 @@ mod tests {
         assert_eq!(error.kind, EffectExecutorErrorKind::CapabilityDenied);
         assert!(store.load(effect.effect_id).unwrap().is_none());
         assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn mismatched_effect_classes_are_rejected_before_preparation() {
+        let classes = [
+            EffectClass::Pure,
+            EffectClass::ReadOnly,
+            EffectClass::IdempotentWrite,
+            EffectClass::NonIdempotentWrite,
+            EffectClass::Destructive,
+            EffectClass::Unknown,
+        ];
+        for granted in classes {
+            for requested in classes {
+                if granted == requested {
+                    continue;
+                }
+                let capability = capability(granted);
+                let run = run_with(&capability, None);
+                let store = Arc::new(InMemoryEffectStore::new());
+                let handler = CountingHandler::new();
+                let mut effect = request(&capability, Some("mismatch"), json!({}));
+                effect.effect_class = requested;
+                let error = futures_executor::block_on(EffectExecutor::new(store.clone()).execute(
+                    effect.clone(),
+                    &run,
+                    &handler,
+                    EffectRecoveryPolicy::RetrySafe,
+                ))
+                .expect_err("a request must match its granted effect classification");
+
+                assert_eq!(error.kind, EffectExecutorErrorKind::CapabilityDenied);
+                assert!(
+                    store
+                        .load(effect.effect_id)
+                        .expect("load succeeds")
+                        .is_none()
+                );
+                assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn relabelled_started_write_cannot_gain_safe_retry() {
+        let capability = capability(EffectClass::NonIdempotentWrite);
+        let run = run_with(&capability, None);
+        let store = Arc::new(InMemoryEffectStore::new());
+        let mut effect = request(&capability, Some("unsafe-write"), json!({"charge": 12}));
+        effect.effect_class = EffectClass::Pure;
+        let prepared = EffectRecord::prepared(effect.clone());
+        store.compare_and_swap(&prepared, None).expect("prepared");
+        let started = prepared.next(EffectStatus::Started).expect("next revision");
+        store.compare_and_swap(&started, Some(0)).expect("started");
+        let handler = CountingHandler::new();
+
+        let error = futures_executor::block_on(EffectExecutor::new(store.clone()).execute(
+            effect.clone(),
+            &run,
+            &handler,
+            EffectRecoveryPolicy::RetrySafe,
+        ))
+        .expect_err("a relabelled write must not acquire retry authority");
+
+        assert_eq!(error.kind, EffectExecutorErrorKind::CapabilityDenied);
+        assert_eq!(
+            store.load(effect.effect_id).expect("load succeeds"),
+            Some(started)
+        );
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn changed_grant_class_blocks_replay_and_remote_reconciliation() {
+        struct UnexpectedReconciler;
+
+        impl EffectReconciler for UnexpectedReconciler {
+            fn reconcile(
+                &self,
+                _request: &EffectRequest,
+                _context: EffectExecutionContext,
+            ) -> EffectFuture<'_, Result<EffectReconciliation, RunError>> {
+                panic!("classification denial must precede remote I/O");
+            }
+        }
+
+        let mut capability = capability(EffectClass::Pure);
+        let effect = request(&capability, Some("changed-grant"), json!({}));
+        capability.effect = EffectClass::NonIdempotentWrite;
+        let run = run_with(&capability, None);
+        for status in [
+            EffectStatus::Started,
+            EffectStatus::Completed {
+                output: json!("private"),
+            },
+        ] {
+            let store = Arc::new(InMemoryEffectStore::new());
+            let prepared = EffectRecord::prepared(effect.clone());
+            store.compare_and_swap(&prepared, None).expect("prepared");
+            let record = prepared.next(status).expect("next revision");
+            store
+                .compare_and_swap(&record, Some(0))
+                .expect("persisted state");
+            let handler = CountingHandler::new();
+
+            let error =
+                futures_executor::block_on(EffectExecutor::new(store.clone()).execute_reconciled(
+                    effect.clone(),
+                    &run,
+                    &handler,
+                    &UnexpectedReconciler,
+                    EffectRecoveryPolicy::RetrySafe,
+                ))
+                .expect_err("changed authority must be rejected before recovery");
+
+            assert_eq!(error.kind, EffectExecutorErrorKind::CapabilityDenied);
+            assert_eq!(
+                store.load(effect.effect_id).expect("load succeeds"),
+                Some(record)
+            );
+            assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     fn capability(effect: EffectClass) -> CapabilityDescriptor {

@@ -23,6 +23,7 @@ The adapter maps canonical content as follows:
 - canonical tool definitions become Anthropic tools and tool choice;
 - assistant tool calls become `tool_use`;
 - user or tool-role results become `tool_result`;
+- adjacent user and tool-role messages become one user turn, with all `tool_result` blocks before ordinary text;
 - base64 and URL images become native image sources;
 - signed thinking blocks are retained for valid round trips;
 - `provider_options.anthropic` may add non-owned fields.

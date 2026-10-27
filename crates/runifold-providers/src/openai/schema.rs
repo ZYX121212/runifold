@@ -9,7 +9,45 @@ pub(crate) fn prepare_strict_schema(schema: &Value) -> Result<Value, ModelError>
     let mut wire_schema = schema.clone();
     normalize_strict_schema(&mut wire_schema)?;
     validate_strict_schema(&wire_schema)?;
+    validate_local_references(&wire_schema, &wire_schema)?;
     Ok(wire_schema)
+}
+
+fn validate_local_references(schema: &Value, root: &Value) -> Result<(), ModelError> {
+    let object = schema
+        .as_object()
+        .ok_or_else(|| invalid("strict schema nodes must be objects"))?;
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+        let target = if reference == "#" {
+            Some(root)
+        } else {
+            root.pointer(reference.strip_prefix('#').unwrap_or_default())
+        };
+        if target
+            .and_then(Value::as_object)
+            .is_none_or(|target| validate_schema_header(target).is_err())
+        {
+            return Err(invalid(format!(
+                "strict schema reference `{reference}` does not resolve to a schema"
+            )));
+        }
+    }
+    for keyword in ["$defs", "properties"] {
+        if let Some(children) = object.get(keyword).and_then(Value::as_object) {
+            for child in children.values() {
+                validate_local_references(child, root)?;
+            }
+        }
+    }
+    if let Some(items) = object.get("items") {
+        validate_local_references(items, root)?;
+    }
+    if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
+        for branch in branches {
+            validate_local_references(branch, root)?;
+        }
+    }
+    Ok(())
 }
 
 fn normalize_strict_schema(schema: &mut Value) -> Result<(), ModelError> {
@@ -539,6 +577,60 @@ mod tests {
         assert_eq!(wire["required"], json!(["nested"]));
         assert_eq!(wire["$defs"]["Nested"]["additionalProperties"], false);
         assert_eq!(wire["$defs"]["Nested"]["required"], json!(["value"]));
+    }
+
+    #[test]
+    fn rejects_unresolved_or_non_schema_references() {
+        for reference in ["#/$defs/Missing", "#/properties", "#/$defs/A~1B"] {
+            let schema = json!({
+                "type": "object",
+                "properties": {"value": {"$ref": reference}},
+                "$defs": {"Known": {"type": "string"}}
+            });
+
+            let error = prepare_strict_schema(&schema).unwrap_err();
+
+            assert!(error.message.contains("does not resolve"));
+        }
+    }
+
+    #[test]
+    fn accepts_escaped_local_reference() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"value": {"$ref": "#/$defs/A~1B"}},
+            "$defs": {"A/B": {"type": "string"}}
+        });
+
+        let wire = prepare_strict_schema(&schema).unwrap();
+
+        assert_eq!(wire["properties"]["value"]["$ref"], "#/$defs/A~1B");
+    }
+
+    #[test]
+    fn accepts_recursive_definition_and_nullable_branch() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"root": {"$ref": "#/$defs/Node"}},
+            "$defs": {
+                "Node": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "next": {"anyOf": [
+                            {"$ref": "#/$defs/Node"},
+                            {"type": "null"}
+                        ]}
+                    }
+                }
+            }
+        });
+
+        let wire = prepare_strict_schema(&schema).unwrap();
+
+        assert_eq!(wire["required"], json!(["root"]));
+        assert_eq!(wire["$defs"]["Node"]["required"], json!(["name", "next"]));
+        assert_eq!(wire["$defs"]["Node"]["additionalProperties"], false);
     }
 
     #[test]

@@ -186,7 +186,7 @@
   },
   "runifold-model": {
     "path": "crates/runifold-model",
-    "owns": "Provider-neutral content, model invocation, streams, routing and retry contracts",
+    "owns": "Provider-neutral content, model invocation, streams, routing, retry and shared physical-request scheduling",
     "does_not_own": "Vendor wire types and Agent tool loops",
     "entry": "crates/runifold-model/src/invocation.rs",
     "workspace_dependencies": {

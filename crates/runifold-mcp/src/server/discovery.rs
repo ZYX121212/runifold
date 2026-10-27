@@ -1,7 +1,7 @@
 use super::{
-    BTreeMap, CacheHint, CacheOperation, Collection, CompleteParams, DiscoverMetadata,
-    DiscoverParams, DiscoverResult, INVALID_PARAMS, InitializeParams, InitializeResult,
-    JsonRpcResponse, LATEST_PROTOCOL_VERSION, LIFECYCLE_ERROR, ListPromptsParams,
+    BTreeMap, CacheHint, CacheOperation, CapabilityDescriptor, Collection, CompleteParams,
+    DiscoverMetadata, DiscoverParams, DiscoverResult, INVALID_PARAMS, InitializeParams,
+    InitializeResult, JsonRpcResponse, LATEST_PROTOCOL_VERSION, LIFECYCLE_ERROR, ListPromptsParams,
     ListPromptsResult, ListResourceTemplatesParams, ListResourceTemplatesResult,
     ListResourcesParams, ListResourcesResult, ListToolsParams, ListToolsResult, METHOD_NOT_FOUND,
     McpResultType, McpSession, McpTool, PromptsCapability, ReadResourceParams, RequestEra,
@@ -447,44 +447,53 @@ impl McpSession {
                 return JsonRpcResponse::error(id, INVALID_PARAMS, error.to_string(), None);
             }
         };
-        if !self.valid_completion_reference(&params) {
+        let Some(capability) = self.completion_reference_capability(&params) else {
             return JsonRpcResponse::error(id, METHOD_NOT_FOUND, "completion not found", None);
-        }
-        let scope = completions
-            .descriptor(&params.reference)
-            .and_then(|descriptor| self.scoped_request(&id, &descriptor.capability()));
-        let authority = scope
-            .as_ref()
-            .map_or(&self.inner.server.authority, |(context, _guard)| context);
-        match completions.complete(params, authority).await {
+        };
+        let Some((authority, _guard)) = self.scoped_request(&id, &capability) else {
+            return JsonRpcResponse::error(id, METHOD_NOT_FOUND, "completion not found", None);
+        };
+        match completions.complete(params, &authority).await {
             Ok(result) => serialize_result(id, &result),
             Err(error) => completion_error_response(id, error),
         }
     }
 
-    fn valid_completion_reference(&self, params: &CompleteParams) -> bool {
-        match &params.reference {
+    fn completion_reference_capability(
+        &self,
+        params: &CompleteParams,
+    ) -> Option<CapabilityDescriptor> {
+        let completion = self
+            .inner
+            .server
+            .completions
+            .as_ref()?
+            .descriptor(&params.reference)?;
+        let capability = match &params.reference {
             crate::CompletionReference::Prompt { name } => self
                 .inner
                 .server
                 .prompts
                 .as_ref()
                 .and_then(|prompts| prompts.descriptor(name))
-                .is_some_and(|descriptor| {
+                .filter(|descriptor| {
                     descriptor
                         .prompt
                         .arguments
                         .iter()
                         .any(|argument| argument.name == params.argument.name)
-                }),
+                })
+                .map(crate::PromptDescriptor::capability),
             crate::CompletionReference::Resource { uri } => self
                 .inner
                 .server
                 .resources
                 .as_ref()
-                .is_some_and(|resources| {
-                    resources.template_has_variable(uri, &params.argument.name)
-                }),
-        }
+                .filter(|resources| resources.template_has_variable(uri, &params.argument.name))
+                .and_then(|resources| resources.template_descriptor(uri))
+                .map(crate::ResourceTemplateDescriptor::capability),
+        }?;
+        (completion.id == capability.id && completion.version == capability.version)
+            .then_some(capability)
     }
 }

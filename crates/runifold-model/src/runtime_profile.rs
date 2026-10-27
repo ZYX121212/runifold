@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::{CircuitBreakerConfig, FeaturePolicy, ModelRetryPolicy, ResponseMode};
@@ -56,6 +57,27 @@ pub struct ProviderRuntimeProfile {
     provider_options: BTreeMap<String, Value>,
 }
 
+/// Payload-free effective policy for one runtime profile, without retry authority.
+///
+/// This is an operational snapshot, not a recovery contract or build manifest.
+/// Provider option keys and values are excluded because they may be private.
+/// Capacity pool configuration and other runtimes' state are not inferred.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RuntimePolicySnapshot {
+    /// Version of this diagnostic representation.
+    pub schema_version: u32,
+    /// Effective canonical response delivery mode.
+    pub response_mode: ResponseMode,
+    /// Effective capability handling.
+    pub feature_policy: FeaturePolicy,
+    /// Attempt bound, backoff and explicit unknown-safety exceptions.
+    pub retry_policy: ModelRetryPolicy,
+    /// Enabled state, threshold, cooldown and counted failure kinds.
+    pub circuit_breaker: CircuitBreakerConfig,
+    /// Whether additional private adapter-owned request options are configured.
+    pub has_provider_options: bool,
+}
+
 impl Default for ProviderRuntimeProfile {
     fn default() -> Self {
         Self {
@@ -69,6 +91,18 @@ impl Default for ProviderRuntimeProfile {
 }
 
 impl ProviderRuntimeProfile {
+    /// Snapshots this runtime's effective policy without provider option contents.
+    pub fn diagnostic_snapshot(&self) -> RuntimePolicySnapshot {
+        RuntimePolicySnapshot {
+            schema_version: 1,
+            response_mode: self.response_mode,
+            feature_policy: self.feature_policy,
+            retry_policy: self.retry_policy.clone(),
+            circuit_breaker: self.circuit_breaker.clone(),
+            has_provider_options: !self.provider_options.is_empty(),
+        }
+    }
+
     /// Creates the provider-neutral fail-closed baseline.
     pub fn conservative() -> Self {
         Self::default()
@@ -99,6 +133,16 @@ impl ProviderRuntimeProfile {
     #[must_use]
     pub fn circuit_breaker(mut self, circuit_breaker: CircuitBreakerConfig) -> Self {
         self.circuit_breaker = circuit_breaker;
+        self
+    }
+
+    /// Disables shared route-health suppression while retaining retry policy.
+    ///
+    /// Capacity sharing is configured separately through a shared scheduler.
+    /// Clones of the resulting runtime still share that scheduler when bound.
+    #[must_use]
+    pub fn without_circuit_breaker(mut self) -> Self {
+        self.circuit_breaker = CircuitBreakerConfig::disabled();
         self
     }
 

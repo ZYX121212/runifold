@@ -1,6 +1,8 @@
 //! Gemini protocol tests over a real loopback HTTP socket.
 #![cfg(feature = "gemini")]
 
+use std::collections::BTreeMap;
+
 use runifold_model::{
     ContentPart, Message, Model, ModelCallContext, ModelErrorKind, ModelRef, ModelRequest,
     ModelUsage,
@@ -24,6 +26,56 @@ fn request() -> ModelRequest {
         ModelRef::new("gemini", "gemini-test"),
         Message::user("hello"),
     )
+}
+
+#[tokio::test]
+async fn remote_tool_media_and_structured_error_are_preserved_over_http() {
+    let event = json!({"candidates":[{"content":{"parts":[{"text":"done"}]},
+        "finishReason":"STOP"}]});
+    let server = CassetteServer::start(vec![HttpExchange::new(
+        "POST",
+        "/v1beta/models/gemini-test:streamGenerateContent?alt=sse",
+        ScriptedResponse::ok(vec![ResponseChunk::text(format!("data: {event}\n\n"))])
+            .with_header("content-type", "text/event-stream"),
+    )])
+    .unwrap();
+    let tool_result = runifold_model::ToolResult {
+        call_id: "call-remote".into(),
+        name: Some("inspect".into()),
+        content: vec![ContentPart::Image {
+            source: runifold_model::MediaSource::Url {
+                url: "https://example.com/image.png".into(),
+                media_type: Some("image/png".into()),
+            },
+        }],
+        structured_content: Some(json!({"code":"missing"})),
+        is_error: true,
+        metadata: BTreeMap::new(),
+    };
+    let request = request().message(
+        Message::new(
+            runifold_model::Role::Tool,
+            vec![ContentPart::ToolResult(tool_result)],
+        )
+        .unwrap(),
+    );
+    client(&server)
+        .invoke(request, ModelCallContext::new())
+        .await
+        .unwrap();
+
+    server.assert_finished().unwrap();
+    let body = server.observed_requests()[0].json_body().unwrap();
+    let response = &body["contents"][1]["parts"][0]["functionResponse"];
+    assert!(response.get("parts").is_none());
+    assert_eq!(response["response"]["isError"], true);
+    assert_eq!(response["response"]["structuredContent"]["code"], "missing");
+    assert!(
+        response["response"]["content"][0]
+            .as_str()
+            .unwrap()
+            .contains("https://example.com/image.png")
+    );
 }
 
 #[tokio::test]

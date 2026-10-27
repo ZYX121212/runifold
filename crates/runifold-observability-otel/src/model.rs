@@ -187,6 +187,7 @@ struct ActiveCall {
     started: Instant,
     ended: bool,
     first_chunk_recorded: bool,
+    reported_route_failures: usize,
     config: OtelConfig,
 }
 
@@ -233,6 +234,7 @@ impl ActiveCall {
             started: Instant::now(),
             ended: false,
             first_chunk_recorded: false,
+            reported_route_failures: 0,
             config,
         }
     }
@@ -306,19 +308,7 @@ impl ActiveCall {
                 attempt_id.to_owned(),
             ));
         }
-        for failure in prior_failures {
-            let error_type = failure
-                .get("kind")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("_OTHER");
-            self.instruments
-                .route_failures
-                .add(1, &[KeyValue::new("error.type", error_type.to_owned())]);
-            self.span.add_event(
-                "runifold.model.route.failure",
-                route_failure_attributes(failure),
-            );
-        }
+        self.observe_route_failures(prior_failures);
         self.span.add_event(
             "runifold.model.route.selected",
             vec![
@@ -336,6 +326,23 @@ impl ActiveCall {
                 ),
             ],
         );
+    }
+
+    fn observe_route_failures(&mut self, failures: &[serde_json::Value]) {
+        for failure in failures.iter().skip(self.reported_route_failures) {
+            let error_type = failure
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("_OTHER");
+            self.instruments
+                .route_failures
+                .add(1, &[KeyValue::new("error.type", error_type.to_owned())]);
+            self.span.add_event(
+                "runifold.model.route.failure",
+                route_failure_attributes(failure),
+            );
+        }
+        self.reported_route_failures = self.reported_route_failures.max(failures.len());
     }
 
     fn record_first_chunk(&mut self) {
@@ -396,10 +403,22 @@ impl ActiveCall {
         if self.ended {
             return;
         }
+        if let Some(failures) = error
+            .metadata
+            .get("runifold.router.failures")
+            .and_then(serde_json::Value::as_array)
+        {
+            self.observe_route_failures(failures);
+        }
         let error_type = error_type(&error.kind);
         self.span
             .set_attribute(KeyValue::new("error.type", error_type));
         let mut event_attributes = vec![KeyValue::new("error.type", error_type)];
+        event_attributes.push(KeyValue::new(
+            "runifold.diagnostic.code",
+            error.diagnostic_code(),
+        ));
+        event_attributes.extend(diagnostic_attributes(error));
         if self.config.capture_error_messages {
             event_attributes.push(KeyValue::new("exception.message", error.message.clone()));
         }
@@ -554,6 +573,7 @@ fn error_type(kind: &ModelErrorKind) -> &'static str {
         ModelErrorKind::StreamState => "stream_state",
         ModelErrorKind::MalformedToolArguments => "malformed_tool_arguments",
         ModelErrorKind::Provider => "provider_error",
+        ModelErrorKind::AdmissionDenied => "admission_denied",
         ModelErrorKind::Cancelled => "cancelled",
         ModelErrorKind::DeadlineExceeded => "timeout",
         _ => "_OTHER",
@@ -566,6 +586,36 @@ fn as_i64(value: u64) -> i64 {
 
 fn route_failure_attributes(failure: &serde_json::Value) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
+    // Provider events may come from a custom Model. Revalidate the bounded
+    // projection rather than trusting an arbitrary diagnostics object.
+    let mut projected = ModelError::local(ModelErrorKind::Provider, "");
+    projected.provider = Some("provider".into());
+    for key in [
+        "http.status",
+        "retry.after_ms",
+        "retry.delay_ms",
+        "retry.remaining_ms",
+        "provider.error.type",
+        "provider.error.code",
+        "runifold.scheduler.phase",
+        "runifold.scheduler.reason",
+        "runifold.request.phase",
+        "runifold.request.remote_outcome",
+        "runifold.request.provider_invoked",
+        "runifold.request.local_capacity_released",
+        "runifold.request.output_observed",
+        "runifold.request.queue_wait_ms",
+        "runifold.request.execution_ms",
+    ] {
+        if let Some(value) = failure.get("diagnostics").and_then(|value| value.get(key))
+            && (value.is_boolean()
+                || value.is_u64()
+                || value.as_str().is_some_and(|value| value.len() <= 64))
+        {
+            projected.metadata.insert(key.into(), value.clone());
+        }
+    }
+    attributes.extend(diagnostic_attributes(&projected));
     for (source, target) in [
         ("route", "runifold.model.route.name"),
         ("kind", "error.type"),
@@ -599,6 +649,33 @@ fn route_failure_attributes(failure: &serde_json::Value) -> Vec<KeyValue> {
         }
     }
     attributes
+}
+
+fn diagnostic_attributes(error: &ModelError) -> Vec<KeyValue> {
+    error
+        .diagnostic_metadata()
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let key = match key.as_str() {
+                "http.status" => "http.response.status_code".into(),
+                "retry.after_ms" => "runifold.retry.after_ms".into(),
+                "retry.delay_ms" => "runifold.retry.delay_ms".into(),
+                "retry.remaining_ms" => "runifold.retry.remaining_ms".into(),
+                "provider.error.type" => "runifold.provider.error.type".into(),
+                "provider.error.code" => "runifold.provider.error.code".into(),
+                _ => key,
+            };
+            if let Some(value) = value.as_u64() {
+                Some(KeyValue::new(key, as_i64(value)))
+            } else if let Some(value) = value.as_bool() {
+                Some(KeyValue::new(key, value))
+            } else {
+                value
+                    .as_str()
+                    .map(|value| KeyValue::new(key, value.to_owned()))
+            }
+        })
+        .collect()
 }
 
 const fn is_first_chunk(event: &ModelStreamEvent) -> bool {
@@ -710,7 +787,23 @@ mod tests {
     #[tokio::test]
     async fn errors_are_classified_without_exporting_messages_by_default() {
         let scripted = ScriptedModel::new();
-        scripted.enqueue_error(ModelError::local(ModelErrorKind::DeadlineExceeded, SECRET));
+        let mut failure = ModelError::local(ModelErrorKind::DeadlineExceeded, SECRET);
+        failure.provider = Some("openai".into());
+        failure
+            .metadata
+            .insert("http.status".into(), serde_json::json!(504));
+        failure.metadata.insert(
+            "openai.error.type".into(),
+            serde_json::json!("server_error"),
+        );
+        failure
+            .metadata
+            .insert("openai.error.param".into(), serde_json::json!(SECRET));
+        failure.metadata.insert(
+            "runifold.request.remote_outcome".into(),
+            serde_json::json!("unknown"),
+        );
+        scripted.enqueue_error(failure);
         let fixture = TraceFixture::new();
         let meter = global::meter("runifold.test");
         let model = OtelModel::from_parts(
@@ -729,6 +822,21 @@ mod tests {
         let spans = fixture.exporter.get_finished_spans().unwrap();
         let span = &spans[0];
         assert_eq!(attribute(span, "error.type"), Some("timeout".into()));
+        let exception = span
+            .events
+            .iter()
+            .find(|event| event.name == "gen_ai.client.operation.exception")
+            .unwrap();
+        assert!(
+            exception
+                .attributes
+                .iter()
+                .any(|entry| entry.key.as_str() == "http.response.status_code"
+                    && entry.value.to_string() == "504")
+        );
+        assert!(exception.attributes.iter().any(|entry| entry.key.as_str()
+            == "runifold.request.remote_outcome"
+            && entry.value.to_string() == "unknown"));
         assert!(matches!(span.status, Status::Error { .. }));
         assert!(!format!("{spans:?}").contains(SECRET));
     }
@@ -769,6 +877,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terminal_router_failure_projects_every_attempt_once() {
+        let scripted = ScriptedModel::new();
+        for (status, safety) in [
+            (503, runifold_core::RetrySafety::Safe),
+            (502, runifold_core::RetrySafety::Unknown),
+        ] {
+            let mut error = ModelError::local(ModelErrorKind::Provider, SECRET);
+            error.retry_safety = safety;
+            error
+                .metadata
+                .insert("http.status".into(), serde_json::json!(status));
+            scripted.enqueue_error(error);
+        }
+        let logical = ModelRef::new("openai", "gpt-test");
+        let router = runifold_model::ModelRouter::builder(logical.clone())
+            .route("primary", Arc::new(scripted.clone()), logical.clone())
+            .route("backup", Arc::new(scripted), logical)
+            .build()
+            .unwrap();
+        let fixture = TraceFixture::new();
+        let meter = global::meter("runifold.test");
+        let model = OtelModel::from_parts(
+            Arc::new(router),
+            fixture.tracer,
+            &meter,
+            OtelConfig::default(),
+        );
+        let error = model
+            .invoke(request("input"), ModelCallContext::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.retry_safety, runifold_core::RetrySafety::Unknown);
+        let spans = fixture.exporter.get_finished_spans().unwrap();
+        let failures: Vec<_> = spans[0]
+            .events
+            .iter()
+            .filter(|event| event.name == "runifold.model.route.failure")
+            .collect();
+        assert_eq!(failures.len(), 2);
+        for (failure, status) in failures.iter().zip(["503", "502"]) {
+            assert!(
+                failure
+                    .attributes
+                    .iter()
+                    .any(|entry| entry.key.as_str() == "http.response.status_code"
+                        && entry.value.to_string() == status)
+            );
+        }
+        assert!(!format!("{spans:?}").contains(SECRET));
+    }
+
+    #[tokio::test]
+    async fn already_reported_route_failures_are_not_exported_twice() {
+        let fixture = TraceFixture::new();
+        let meter = global::meter("runifold.test");
+        let mut call = super::ActiveCall::start(
+            &fixture.tracer,
+            super::Instruments::new(&meter),
+            &request("input"),
+            &ModelCallContext::new(),
+            OtelConfig::default(),
+            None,
+        );
+        let first = serde_json::json!({"route": "primary", "kind": "Transport", "diagnostics": {"http.status":503}});
+        call.observe_route_selection(
+            &serde_json::json!({"route":"backup", "prior_failures":[first.clone()]}),
+        );
+        let mut error = ModelError::local(ModelErrorKind::Provider, SECRET);
+        error.metadata.insert("runifold.router.failures".into(), serde_json::json!([first, {"route":"backup", "kind":"Provider", "diagnostics":{"http.status":502}}]));
+        call.fail(&error);
+        let spans = fixture.exporter.get_finished_spans().unwrap();
+        assert_eq!(
+            spans[0]
+                .events
+                .iter()
+                .filter(|event| event.name == "runifold.model.route.failure")
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
     async fn router_selection_projects_attempts_without_sensitive_errors() {
         let scripted = ScriptedModel::new();
         let mut events = success_events("output");
@@ -788,7 +978,13 @@ mod tests {
                             "target": {"provider": "openai", "name": "gpt-a"},
                             "route_attempt": 1,
                             "kind": "transport",
-                            "retry_safety": "safe"
+                            "retry_safety": "safe",
+                            "diagnostics": {
+                                "http.status": 503,
+                                "provider.error.type": "server_error",
+                                "provider.error.code": "do-not-export-this-secret",
+                                "private": "do-not-export-this-secret"
+                            }
                         }]
                     }),
                 },
@@ -835,6 +1031,26 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(event_names.contains(&"runifold.model.route.failure"));
         assert!(event_names.contains(&"runifold.model.route.selected"));
+        let failure = span
+            .events
+            .iter()
+            .find(|event| event.name == "runifold.model.route.failure")
+            .unwrap();
+        assert!(
+            failure
+                .attributes
+                .iter()
+                .any(|entry| entry.key.as_str() == "http.response.status_code"
+                    && entry.value.to_string() == "503")
+        );
+        assert!(
+            failure
+                .attributes
+                .iter()
+                .any(|entry| entry.key.as_str() == "runifold.provider.error.type"
+                    && entry.value.to_string() == "server_error")
+        );
+        assert!(!format!("{spans:?}").contains(SECRET));
         let metrics = exporter.get_finished_metrics().unwrap();
         let metric_names = metrics
             .iter()

@@ -24,7 +24,7 @@ use super::{
     OpenAiControlPlane, OpenAiEmbeddingModel, OpenAiEventDecoder, OpenAiWireProtocol,
     chat::{ChatEvents, decode_complete_chat_response, encode_chat_request_for},
     decode::decode_complete_response_for,
-    encode::encode_request_for,
+    encode::{apply_tool_dispatch_aliases, encode_request_for, tool_dispatch_aliases},
 };
 #[cfg(feature = "openai-realtime")]
 use super::{OpenAiRealtimeClient, OpenAiRealtimeError};
@@ -44,6 +44,33 @@ pub struct OpenAiClient {
 }
 
 impl OpenAiClient {
+    /// Opens an explicitly owned native Responses WebSocket connection.
+    ///
+    /// No ambiguous request is automatically replayed after disconnection.
+    ///
+    /// # Errors
+    /// Rejects incompatible protocols, cancellation, deadlines and transport failures.
+    #[cfg(all(feature = "openai-realtime", not(target_arch = "wasm32")))]
+    pub async fn connect_responses_websocket(
+        &self,
+        context: ModelCallContext,
+    ) -> Result<super::OpenAiResponsesConnection, ModelError> {
+        Box::pin(super::OpenAiResponsesConnection::connect(
+            self.config.clone(),
+            &context,
+        ))
+        .await
+    }
+
+    /// Wraps this provider in a persistent native Responses WebSocket model.
+    ///
+    /// The wrapper uses the existing Model and Agent execution path and retains
+    /// application authority, cancellation, budgets and recovery policy.
+    #[cfg(all(feature = "openai-realtime", not(target_arch = "wasm32")))]
+    pub fn responses_websocket_model(&self) -> super::OpenAiResponsesWebSocketModel {
+        super::OpenAiResponsesWebSocketModel::new(self.clone())
+    }
+
     /// Creates a client with a pooled Rustls HTTP transport.
     pub fn new(config: OpenAiConfig) -> Self {
         let capabilities = adapter_capabilities_for(&config);
@@ -193,7 +220,10 @@ impl OpenAiClient {
             .unwrap_or(&self.capabilities)
     }
 
-    fn prepare(&self, request: &ModelRequest) -> Result<(Value, Vec<ModelWarning>), ModelError> {
+    pub(super) fn prepare(
+        &self,
+        request: &ModelRequest,
+    ) -> Result<(Value, Vec<ModelWarning>), ModelError> {
         if request.model.provider != self.config.provider {
             return Err(ModelError::local(
                 ModelErrorKind::InvalidRequest,
@@ -219,6 +249,12 @@ impl OpenAiClient {
                 encode_chat_request_for(request, &self.config.provider, self.config.chat_dialect)?
             }
         };
+        if body.get("background").and_then(Value::as_bool) == Some(true) {
+            return Err(ModelError::local(
+                ModelErrorKind::UnsupportedFeature,
+                "use control_plane().create_background_response and persist its identity before retrieving the result",
+            ));
+        }
         Ok((body, warnings))
     }
 
@@ -333,6 +369,11 @@ impl Model for OpenAiClient {
                 request_id,
                 deadline,
                 responses_dialect: self.config.responses_dialect,
+                tool_aliases: if self.config.wire_protocol == OpenAiWireProtocol::Responses {
+                    tool_dispatch_aliases(&request, &self.config.provider)?
+                } else {
+                    BTreeMap::new()
+                },
             };
             match response_mode {
                 ResponseMode::Complete => {
@@ -343,7 +384,7 @@ impl Model for OpenAiClient {
                         deadline,
                     )
                     .await?;
-                    let events = match decoder_config.protocol {
+                    let mut events = match decoder_config.protocol {
                         OpenAiWireProtocol::Responses => decode_complete_response_for(
                             &decoder_config.provider,
                             &payload,
@@ -356,6 +397,7 @@ impl Model for OpenAiClient {
                             decoder_config.request_id,
                         )?,
                     };
+                    apply_tool_dispatch_aliases(&mut events, &decoder_config.tool_aliases);
                     Ok(complete_event_stream(events, warnings))
                 }
                 _ => Ok(event_stream(
@@ -463,6 +505,7 @@ struct DecoderConfig {
     request_id: Option<String>,
     deadline: Option<Instant>,
     responses_dialect: super::OpenAiResponsesDialect,
+    tool_aliases: BTreeMap<String, String>,
 }
 
 fn event_stream(
@@ -532,7 +575,9 @@ fn event_stream(
             let payload: Value = serde_json::from_str(&event.data).map_err(|error| {
                 protocol_error(&provider, format!("SSE data is not valid JSON: {error}"))
             })?;
-            for canonical in decoder.decode(payload)? {
+            let mut events = decoder.decode(payload)?;
+            apply_tool_dispatch_aliases(&mut events, &config.tool_aliases);
+            for canonical in events {
                 let started = matches!(
                     canonical,
                     ModelStreamEvent::ResponseStarted { .. }
@@ -630,14 +675,14 @@ pub(super) async fn read_error_body(
 }
 
 #[derive(Debug, Default)]
-struct SseSizeGuard {
+pub(super) struct SseSizeGuard {
     event_bytes: usize,
     line_bytes: usize,
     last_was_cr: bool,
 }
 
 impl SseSizeGuard {
-    fn observe(&mut self, chunk: &[u8]) -> Result<(), ()> {
+    pub(super) fn observe(&mut self, chunk: &[u8]) -> Result<(), ()> {
         for byte in chunk {
             self.event_bytes = self.event_bytes.saturating_add(1);
             if self.event_bytes > MAX_SSE_EVENT_BYTES {
@@ -786,7 +831,8 @@ pub(super) fn transport_error(
     } else {
         ModelErrorKind::Transport
     };
-    let mut model_error = ModelError::local(kind, format!("OpenAI transport failed: {error}"));
+    let mut model_error =
+        ModelError::local(kind, crate::reliability::transport_failure_message(error));
     model_error.provider = Some(provider.into());
     crate::reliability::classify_transport(error, &mut model_error);
     model_error
@@ -804,10 +850,7 @@ pub(super) fn http_error(
         .as_ref()
         .and_then(|payload| payload.get("error"))
         .unwrap_or(&Value::Null);
-    let message = error.get("message").and_then(Value::as_str).map_or_else(
-        || format!("OpenAI returned HTTP {status}"),
-        std::convert::Into::into,
-    );
+    let message = crate::reliability::http_failure_message(status);
     let mut model_error = ModelError::local(ModelErrorKind::Provider, message);
     model_error.provider = Some(provider.into());
     crate::reliability::classify_status(status, &mut model_error);
@@ -830,6 +873,11 @@ pub(super) fn http_error(
             model_error
                 .metadata
                 .insert(format!("openai.error.{field}"), value.clone());
+            // Preserve the historical protocol alias, while exposing the
+            // actual compatible Provider namespace to neutral diagnostics.
+            model_error
+                .metadata
+                .insert(format!("{provider}.error.{field}"), value.clone());
         }
     }
     model_error
@@ -859,6 +907,29 @@ mod tests {
         assert_eq!(error.metadata["openai.request_id"], "req_123");
         assert_eq!(error.metadata["openai.error.code"], "slow_down");
         assert_eq!(error.metadata["retry.after_ms"], 2_000);
+    }
+
+    #[test]
+    fn compatible_http_error_diagnostics_use_the_actual_provider_namespace() {
+        let error = http_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("private-request-id".into()),
+            r#"{"error":{"message":"private body","type":"server_error","code":"provider_unavailable","param":"private prompt"}}"#,
+            "gateway",
+            None,
+        );
+        assert_eq!(error.metadata["gateway.error.type"], "server_error");
+        assert_eq!(error.metadata["openai.error.type"], "server_error");
+        let diagnostics = error.diagnostic_metadata();
+        assert_eq!(diagnostics["provider.error.type"], "server_error");
+        assert_eq!(diagnostics["provider.error.code"], "provider_unavailable");
+        assert_eq!(diagnostics["http.status"], 503);
+        assert!(
+            !serde_json::to_string(&diagnostics)
+                .unwrap()
+                .contains("private")
+        );
+        assert_eq!(error.retry_safety, runifold_core::RetrySafety::Unknown);
     }
 
     #[test]

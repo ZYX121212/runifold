@@ -3,7 +3,10 @@
 
 //! Executable edge-runtime smoke tests for the provider-neutral kernel.
 
-use runifold_core::{Budget, BudgetResource, BudgetTracker, CapabilitySet, RunContext, Usage};
+use runifold_core::{
+    Budget, BudgetResource, BudgetTracker, CapabilityDescriptor, CapabilityId, CapabilityKind,
+    CapabilitySet, EffectClass, RiskLevel, RunContext, Usage,
+};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 #[wasm_bindgen_test]
@@ -38,4 +41,36 @@ fn runtime_identity_authority_cancellation_and_budget_work_on_edge() {
         .expect_err("cumulative usage above the configured limit must fail");
     assert_eq!(exceeded.resource, BudgetResource::Tokens);
     assert_eq!(budget.usage().tokens, 5);
+}
+
+#[wasm_bindgen_test]
+fn child_cannot_redefine_granted_capability_on_edge() {
+    let capability = CapabilityDescriptor {
+        id: CapabilityId::new(),
+        name: "publish".into(),
+        version: "1".into(),
+        kind: CapabilityKind::Resource,
+        input_schema: serde_json::json!({}),
+        output_schema: serde_json::json!({}),
+        effect: EffectClass::NonIdempotentWrite,
+        risk: RiskLevel::High,
+        metadata: std::collections::BTreeMap::new(),
+    };
+    let mut grants = CapabilitySet::new();
+    grants.grant(capability.clone());
+    let root = RunContext::root(BudgetTracker::new(Budget::default()), grants);
+    let mut redefined = capability.clone();
+    redefined.effect = EffectClass::Pure;
+    let mut changed_grants = CapabilitySet::new();
+    changed_grants.grant(redefined);
+    let error = root
+        .child(changed_grants)
+        .expect_err("edge child must preserve the parent contract");
+    assert_eq!(error.capability_id, capability.id);
+    let mut unchanged_grants = CapabilitySet::new();
+    unchanged_grants.grant(capability.clone());
+    let child = root
+        .child(unchanged_grants)
+        .expect("unchanged grant is valid");
+    assert_eq!(child.capabilities().get(capability.id), Some(&capability));
 }

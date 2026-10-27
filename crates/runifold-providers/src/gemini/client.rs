@@ -217,10 +217,7 @@ async fn http_error(
     let detail = payload.get("error").unwrap_or(&payload);
     let mut error = ModelError::local(
         ModelErrorKind::Provider,
-        detail
-            .get("message")
-            .and_then(Value::as_str)
-            .map_or_else(|| format!("Gemini returned HTTP {status}"), String::from),
+        crate::reliability::http_failure_message(status),
     );
     error.provider = Some("gemini".into());
     crate::reliability::classify_status(status, &mut error);
@@ -275,7 +272,7 @@ fn transport(error: &reqwest::Error, deadline: Option<Instant>) -> ModelError {
     };
     let mut model_error = with_provider(ModelError::local(
         kind,
-        format!("Gemini transport failed: {error}"),
+        crate::reliability::transport_failure_message(error),
     ));
     crate::reliability::classify_transport(error, &mut model_error);
     model_error

@@ -41,6 +41,9 @@ pub struct ModelCallContext {
     run_id: Option<RunId>,
     deadline: Option<Instant>,
     cancellation: CancellationToken,
+    // Internal admission lineage prevents nested wrappers from waiting on
+    // capacity they already hold. It grants no execution authority.
+    admission_active: bool,
 }
 
 impl ModelCallContext {
@@ -51,6 +54,7 @@ impl ModelCallContext {
             run_id: None,
             deadline: None,
             cancellation: CancellationToken::new(),
+            admission_active: false,
         }
     }
 
@@ -61,6 +65,7 @@ impl ModelCallContext {
             run_id: Some(run.run_id()),
             deadline: run.deadline(),
             cancellation: run.cancellation().child_token(),
+            admission_active: false,
         }
     }
 
@@ -110,6 +115,14 @@ impl ModelCallContext {
         self
     }
 
+    pub(crate) fn enter_scheduler(&mut self) -> bool {
+        if self.admission_active {
+            return false;
+        }
+        self.admission_active = true;
+        true
+    }
+
     /// Creates a distinct provider-attempt context under the same logical
     /// invocation scope.
     ///
@@ -122,6 +135,7 @@ impl ModelCallContext {
             run_id: self.run_id,
             deadline: self.deadline,
             cancellation: self.cancellation.child_token(),
+            admission_active: self.admission_active,
         }
     }
 }

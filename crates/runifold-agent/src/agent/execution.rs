@@ -11,8 +11,8 @@ use super::{
     BufferedObserver, CheckpointCursor, ContentPart, DurableConversationCheckpoint, Either,
     EventId, Instant, InvocationId, LifecycleEvent, Message, ModelCallContext, ModelError,
     ModelErrorKind, ModelRequest, ModelResponse, ModelStreamAccumulator, NoopObserver,
-    ResumePolicy, Role, RunContext, RunEventKind, StreamExt, TOOL_RESULT_EXECUTION_ID_METADATA,
-    ToolCall, ToolChoice, Usage, emit_agent_event, select,
+    ResumePolicy, RunContext, RunEventKind, StreamExt, TOOL_RESULT_EXECUTION_ID_METADATA, ToolCall,
+    ToolChoice, Usage, emit_agent_event, select,
 };
 use crate::conversation::{
     AgentConversationError, AgentConversationOutcome, AutomaticConversationSummary,
@@ -133,7 +133,7 @@ impl Agent {
                 .iter()
                 .skip(persisted_prefix_len)
                 .filter(|message| !is_transient_context(message))
-                .cloned()
+                .map(super::context::clean_message)
                 .collect();
             let append = ConversationAppend {
                 conversation_id,
@@ -171,8 +171,9 @@ impl Agent {
         Box::pin(async move {
             let policy = automatic_summary.context;
             store.create(conversation_id, namespace.clone()).await?;
-            for pass in 0..automatic_summary.max_passes.get() {
-                let view = store
+            let mut completed = 0;
+            loop {
+                let mut view = store
                     .load_view(
                         conversation_id,
                         namespace.clone(),
@@ -180,11 +181,21 @@ impl Agent {
                         policy.summary_batch,
                     )
                     .await?;
+                if self.context_manager.is_some() {
+                    view.align_summary_prefix(policy.summary_batch);
+                }
                 let Some(through_sequence) = view.summary_buffer.last().map(|entry| entry.sequence)
                 else {
                     break;
                 };
-                let summary_backlog = view.summary_backlog;
+                if completed >= automatic_summary.max_passes.get() {
+                    return Err(AgentConversationError::SummaryPassLimitExceeded {
+                        conversation_id,
+                        remaining_entries: u64::try_from(view.summary_buffer.len())
+                            .unwrap_or(u64::MAX)
+                            .saturating_add(view.summary_backlog),
+                    });
+                }
                 let summary = automatic_summary
                     .summarizer
                     .summarize(
@@ -207,15 +218,7 @@ impl Agent {
                         },
                     )
                     .await?;
-                if summary_backlog == 0 {
-                    break;
-                }
-                if pass + 1 == automatic_summary.max_passes.get() {
-                    return Err(AgentConversationError::SummaryPassLimitExceeded {
-                        conversation_id,
-                        remaining_entries: summary_backlog,
-                    });
-                }
+                completed += 1;
             }
             self.run_conversation(input, run, store, conversation_id, namespace, policy)
                 .await
@@ -531,9 +534,17 @@ impl Agent {
 
     fn initial_state_from_transcript(
         &self,
-        transcript: Vec<Message>,
+        mut transcript: Vec<Message>,
         execution_id: String,
     ) -> AgentCheckpointState {
+        if self.context_manager.is_some()
+            && let Some(input) = transcript.last_mut()
+        {
+            input.metadata.insert(
+                super::context::INPUT_MARKER.into(),
+                serde_json::Value::String(execution_id.clone()),
+            );
+        }
         AgentCheckpointState {
             recovery_contract: Some(self.recovery_contract()),
             execution_id,
@@ -673,12 +684,7 @@ impl Agent {
             };
             let calls = tool_calls_from(&response.content);
             if calls.is_empty() {
-                if self.continue_provider_turn(
-                    response.clone(),
-                    &mut progress,
-                    run,
-                    &mut checkpoint,
-                )? {
+                if self.continue_provider_turn(&response, &mut progress, run, &mut checkpoint)? {
                     continue;
                 }
                 if matches!(
@@ -715,7 +721,8 @@ impl Agent {
                 continue;
             }
 
-            let assistant = Message::new(Role::Assistant, response.content.clone())
+            let assistant = response
+                .assistant_message()
                 .map_err(|error| AgentError::Protocol(error.to_string()))?;
             progress.transcript.push(assistant);
 
@@ -742,6 +749,15 @@ impl Agent {
                 self.successful_local_tool_calls(progress)? < self.min_successful_tool_calls;
             (response, requires_tool, true)
         } else {
+            let request = self
+                .prepare_model_context(
+                    progress,
+                    run,
+                    checkpoint,
+                    context.caused_by,
+                    context.observer,
+                )
+                .await?;
             let tool_choice = self
                 .begin_turn(
                     progress,
@@ -754,10 +770,9 @@ impl Agent {
             let requires_tool = matches!(tool_choice, ToolChoice::Required);
             let response = self
                 .invoke_model(
-                    &progress.transcript,
+                    request,
                     run,
                     progress.turns,
-                    tool_choice,
                     context.caused_by,
                     context.observer,
                 )
@@ -849,7 +864,7 @@ impl Agent {
 
     fn continue_provider_turn(
         &self,
-        response: ModelResponse,
+        response: &ModelResponse,
         progress: &mut AgentProgress,
         run: &RunContext,
         checkpoint: &mut Option<&mut CheckpointCursor>,
@@ -860,7 +875,8 @@ impl Agent {
         ) {
             return Ok(false);
         }
-        let assistant = Message::new(Role::Assistant, response.content)
+        let assistant = response
+            .assistant_message()
             .map_err(|error| AgentError::Protocol(error.to_string()))?;
         progress.transcript.push(assistant);
         save_checkpoint(
@@ -872,10 +888,9 @@ impl Agent {
 
     async fn invoke_model(
         &self,
-        transcript: &[Message],
+        request: ModelRequest,
         run: &RunContext,
         turn: u32,
-        tool_choice: ToolChoice,
         caused_by: Option<EventId>,
         observer: &dyn AgentObserver,
     ) -> Result<ModelResponse, AgentError> {
@@ -891,7 +906,7 @@ impl Agent {
             caused_by,
         )?;
         let response = match self
-            .stream_model_response(self.request(transcript, tool_choice)?, run, turn, observer)
+            .stream_model_response(request, run, turn, observer)
             .await
         {
             Ok(response) => response,
@@ -995,6 +1010,10 @@ impl Agent {
     /// Custom tools and child agents must maintain stable IDs and versions.
     pub fn recovery_contract(&self) -> crate::AgentRecoveryContract {
         crate::AgentRecoveryContract {
+            context_manager: self
+                .context_manager
+                .as_ref()
+                .map(crate::ContextManager::contract),
             instructions: self.instructions.clone(),
             context: if self.context.is_empty() {
                 Vec::new()
@@ -1257,7 +1276,7 @@ impl Agent {
             .iter()
             .skip(persisted_prefix_len)
             .filter(|message| !is_transient_context(message))
-            .cloned()
+            .map(super::context::clean_message)
             .collect();
         let state = AgentCheckpointState {
             recovery_contract: Some(self.recovery_contract()),
@@ -1347,7 +1366,7 @@ impl Agent {
         Ok(())
     }
 
-    fn request(
+    pub(super) fn request(
         &self,
         transcript: &[Message],
         tool_choice: ToolChoice,
@@ -1355,8 +1374,15 @@ impl Agent {
         let (first, rest) = transcript
             .split_first()
             .ok_or_else(|| AgentError::Protocol("agent transcript is empty".into()))?;
-        let mut request = ModelRequest::new(self.model_ref.clone(), first.clone());
-        request.messages.extend_from_slice(rest);
+        let copy_message = |message: &Message| {
+            if self.context_manager.is_some() {
+                super::context::clean_message(message)
+            } else {
+                message.clone()
+            }
+        };
+        let mut request = ModelRequest::new(self.model_ref.clone(), copy_message(first));
+        request.messages.extend(rest.iter().map(copy_message));
         request.tools = self.tools.model_specs();
         request.tools.extend(self.agents.model_specs());
         request.tool_choice = tool_choice;
@@ -1399,7 +1425,7 @@ impl Agent {
             .map_err(|_| AgentError::Protocol("successful Tool-call counter overflow".into()))
     }
 
-    fn next_tool_choice(
+    pub(super) fn next_tool_choice(
         &self,
         progress: &AgentProgress,
         run: &RunContext,

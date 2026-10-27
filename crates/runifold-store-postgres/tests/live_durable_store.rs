@@ -20,6 +20,148 @@ use uuid::Uuid;
 
 use support::PostgresTestContext;
 
+struct SessionUpgradeModel(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+impl runifold_model::Model for SessionUpgradeModel {
+    fn capabilities<'a>(
+        &'a self,
+        _: &'a runifold_model::ModelRef,
+    ) -> runifold_model::ModelFuture<
+        'a,
+        Result<runifold_model::ModelCapabilities, runifold_model::ModelError>,
+    > {
+        Box::pin(async { Ok(runifold_model::ModelCapabilities::default()) })
+    }
+    fn stream(
+        &self,
+        request: runifold_model::ModelRequest,
+        _: runifold_model::ModelCallContext,
+    ) -> runifold_model::ModelFuture<
+        '_,
+        Result<runifold_model::ModelEventStream, runifold_model::ModelError>,
+    > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            use runifold_model::{FinishReason, ModelStreamEvent};
+            Ok(Box::pin(futures_util::stream::iter(
+                [
+                    ModelStreamEvent::ResponseStarted {
+                        id: Some("session-upgrade".into()),
+                        model: request.model,
+                    },
+                    ModelStreamEvent::ContentPartCompleted {
+                        index: 0,
+                        part: ContentPart::text("done"),
+                    },
+                    ModelStreamEvent::ResponseCompleted {
+                        finish_reason: FinishReason::Stop,
+                        provider_metadata: std::collections::BTreeMap::new(),
+                    },
+                ]
+                .map(Ok),
+            )) as runifold_model::ModelEventStream)
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_schema_rejection_and_current_replay_survive_reconnection() {
+    use runifold_agent::{Agent, AgentSession, AgentSessionError, ConversationContextPolicy};
+    use runifold_core::{Budget, BudgetTracker, CapabilitySet, CheckpointId, RunContext};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let database = PostgresTestContext::isolated().await;
+    let table = format!("session_upgrade_{}", Uuid::now_v7().simple());
+    let store = Arc::new(
+        PostgresConversationStore::connect(database.connection_url(), &table)
+            .await
+            .unwrap(),
+    );
+    store.ensure_schema().await.unwrap();
+    let namespace = MemoryNamespace::parse("session.upgrade").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let agent = Agent::new(
+        "session-upgrade",
+        Arc::new(SessionUpgradeModel(calls.clone())),
+        runifold_model::ModelRef::new("test", "session"),
+    );
+    let run = || RunContext::root(BudgetTracker::new(Budget::default()), CapabilitySet::new());
+    let policy = ConversationContextPolicy::new(ConversationWindow::new(8).unwrap());
+    for schema in [0, 1, 2, 4, u32::MAX] {
+        let conversation = ConversationId::new();
+        store.create(conversation, namespace.clone()).await.unwrap();
+        let old = Checkpoint::initial(
+            conversation.as_checkpoint_id(),
+            RunId::new(),
+            "runifold.conversation.admission",
+            schema,
+            json!({"legacy":"opaque-private-state"}),
+        );
+        CheckpointStore::compare_and_swap(store.as_ref(), &old, None).unwrap();
+        let reopened = Arc::new(
+            PostgresConversationStore::connect(database.connection_url(), &table)
+                .await
+                .unwrap(),
+        );
+        let session = AgentSession::new(
+            agent.clone(),
+            reopened.clone(),
+            conversation,
+            namespace.clone(),
+            policy,
+        );
+        assert!(matches!(
+            session.run(CheckpointId::new(), "new work", &run()).await,
+            Err(AgentSessionError::InvalidAdmission)
+        ));
+        assert_eq!(
+            CheckpointStore::load(reopened.as_ref(), conversation.as_checkpoint_id()).unwrap(),
+            old
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+    let conversation = ConversationId::new();
+    let request = CheckpointId::new();
+    let session = AgentSession::new(
+        agent.clone(),
+        store,
+        conversation,
+        namespace.clone(),
+        policy,
+    );
+    assert_eq!(
+        session
+            .run(request, "hello", &run())
+            .await
+            .unwrap()
+            .outcome
+            .text(),
+        "done"
+    );
+    drop(session);
+    let reopened = Arc::new(
+        PostgresConversationStore::connect(database.connection_url(), &table)
+            .await
+            .unwrap(),
+    );
+    let session = AgentSession::new(agent, reopened, conversation, namespace, policy);
+    assert_eq!(
+        session
+            .run(request, "hello", &run())
+            .await
+            .unwrap()
+            .outcome
+            .text(),
+        "done"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "replay must not call the Provider again"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn checkpoint_effect_and_atomic_conversation_survive_reconnect() {
     let database = PostgresTestContext::start("RUNIFOLD_TEST_POSTGRES_URL").await;

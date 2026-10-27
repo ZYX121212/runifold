@@ -8,6 +8,9 @@ use serde_json::Value;
 
 const KNOWLEDGE: &str = include_str!("ai-knowledge.json");
 
+mod environment;
+pub(crate) use environment::{EnvironmentOptions, environment};
+
 #[derive(Debug, Deserialize)]
 struct Knowledge {
     manifest: Value,

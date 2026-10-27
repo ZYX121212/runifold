@@ -60,7 +60,12 @@ pub trait EffectHandler: Send + Sync {
 pub enum EffectReconciliation {
     /// The remote operation completed and this is its canonical output.
     Completed(Value),
-    /// The remote system proves the operation did not execute.
+    /// The remote system proves the operation did not execute and cannot still
+    /// commit from a previous attempt.
+    ///
+    /// A missing receipt alone is insufficient while an old worker or remote
+    /// request may still be active. Stop or externally fence those attempts
+    /// before returning this proof; otherwise return [`Self::Ambiguous`].
     NotExecuted,
     /// The remote system cannot determine the outcome safely.
     Ambiguous,
@@ -70,6 +75,9 @@ pub enum EffectReconciliation {
 ///
 /// Implementations should query by the request's stable idempotency key or an
 /// equivalent remote operation identity. They must not perform the effect.
+/// A recovery caller must stop or externally fence any previous active owner
+/// before using a not-executed result to authorize another unsafe write. Store
+/// revision checks fence local commits, not an already dispatched remote write.
 pub trait EffectReconciler: Send + Sync {
     /// Queries the external system for the effect's durable outcome.
     fn reconcile(

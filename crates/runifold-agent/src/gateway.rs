@@ -292,7 +292,7 @@ fn validate_route(
         return Err(GatewayError::new(
             GatewayErrorKind::AuthorityEscalation,
             format!(
-                "child agent `{name}` requested capability `{}` not held by its parent",
+                "child agent `{name}` requested capability `{}` absent from or inconsistent with its parent grant",
                 missing.name
             ),
         ));

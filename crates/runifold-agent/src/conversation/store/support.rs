@@ -147,6 +147,10 @@ pub(crate) fn summary_message(summary: &ConversationSummary) -> Message {
     message
         .metadata
         .insert(TRANSIENT_CONTEXT_METADATA.into(), Value::Bool(true));
+    message.metadata.insert(
+        crate::agent::SUMMARY_THROUGH.into(),
+        Value::from(summary.through_sequence.get()),
+    );
     message
 }
 
@@ -172,6 +176,15 @@ pub(crate) fn semantic_memory_message(memories: &[SemanticMemory]) -> Option<Mes
     message
         .metadata
         .insert(TRANSIENT_CONTEXT_METADATA.into(), Value::Bool(true));
+    message.metadata.insert(
+        crate::agent::REFERENCE_IDS.into(),
+        serde_json::json!(
+            memories
+                .iter()
+                .map(|memory| memory.memory_id.as_checkpoint_id().to_string())
+                .collect::<Vec<_>>()
+        ),
+    );
     Some(message)
 }
 
@@ -181,4 +194,17 @@ pub(crate) fn is_transient_context(message: &Message) -> bool {
         .get(TRANSIENT_CONTEXT_METADATA)
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// A real user turn, excluding reference context and runtime repair feedback.
+pub(crate) fn is_turn_start(message: &Message) -> bool {
+    message.role == Role::User
+        && !is_transient_context(message)
+        && ![
+            "runifold.terminal_repair",
+            "runifold.turn_review_repair",
+            "runifold.terminal_review_repair",
+        ]
+        .iter()
+        .any(|key| message.metadata.get(*key) == Some(&Value::Bool(true)))
 }

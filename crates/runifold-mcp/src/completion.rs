@@ -135,7 +135,10 @@ impl CompletionDescriptor {
         })
     }
 
-    /// Converts the completion contract into attenuated runtime authority.
+    /// Converts the completion contract into a standalone grant descriptor.
+    ///
+    /// Completion of an already granted prompt or resource preserves that
+    /// grant's descriptor instead of substituting this projection under its ID.
     pub fn capability(&self) -> CapabilityDescriptor {
         CapabilityDescriptor {
             id: self.id,
@@ -260,10 +263,20 @@ impl CompletionRegistry {
                     )
                 })?;
             let descriptor = provider.descriptor();
-            if !authority.capabilities().contains(descriptor.id) {
-                return Err(CompletionError::new(
+            let granted = authority.capabilities().get(descriptor.id).ok_or_else(|| {
+                CompletionError::new(
                     CompletionErrorKind::CapabilityDenied,
                     "completion capability is not granted",
+                )
+            })?;
+            let expected_kind = match descriptor.reference {
+                CompletionReference::Prompt { .. } => CapabilityKind::Prompt,
+                CompletionReference::Resource { .. } => CapabilityKind::Resource,
+            };
+            if granted.kind != expected_kind || granted.version != descriptor.version {
+                return Err(CompletionError::new(
+                    CompletionErrorKind::CapabilityDenied,
+                    "completion reference kind or version differs from the granted contract",
                 ));
             }
             if params.argument.name.trim().is_empty() {
@@ -273,7 +286,7 @@ impl CompletionRegistry {
                 ));
             }
             let mut capabilities = CapabilitySet::new();
-            capabilities.grant(descriptor.capability());
+            capabilities.grant(granted.clone());
             let child = authority.child(capabilities).map_err(|error| {
                 CompletionError::new(CompletionErrorKind::CapabilityDenied, error.to_string())
             })?;

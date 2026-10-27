@@ -198,7 +198,7 @@ async fn send(
 async fn read_json<T: serde::de::DeserializeOwned>(
     response: Response,
     cancellation: &CancellationToken,
-    provider: &str,
+    _provider: &str,
     deadline: Option<Instant>,
 ) -> Result<T, RetrievalError> {
     match select(
@@ -212,9 +212,7 @@ async fn read_json<T: serde::de::DeserializeOwned>(
             if deadline_elapsed(&error, deadline) {
                 RetrievalError::DeadlineExceeded
             } else {
-                RetrievalError::provider(format!(
-                    "{provider} embedding response was invalid: {error}"
-                ))
+                RetrievalError::provider("provider returned invalid embedding JSON")
             }
         }),
     }
@@ -227,15 +225,8 @@ async fn http_error(
     deadline: Option<Instant>,
 ) -> Result<RetrievalError, RetrievalError> {
     let status = response.status();
-    let payload: Value = read_json(response, cancellation, provider, deadline).await?;
-    let message = payload
-        .get("error")
-        .and_then(|error| error.get("message"))
-        .and_then(Value::as_str)
-        .map_or_else(
-            || format!("{provider} embeddings returned HTTP {status}"),
-            |message| format!("{provider} embeddings failed: {message}"),
-        );
+    read_json::<Value>(response, cancellation, provider, deadline).await?;
+    let message = crate::reliability::http_failure_message(status);
     Ok(RetrievalError::provider(message))
 }
 
@@ -243,7 +234,7 @@ fn transport_error(error: &reqwest::Error, deadline: Option<Instant>) -> Retriev
     if deadline_elapsed(error, deadline) {
         RetrievalError::DeadlineExceeded
     } else {
-        RetrievalError::provider(format!("embedding transport failed: {error}"))
+        RetrievalError::provider(crate::reliability::transport_failure_message(error))
     }
 }
 

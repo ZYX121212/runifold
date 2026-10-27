@@ -154,6 +154,8 @@ pub struct DurableConversationCheckpoint {
 /// changes. This snapshot does not identify compiled code or middleware closures.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AgentRecoveryContract {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) context_manager: Option<crate::agent::ContextManagerContract>,
     pub(crate) instructions: Vec<Message>,
     pub(crate) context: Vec<Message>,
     pub(crate) tools: Vec<runifold_tool::ToolDescriptor>,

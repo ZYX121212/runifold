@@ -59,7 +59,7 @@ url.workspace = true
 aws-smithy-eventstream = "=0.60.18"
 runifold-provider-testkit.workspace = true
 schemars.workspace = true
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
 
 [lints]
 workspace = true
@@ -71,7 +71,7 @@ wasm-bindgen-test = "0.3.76"
 wasm-bindgen-futures = { version = "0.4", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1.53.1", features = ["net"], optional = true }
+tokio = { version = "1.53.3", features = ["net"], optional = true }
 tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-webpki-roots"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

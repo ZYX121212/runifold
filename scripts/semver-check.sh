@@ -5,7 +5,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 current_version="$(cargo metadata --no-deps --format-version 1 | jq -r ' .packages[0].version')"
-baseline="${SEMVER_BASELINE:-$(git tag --list 'v*' --sort=-version:refname | awk -v current="v$current_version" '$0 != current {print; exit}')}"
+# Tags from another branch must not become the baseline for this checkout.
+baseline="${SEMVER_BASELINE:-$(git tag --merged HEAD --list 'v*' --sort=-version:refname | awk -v current="v$current_version" '$0 != current {print; exit}')}"
 if [[ -z "$baseline" ]]; then
     echo "No prior release tag exists; SemVer comparison starts after v0.1.0."
     exit 0
@@ -57,4 +58,7 @@ semver_args=(
 if ((${#exclusions[@]} > 0)); then
     semver_args+=("${exclusions[@]}")
 fi
-cargo semver-checks "${semver_args[@]}"
+# Synthetic per-crate baseline/current workspaces must not overwrite the
+# execution workspace's compiled metadata or cached test executables.
+semver_target="$(jq -er '.target_directory + "/semver-build"' "$current_metadata")"
+CARGO_TARGET_DIR="$semver_target" cargo semver-checks "${semver_args[@]}"

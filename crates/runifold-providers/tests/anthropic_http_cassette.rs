@@ -45,6 +45,68 @@ fn client(server: &CassetteServer) -> AnthropicClient {
 }
 
 #[tokio::test]
+async fn parallel_tool_results_reach_http_as_one_user_turn_before_text() {
+    let events = [
+        json!({"type":"message_start","message":{
+            "id":"msg_results","model":"claude-test","usage":{}}}),
+        json!({"type":"content_block_start","index":0,
+            "content_block":{"type":"text","text":"done"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}),
+        json!({"type":"message_stop"}),
+    ];
+    let server = CassetteServer::start(vec![HttpExchange::new(
+        "POST",
+        "/v1/messages",
+        sse_response(&events),
+    )])
+    .unwrap();
+    let calls = ["call-1", "call-2"]
+        .into_iter()
+        .map(|id| {
+            ContentPart::ToolCall(ToolCall {
+                id: id.into(),
+                name: "lookup".into(),
+                arguments: json!({}),
+                raw_arguments: None,
+                metadata: BTreeMap::new(),
+            })
+        })
+        .collect();
+    let mut request = request()
+        .message(Message::new(runifold_model::Role::Assistant, calls).unwrap())
+        .message(Message::user("continue"));
+    for id in ["call-1", "call-2"] {
+        request = request.message(
+            Message::new(
+                runifold_model::Role::Tool,
+                vec![ContentPart::ToolResult(runifold_model::ToolResult {
+                    call_id: id.into(),
+                    name: Some("lookup".into()),
+                    content: vec![ContentPart::text("ok")],
+                    structured_content: None,
+                    is_error: false,
+                    metadata: BTreeMap::new(),
+                })],
+            )
+            .unwrap(),
+        );
+    }
+    client(&server)
+        .invoke(request, ModelCallContext::new())
+        .await
+        .unwrap();
+
+    server.assert_finished().unwrap();
+    let body = server.observed_requests()[0].json_body().unwrap();
+    assert_eq!(body["messages"].as_array().unwrap().len(), 3);
+    let content = &body["messages"][2]["content"];
+    assert_eq!(content[0]["tool_use_id"], "call-1");
+    assert_eq!(content[1]["tool_use_id"], "call-2");
+    assert_eq!(content[2]["text"], "continue");
+}
+
+#[tokio::test]
 async fn invokes_text_over_real_http_and_redacts_the_key() {
     let events = vec![
         json!({
