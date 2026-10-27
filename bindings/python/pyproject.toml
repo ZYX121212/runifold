@@ -26,7 +26,7 @@ test = ["pytest>=8", "pytest-asyncio>=0.24", "mypy>=1.18", "ruff==0.17.3"]
 [tool.maturin]
 python-source = "python"
 module-name = "runifold._native"
-include = ["python/runifold/py.typed", "python/runifold/_native.pyi", "examples/*.py"]
+include = ["python/runifold/py.typed", "python/runifold/_native.pyi", { path = "examples/*.py", format = "sdist" }]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

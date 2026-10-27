@@ -2201,12 +2201,12 @@
         "docs/rfcs/0073-production-agent-sessions.md": "f65fa4aa23c567e7b80981fe42a04cde7b167dbf99d6fdbb1a34c3343c16f6ed",
         "docs/rfcs/0075-shared-model-request-scheduling.md": "ffb475c93832ca0b752a9afab856a3aa87835d61ac395f1aa34e0417a85102ac",
         "docs/rfcs/0078-budgeted-agent-context.md": "506607b90709ce57fbc392e33f8d024f46203825ff4da0bedd1b39cf23f624f8",
-        "docs/rfcs/0079-application-sdks.md": "91066c739f3624aff7483ec9c72e45495f307ae9e64302ae88da4a61e311de62",
+        "docs/rfcs/0079-application-sdks.md": "055212e4a381c090d408e8b90f88a0d9c491c44d72738d18420469bd2706be40",
         "scripts/ai-check.py": "0eed3e3cc4db13cc0c51983690d5949260e0f9b9b80ce18e4e376f29567bb89d",
         "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
         "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
       },
-      "digest": "bf0d5ba8e36f0dae200e8536a887851a623c109a553f5d3ca739239ffd52e034"
+      "digest": "e1c3c30fd0127d1df48a631bda92436ec4affde10baaee824fa11fbb1f35e6b7"
     }
   },
   "documents": {

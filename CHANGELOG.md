@@ -24,6 +24,9 @@ breaking changes require a minor-version increment.
   Tool failure values compatible, and retain safe model categories/remediation.
 - Validate Python Tool identities/signatures early and close returned coroutine
   objects without executing hidden work. Preserve rich canonical Tool results.
+- Isolate mutable Python usage projections from canonical execution facts.
+- Keep example scripts in source distributions instead of installing a generic
+  top-level `examples` namespace from wheels.
 - Retain complete API prefixes without requiring a trailing slash. Build Linux
   SDK wheels under manylinux_2_28, audit the independent native lockfile, and gate
   Python formatting/imports and installed-native regression tests in CI.

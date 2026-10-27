@@ -117,7 +117,7 @@ class Outcome(Generic[T]):
         return cls(
             run_id=message["run_id"],
             text=message["text"],
-            usage=native["usage"],
+            usage=dict(native["usage"]),
             turns=native["turns"],
             tool_calls=native["tool_calls"],
             checkpoint_id=message.get("checkpoint_id"),

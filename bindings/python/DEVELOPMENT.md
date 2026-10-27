@@ -80,5 +80,7 @@ not an automatic production fallback.
 
 Linux CI builds x86_64 wheels in a manylinux_2_28 container and asks maturin to
 reject wheels incompatible with PyPI platform policy. macOS and Windows use
-native builds. The independent native lockfile is audited separately from the
+native builds. Examples ship in the source archive; wheels install only the SDK namespace and
+distribution metadata, without a global `examples` namespace. The independent
+native lockfile is audited separately from the
 Rust publication workspace. These checks do not publish packages externally.

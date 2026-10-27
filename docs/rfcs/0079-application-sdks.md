@@ -107,6 +107,7 @@ Closing an unstarted Stream is terminal. Invalid shutdown arguments must fail
 before changing Client state; a closed Client takes precedence over admission
 pressure. Tool identity and Python-callable signature errors fail at registration.
 Returned coroutine objects are closed without executing hidden work.
+Mutable usage projections cannot modify canonical execution records.
 
 The Python retry enum carries all native states, including idempotency-required,
 unsafe-after-output and unsafe-after-effect. Retain the first binding's local

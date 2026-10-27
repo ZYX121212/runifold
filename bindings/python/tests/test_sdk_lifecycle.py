@@ -238,3 +238,19 @@ async def test_close_accepts_a_float_subclass_without_coercing_boolean():
     client = scripted_client()
     await client.aclose(timeout=Seconds(5))
     assert client.snapshot()["closed"] is True
+
+
+def test_installed_distribution_does_not_own_a_global_examples_namespace():
+    from importlib.metadata import distribution
+
+    files = distribution("runifold-sdk").files
+    assert files is not None
+    assert not any(str(file).startswith("examples/") for file in files)
+
+
+async def test_usage_projection_cannot_mutate_canonical_execution_facts():
+    async with scripted_client(text("done")) as client:
+        result = await client.agent("facts").run("hello")
+        original = result.canonical
+        result.usage["tokens"] = 999
+        assert result.canonical == original
