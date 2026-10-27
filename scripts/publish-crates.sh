@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="${RUNIFOLD_PUBLISH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$repo_root"
 
 publish_order=(
@@ -20,8 +20,8 @@ publish_order=(
     runifold-providers
     runifold-agent
     runifold-workflow
-    runifold-mcp
     runifold-store-sqlite
+    runifold-mcp
     runifold-observability-otel
     runifold-store-postgres
     runifold-eval-cli
@@ -57,7 +57,7 @@ for crate_name in "${publish_order[@]}"; do
             .packages[]
             | select(.name == $crate)
             | .dependencies[]
-            | select(.kind == null and .path != null)
+            | select(.path != null)
             | .name
         ' <<<"$metadata"
     )
@@ -78,6 +78,10 @@ if [[ "${CONFIRM_RUNIFOLD_PUBLISH:-}" != "$version" ]]; then
 fi
 if [[ -n "$(git status --porcelain)" ]]; then
     echo "refusing to publish from a dirty worktree" >&2
+    exit 1
+fi
+if git symbolic-ref --quiet HEAD >/dev/null; then
+    echo "refusing to publish from a branch; check out the release tag detached" >&2
     exit 1
 fi
 if [[ "$(git tag --points-at HEAD --list "v$version")" != "v$version" ]]; then

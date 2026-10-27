@@ -39,6 +39,15 @@ invariants:
    separate protected, manually confirmed workflow.
 8. Publication follows a dependency-first order and is restartable.
 
+Publication order includes internal build and development dependencies: Cargo's
+standalone package preparation resolves versioned development dependencies even
+when it does not compile tests. SQLite therefore precedes its MCP test consumer.
+The registry workflow pins its controller to the workflow's immutable commit in
+a separate checkout. The controller targets a clean, detached release checkout
+through `RUNIFOLD_PUBLISH_ROOT`; all Cargo package verification and credentials
+remain behind the existing protected registry job. Controller repairs can resume
+publication of an unchanged signed tag without rewriting release payloads.
+
 ## Consequences
 
 Release latency increases because packaged crates and MSRV builds are compiled

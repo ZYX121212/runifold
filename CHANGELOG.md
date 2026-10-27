@@ -6,6 +6,13 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+### Fixed
+
+- Include internal development and build dependencies in publication order,
+  publishing SQLite before its MCP test consumer. The protected registry workflow
+  pins its publication controller to the workflow commit while packaging only
+  the requested clean, detached release tag. Published tags remain immutable.
+
 ## [0.10.4] - 2026-10-27
 
 ### Fixed
