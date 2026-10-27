@@ -386,10 +386,7 @@ fn finish_reason(reason: &str) -> FinishReason {
 
 fn provider_error(payload: &Value) -> ModelError {
     let error = payload.get("error").unwrap_or(&Value::Null);
-    let message = error
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("Anthropic returned a stream error");
+    let message = "provider reported a failed response; inspect structured error classification";
     let mut model_error = ModelError::local(ModelErrorKind::Provider, message);
     if let Some(error_type) = error.get("type") {
         model_error

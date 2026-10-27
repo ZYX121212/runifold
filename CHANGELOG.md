@@ -6,6 +6,129 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-27
+
+### Fixed
+
+- Honor Cargo's resolved target directory throughout release verification and
+  isolate benchmark, MSRV and SemVer build outputs from execution artifacts.
+  SemVer regression coverage includes a configured target path containing spaces.
+
+- Parse bounded request-resource observations from both plain and serial
+  libtest-prefixed output so serial soak runs cannot silently lose measurements.
+
+- Preserve existing model-error and Agent-event variant indices when extending
+  the public enums; new variants are appended instead of shifting old variants.
+
+- Select the default public-API compatibility baseline from tags reachable from
+  the tested checkout, rather than a newer release on another branch.
+- Bind disposable PostgreSQL databases to explicitly selected host ports and
+  verify bounded SQL readiness across restarts, avoiding transient Docker
+  dynamic-port inspection as the connection authority. Explicit pre-start bind
+  conflicts alone receive at most four provisioning attempts, with owned-container
+  cleanup; SQL failures and test assertions are never replayed. Real occupied-port
+  regressions verify successful reselection, exhaustion and cleanup.
+
+- Updated locked TLS/QUIC, HTTP/2, Tokio, certificate-root and cryptographic utility dependencies
+  to patched versions in both workspaces. Internal path-only development
+  dependencies now carry the actual workspace version constraint, so the existing
+  wildcard-denial policy passes without exemptions.
+
+- Removed untrusted upstream error-message bodies and request URLs from native
+  model/embedding HTTP, stream and transport failure Display messages, while
+  retaining normalized categories, status/classification metadata and retry safety.
+  Added real loopback HTTP/SSE/NDJSON and transport-query privacy regressions.
+
+- Promoted supported legacy Workflow checkpoints to schema v5 atomically with
+  the first successful state advance. Read-only loads and completed-result
+  replay retain their original envelope. Added SQLite/PostgreSQL upgrade,
+  future-schema preservation and drained-worker fencing tests, plus a CI gate
+  that builds the v0.7.2 reader and proves it rejects advanced v5 checkpoints.
+
+- Preserved bounded HTTP, retry and known provider-error diagnostics in every
+  routed attempt summary, including successful fallback and terminal failure.
+  OpenTelemetry exports the same safe projection and terminal failure history
+  without duplicate attempt events or private response/message metadata.
+  Compatible HTTP adapters also preserve their actual Provider namespace while
+  retaining the historical OpenAI error-field aliases.
+- Added scheduled-error lifecycle facts separating admission, opening, streaming,
+  queue/execution time, Provider invocation and released local capacity from
+  unknown remote outcomes. Cancellation never claims remote termination.
+
+- Preserved complete capability descriptors across child Run, Gateway and
+  Workflow grants. Reusing a parent capability ID with altered schemas, version,
+  effect, risk or metadata now rejects authority escalation before child work.
+  Added public delegation contracts and concurrent SQLite Effect recovery
+  regressions; clarified that a missing receipt does not prove a live previous
+  attempt cannot still commit.
+- Kept MCP completion child scopes bound to the exact Prompt/Resource grant and
+  reference identity/version. Conflicting references fail before provider work;
+  mismatched Tool descriptors return a protocol denial instead of panicking.
+
+- Rejected Effect requests whose side-effect classification differs from the
+  granted capability before storage, dispatch, reconciliation or result replay.
+  A matching capability ID can no longer relabel non-idempotent writes as safe
+  reads to acquire `RetrySafe` recovery. Added classification regressions and a
+  real SQLite completion-write failure/reopen/receipt-reconciliation test.
+
+- Classified window-truncated historical prefixes as `IncompleteHistory`, with
+  explicit exclusion reports and no archive mutation. Managed sessions can
+  continue after rolling summaries leave an orphaned historical Tool result;
+  incomplete current Tool exchanges still fail. When a summarizer is configured,
+  complete the prefix summary under existing batch/pass/usage limits before
+  analysis instead of excluding its evidence. Avoided copying accumulated
+  context-report metadata into outgoing requests, and rejected zero output limits
+  before dispatch. Added bounded-window cut and durable replay regressions.
+
+- Kept historical user/model/Tool turns atomic when reference or system messages
+  are interleaved. Context recovery now validates original group boundaries,
+  provenance and protection, with plan-integrity checks and safe accounting
+  revalidation for legacy snapshots without rerunning selection. Context counting
+  and hashing stream canonical JSON; overhead accounting no longer clones history
+  and outgoing projection moves selected messages instead of cloning them again.
+
+### Added
+
+- Added offline `runifold ai environment` to fingerprint locked resolved versions,
+  features, dependency edges and actual source contents, including vendor patches,
+  without emitting private paths, source URLs or environment-file contents.
+- Added repeated request/resource stability checks and source-bound soak evidence
+  schema 3: short passes cannot claim release-duration acceptance, and changed
+  sources, incomplete runs or unknown revisions cannot preserve stale pass results.
+- Extended durable upgrade checks to rejected legacy/future Session admission
+  records and current PostgreSQL Session replay across reconnections.
+
+- Added explicit circuit disabling through runtime profiles and router builders,
+  plus opt-in `CircuitFailurePolicy::ServiceAvailability` so request/output
+  failures need not suppress independent tasks sharing a route. Existing defaults
+  and retry authority remain unchanged. Added payload-free, versioned
+  `RuntimePolicySnapshot` for effective retry/circuit/delivery policy auditing.
+
+- Added opt-in Agent `ContextManager` with per-call input/output reservations,
+  versioned token counters and selection policies, atomic historical-turn and
+  reference-document selection, and protected instructions, summaries and current
+  Tool exchanges. Context plans are observable and checkpointed before model
+  dispatch; explicit recovery reuses the original plan. Full transcripts remain
+  intact. Includes an offline durable continuous-analysis example with validated
+  source-linked state. The built-in text counter is explicitly approximate;
+  multimodal input requires a model-aware counter.
+
+- Added opt-in shared physical-model request scheduling with atomic account/model
+  pool admission, bounded queues, concurrency and rolling request/token limits,
+  starvation protection, cancellation/deadlines, conservative usage settlement,
+  and payload-free accounting. Bind providers with `ProviderModelExt::scheduled`
+  before runtime construction so retries reacquire capacity without holding slots
+  during backoff. Includes an offline 100-Agent example and regression contracts.
+- Added explicit `ModelTokenSettlement` trust policy: default conservative
+  settlement retains reservations when final usage completeness is unverified.
+  Wake-object cloning/destruction and notifications stay outside scheduler locks;
+  concurrent expiry charges retain timestamp order. Cancellation/deadlines are
+  rechecked after physical opening and stream polling, retaining usage debt even
+  when a racing result is discarded.
+- Added the safe local `ModelErrorKind::AdmissionDenied` category and
+  `RF-PROVIDER-010` diagnostic; local admission denial is never automatically
+  retried or bypassed through fallback.
+
 ## [0.10.3] - 2026-10-14
 
 ### Added

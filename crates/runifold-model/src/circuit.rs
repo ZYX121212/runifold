@@ -40,8 +40,10 @@ pub enum CircuitBreakerConfigError {
 }
 
 /// Per-route circuit-breaker policy.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CircuitBreakerConfig {
+    enabled: bool,
+    failure_policy: CircuitFailurePolicy,
     failure_threshold: u32,
     cooldown: Duration,
     counted_kinds: Vec<ModelErrorKind>,
@@ -50,6 +52,8 @@ pub struct CircuitBreakerConfig {
 impl Default for CircuitBreakerConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
+            failure_policy: CircuitFailurePolicy::ConfiguredKinds,
             failure_threshold: 5,
             cooldown: Duration::from_secs(30),
             counted_kinds: vec![
@@ -63,7 +67,54 @@ impl Default for CircuitBreakerConfig {
     }
 }
 
+/// Evidence required before one failure affects a shared physical route.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum CircuitFailurePolicy {
+    /// Preserve the configured error-kind classification without HTTP filtering.
+    #[default]
+    ConfiguredKinds,
+    /// Count configured transport failures and Provider HTTP 429/5xx failures.
+    ///
+    /// Request errors, output/protocol errors and Provider errors without a
+    /// recognized numeric HTTP status do not establish service unavailability.
+    /// This policy never changes retry safety or authorizes another attempt.
+    ServiceAvailability,
+}
+
 impl CircuitBreakerConfig {
+    /// Disables route-health sharing without changing retry or capacity policy.
+    ///
+    /// Use with `ProviderRuntimeProfile::circuit_breaker` when independent batch
+    /// tasks should share physical capacity but not suppress one another's calls.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
+
+    /// Returns whether this policy acquires and updates route-health permits.
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Restricts which configured failures may suppress other tasks on this route.
+    ///
+    /// Defaults remain compatible. Independent batch tasks can select
+    /// [`CircuitFailurePolicy::ServiceAvailability`] while retaining a shared
+    /// breaker for transport, rate-limit and server failures.
+    #[must_use]
+    pub const fn failure_policy(mut self, policy: CircuitFailurePolicy) -> Self {
+        self.failure_policy = policy;
+        self
+    }
+
+    /// Returns the evidence policy used in addition to the configured kind set.
+    pub const fn selected_failure_policy(&self) -> CircuitFailurePolicy {
+        self.failure_policy
+    }
+
     /// Creates a breaker that counts transport, provider, protocol,
     /// stream-state, and malformed Tool-argument failures.
     ///
@@ -82,6 +133,8 @@ impl CircuitBreakerConfig {
             return Err(CircuitBreakerConfigError::ZeroCooldown);
         }
         Ok(Self {
+            enabled: true,
+            failure_policy: CircuitFailurePolicy::ConfiguredKinds,
             failure_threshold,
             cooldown,
             counted_kinds: vec![
@@ -122,7 +175,21 @@ impl CircuitBreakerConfig {
     }
 
     pub(crate) fn counts(&self, error: &ModelError) -> bool {
-        error.kind != ModelErrorKind::Cancelled && self.counted_kinds.contains(&error.kind)
+        if error.kind == ModelErrorKind::Cancelled || !self.counted_kinds.contains(&error.kind) {
+            return false;
+        }
+        match self.failure_policy {
+            CircuitFailurePolicy::ConfiguredKinds => true,
+            CircuitFailurePolicy::ServiceAvailability => match error.kind {
+                ModelErrorKind::Transport => true,
+                ModelErrorKind::Provider => error
+                    .metadata
+                    .get("http.status")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|status| status == 429 || (500..=599).contains(&status)),
+                _ => false,
+            },
+        }
     }
 }
 
@@ -141,6 +208,38 @@ mod config_tests {
         assert_eq!(config.cooldown(), Duration::from_secs(30));
         assert!(config.failure_kinds().contains(&ModelErrorKind::Transport));
         assert!(config.failure_kinds().contains(&ModelErrorKind::Protocol));
+    }
+
+    #[test]
+    fn service_availability_requires_service_evidence_and_preserves_legacy_defaults() {
+        let default = CircuitBreakerConfig::default();
+        let scoped = default
+            .clone()
+            .failure_policy(super::CircuitFailurePolicy::ServiceAvailability);
+        for status in [400, 401, 403, 404, 408, 422, 429, 500, 503, 599, 600] {
+            let mut error = crate::ModelError::local(ModelErrorKind::Provider, "private");
+            error
+                .metadata
+                .insert("http.status".into(), serde_json::json!(status));
+            assert!(default.counts(&error));
+            assert_eq!(
+                scoped.counts(&error),
+                status == 429 || (500..=599).contains(&status)
+            );
+        }
+        let unknown = crate::ModelError::local(ModelErrorKind::Provider, "unknown status");
+        assert!(!scoped.counts(&unknown));
+        for kind in [
+            ModelErrorKind::Protocol,
+            ModelErrorKind::StreamState,
+            ModelErrorKind::MalformedToolArguments,
+        ] {
+            assert!(!scoped.counts(&crate::ModelError::local(kind, "request-specific")));
+        }
+        let transport = crate::ModelError::local(ModelErrorKind::Transport, "transport");
+        assert!(scoped.counts(&transport));
+        assert_eq!(transport.retry_safety, runifold_core::RetrySafety::Unknown);
+        assert!(!scoped.counted_kinds([]).counts(&transport));
     }
 }
 
@@ -264,7 +363,7 @@ pub(crate) fn acquire(
     config: Option<&CircuitBreakerConfig>,
     clock: &Arc<dyn RouterClock>,
 ) -> RoutePermit {
-    let Some(config) = config else {
+    let Some(config) = config.filter(|config| config.is_enabled()) else {
         return RoutePermit::Disabled;
     };
     let now = clock.now();
@@ -306,7 +405,7 @@ pub(crate) fn snapshot(
         ),
         BreakerPhase::HalfOpen => (CircuitState::HalfOpen, 0, None),
     };
-    if config.is_none() {
+    if config.is_none_or(|config| !config.is_enabled()) {
         return ModelRouteHealth {
             route,
             target,

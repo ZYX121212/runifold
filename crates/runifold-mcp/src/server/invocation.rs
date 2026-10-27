@@ -77,12 +77,9 @@ impl McpSession {
 
         let mut capabilities = CapabilitySet::new();
         capabilities.grant(descriptor.capability());
-        let child = self
-            .inner
-            .server
-            .authority
-            .child(capabilities)
-            .expect("Tool capability presence was verified before child creation");
+        let Ok(child) = self.inner.server.authority.child(capabilities) else {
+            return JsonRpcResponse::error(id, METHOD_NOT_FOUND, "tool not found", None);
+        };
         let cancellation = child.cancellation().clone();
         self.lock_inflight().insert(id.clone(), cancellation);
         let _guard = InflightGuard::new(id.clone(), Arc::clone(&self.inner.inflight));

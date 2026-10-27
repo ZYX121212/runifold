@@ -24,6 +24,7 @@ Prefer kernel-neutral contracts. A protocol-specific need belongs in an edge ada
 
 - RF-LAW-001: no model/provider/protocol/store dependencies in the kernel.
 - RF-LAW-003: parent authority and structured run lifetime remain enforceable.
+- Child grants select unchanged parent capability descriptors; the same ID cannot redefine schemas, versions, effects, risk or metadata.
 
 Public exports are in the crate entry point. Consult
 [the architecture map](../../docs/ai/architecture.md) before crossing a crate boundary.

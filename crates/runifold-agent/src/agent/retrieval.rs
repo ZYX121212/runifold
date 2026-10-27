@@ -34,9 +34,7 @@ impl Agent {
         }
         let query_text = message_text(&user);
         if !self.context.is_empty() {
-            state
-                .transcript
-                .push(untrusted_context_message(&self.context));
+            self.append_reference_documents(&mut state.transcript, &self.context);
         }
 
         for source in &self.dynamic_context {
@@ -104,11 +102,25 @@ impl Agent {
                 .map(|retrieved| retrieved.document)
                 .collect::<Vec<_>>();
             if !documents.is_empty() {
-                state.transcript.push(untrusted_context_message(&documents));
+                self.append_reference_documents(&mut state.transcript, &documents);
             }
         }
         state.transcript.push(user);
         Ok(state)
+    }
+    fn append_reference_documents(&self, transcript: &mut Vec<Message>, documents: &[Document]) {
+        if self.context_manager.is_some() {
+            transcript.extend(documents.iter().map(|document| {
+                let mut message = untrusted_context_message(std::slice::from_ref(document));
+                message.metadata.insert(
+                    super::context::REFERENCE_IDS.into(),
+                    serde_json::json!([document.id]),
+                );
+                message
+            }));
+        } else {
+            transcript.push(untrusted_context_message(documents));
+        }
     }
 }
 

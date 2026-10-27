@@ -175,7 +175,7 @@ async fn read_json<T: serde::de::DeserializeOwned>(
             if deadline_elapsed(&error, deadline) {
                 RetrievalError::DeadlineExceeded
             } else {
-                RetrievalError::provider(format!("Ollama embedding response was invalid: {error}"))
+                RetrievalError::provider("provider returned invalid embedding JSON")
             }
         }),
     }
@@ -187,11 +187,8 @@ async fn http_error(
     deadline: Option<Instant>,
 ) -> Result<RetrievalError, RetrievalError> {
     let status = response.status();
-    let payload: Value = read_json(response, cancellation, deadline).await?;
-    let message = payload.get("error").and_then(Value::as_str).map_or_else(
-        || format!("Ollama embeddings returned HTTP {status}"),
-        |message| format!("Ollama embeddings failed: {message}"),
-    );
+    read_json::<Value>(response, cancellation, deadline).await?;
+    let message = crate::reliability::http_failure_message(status);
     Ok(RetrievalError::provider(message))
 }
 
@@ -199,7 +196,7 @@ fn transport_error(error: &reqwest::Error, deadline: Option<Instant>) -> Retriev
     if deadline_elapsed(error, deadline) {
         RetrievalError::DeadlineExceeded
     } else {
-        RetrievalError::provider(format!("Ollama embedding transport failed: {error}"))
+        RetrievalError::provider(crate::reliability::transport_failure_message(error))
     }
 }
 

@@ -15,6 +15,9 @@ use crate::{GatewayError, GatewayErrorKind, TerminalReviewError};
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum AgentError {
+    /// Per-call context construction failed before model dispatch.
+    #[error("agent context failed: {0}")]
+    Context(#[from] crate::ContextError),
     /// Model invocation failed.
     #[error("model invocation failed: {0}")]
     Model(#[from] ModelError),
@@ -246,7 +249,8 @@ impl AgentError {
                     RunErrorKind::Extension("runifold.observability".into())
                 }
             },
-            Self::InvalidConfig(_) => RunErrorKind::InvalidInput,
+            Self::Context(crate::ContextError::Overflow { .. }) => RunErrorKind::BudgetExceeded,
+            Self::Context(_) | Self::InvalidConfig(_) => RunErrorKind::InvalidInput,
             Self::TerminalReviewAuthorityEscalation { .. }
             | Self::TurnReviewAuthorityEscalation { .. } => RunErrorKind::CapabilityDenied,
             Self::TerminalReview(error) | Self::TurnReview(error) => review_error_kind(error),

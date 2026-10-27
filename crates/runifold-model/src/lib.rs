@@ -13,6 +13,7 @@ mod response;
 mod retry;
 mod router;
 mod runtime_profile;
+mod scheduling;
 mod stream;
 mod structured;
 
@@ -21,8 +22,8 @@ pub use capability::{
 };
 pub use capability_catalog::ModelCapabilityCatalog;
 pub use circuit::{
-    CircuitBreakerConfig, CircuitBreakerConfigError, CircuitState, ModelRouteHealth, RouterClock,
-    SystemRouterClock,
+    CircuitBreakerConfig, CircuitBreakerConfigError, CircuitFailurePolicy, CircuitState,
+    ModelRouteHealth, RouterClock, SystemRouterClock,
 };
 pub use content::{
     Citation, ContentPart, MediaSource, Message, ProviderData, ReasoningPart, Role, ToolCall,
@@ -49,7 +50,7 @@ pub use router::{
 };
 pub use runtime_profile::{
     BatchProfile, InteractiveProfile, ProductionProfile, ProviderRuntimeProfile,
-    RuntimeProfilePreset,
+    RuntimePolicySnapshot, RuntimeProfilePreset,
 };
 pub use stream::{ContentBlockKind, ModelStreamAccumulator, ModelStreamEvent, ProviderEvent};
 pub use structured::{StructuredOutputError, StructuredOutputErrorKind};
@@ -60,4 +61,10 @@ pub use artifact::{
     Artifact, ArtifactError, ArtifactFuture, ArtifactPage, ArtifactRef, ArtifactResolvingModel,
     ArtifactScope, ArtifactStore, ArtifactWrite, DEFAULT_MAX_ARTIFACT_BYTES, InMemoryArtifactStore,
     MAX_ARTIFACT_IDEMPOTENCY_KEY_BYTES, MAX_ARTIFACT_NAME_BYTES, MAX_ARTIFACT_PAGE_SIZE,
+};
+
+pub use scheduling::{
+    ModelCapacityLimits, ModelCapacityPoolId, ModelCapacitySnapshot, ModelRateLimit,
+    ModelScheduler, ModelSchedulerConfig, ModelSchedulerConfigError, ModelSchedulerSnapshot,
+    ModelSchedulingError, ModelTokenEstimator, ModelTokenSettlement, ScheduledModel,
 };

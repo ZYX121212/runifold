@@ -21,7 +21,8 @@ pub use store::{
     SemanticMemoryUpsertOutcome,
 };
 pub(crate) use store::{
-    TRANSIENT_CONTEXT_METADATA, is_transient_context, semantic_memory_message, summary_message,
+    TRANSIENT_CONTEXT_METADATA, is_transient_context, is_turn_start, semantic_memory_message,
+    summary_message,
 };
 pub use summarizer::{
     AutomaticConversationSummary, ConversationSummarizer, ConversationSummarizerError,

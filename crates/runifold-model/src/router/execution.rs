@@ -446,6 +446,8 @@ fn failure_summary(route: &ModelRoute, route_attempt: u32, error: &ModelError) -
         "route_attempt": route_attempt,
         "kind": &error.kind,
         "retry_safety": error.retry_safety,
+        "diagnostic_code": error.diagnostic_code(),
+        "diagnostics": error.diagnostic_metadata(),
     })
 }
 

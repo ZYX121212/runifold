@@ -28,7 +28,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 futures-executor.workspace = true
-runifold-testkit = { path = "../runifold-testkit" }
+runifold-testkit = { version = "0.10.4", path = "../runifold-testkit" }
 
 [lints]
 workspace = true

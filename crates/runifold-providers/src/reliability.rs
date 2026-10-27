@@ -1,6 +1,49 @@
 //! Conservative retry-safety classification shared by HTTP providers.
 
+#[cfg(any(
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai"
+))]
+use reqwest::StatusCode;
 use std::time::Duration;
+
+#[cfg(any(
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai"
+))]
+pub(crate) fn http_failure_message(status: StatusCode) -> String {
+    let action = match status.as_u16() {
+        401 => "verify provider authentication",
+        403 => "verify provider access policy",
+        400 | 422 => "review the request and structured error classification",
+        429 => "honor retry timing and review shared provider limits",
+        500..=599 => "inspect provider availability; remote execution and usage may be unknown",
+        _ => "inspect the status and structured error classification",
+    };
+    format!("provider returned HTTP {}; {action}", status.as_u16())
+}
+
+#[cfg(any(
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai"
+))]
+pub(crate) fn transport_failure_message(error: &reqwest::Error) -> &'static str {
+    #[cfg(not(target_arch = "wasm32"))]
+    if error.is_connect() {
+        return "provider connection failed; inspect network and endpoint configuration";
+    }
+    if error.is_timeout() {
+        "provider transport timed out; remote execution and usage may be unknown"
+    } else {
+        "provider transport failed; remote execution and usage may be unknown"
+    }
+}
 
 pub(crate) fn request_timeout(remaining: Duration) -> Duration {
     #[cfg(target_arch = "wasm32")]

@@ -284,6 +284,130 @@ fn safe_open_failure_falls_back_and_records_the_selected_route() {
     assert_ne!(primary_id, backup_id);
 }
 
+fn diagnostic_failure(status: u16) -> ModelError {
+    let mut error = error(ModelErrorKind::Provider, RetrySafety::Safe);
+    error.provider = Some("gateway".into());
+    error.message = "private upstream response".into();
+    error.metadata = std::collections::BTreeMap::from([
+        ("http.status".into(), serde_json::json!(status)),
+        (
+            "gateway.error.type".into(),
+            serde_json::json!("server_error"),
+        ),
+        (
+            "gateway.error.param".into(),
+            serde_json::json!("private prompt"),
+        ),
+        (
+            "gateway.request_id".into(),
+            serde_json::json!("private receipt"),
+        ),
+    ]);
+    error
+}
+
+#[test]
+fn fallback_preserves_safe_diagnostics_for_each_failed_attempt() {
+    let primary = Arc::new(SequenceModel::new([
+        Script::OpenError(diagnostic_failure(503)),
+        Script::OpenError(diagnostic_failure(502)),
+    ]));
+    let backup = Arc::new(TestModel::new(Script::Events(completed(
+        ModelRef::new("backup", "model"),
+        "ok",
+    ))));
+    let router = ModelRouter::builder(logical())
+        .route("primary", primary, ModelRef::new("primary", "model"))
+        .route("backup", backup, ModelRef::new("backup", "model"))
+        .retry_policy(ModelRetryPolicy::exponential(2, Duration::ZERO, Duration::ZERO, 1).unwrap())
+        .build()
+        .unwrap();
+    let response =
+        futures_executor::block_on(router.invoke(request(), ModelCallContext::new())).unwrap();
+    let failures = &response.provider_events[0].value["prior_failures"];
+    assert_eq!(failures.as_array().unwrap().len(), 2);
+    assert_eq!(failures[0]["diagnostics"]["http.status"], 503);
+    assert_eq!(failures[1]["diagnostics"]["http.status"], 502);
+    assert_eq!(
+        failures[1]["diagnostics"]["provider.error.type"],
+        "server_error"
+    );
+    assert_eq!(failures[1]["diagnostic_code"], "RF-PROVIDER-007");
+    assert!(!failures.to_string().contains("private"));
+}
+
+#[test]
+fn terminal_routing_error_keeps_diagnostics_without_flattening_original_error() {
+    let router = router(
+        Arc::new(TestModel::new(Script::OpenError(diagnostic_failure(503)))),
+        Arc::new(TestModel::new(Script::OpenError(diagnostic_failure(502)))),
+        ModelFallbackPolicy::default(),
+    );
+    let error =
+        futures_executor::block_on(router.invoke(request(), ModelCallContext::new())).unwrap_err();
+    let failures = &error.metadata["runifold.router.failures"];
+    assert_eq!(failures[0]["diagnostics"]["http.status"], 503);
+    assert_eq!(failures[1]["diagnostics"]["http.status"], 502);
+    assert!(!failures.to_string().contains("private"));
+    assert_eq!(error.metadata["http.status"], 502);
+    assert_eq!(error.retry_safety, RetrySafety::Safe);
+}
+
+#[test]
+fn disabling_a_preconfigured_breaker_keeps_shared_clones_calling_the_provider() {
+    for disabled_config in [false, true] {
+        let model = Arc::new(TestModel::new(Script::OpenError(error(
+            ModelErrorKind::Provider,
+            RetrySafety::Unknown,
+        ))));
+        let builder = ModelRouter::builder(logical())
+            .route("primary", model.clone(), ModelRef::new("primary", "model"))
+            .circuit_breaker(CircuitBreakerConfig::new(1, Duration::from_secs(30)).unwrap());
+        let builder = if disabled_config {
+            builder.circuit_breaker(CircuitBreakerConfig::disabled())
+        } else {
+            builder.without_circuit_breaker()
+        };
+        let router = builder.build().unwrap();
+        for caller in [router.clone(), router.clone()] {
+            let result =
+                futures_executor::block_on(caller.invoke(request(), ModelCallContext::new()));
+            assert!(result.is_err());
+        }
+        assert_eq!(model.calls(), 2);
+        assert_eq!(router.route_health()[0].consecutive_failures, 0);
+    }
+}
+
+#[test]
+fn service_availability_breaker_isolates_bad_inputs_but_suppresses_server_failures() {
+    let model = Arc::new(SequenceModel::new([
+        Script::OpenError(diagnostic_failure(400)),
+        Script::OpenError(diagnostic_failure(503)),
+    ]));
+    let router = ModelRouter::builder(logical())
+        .route("primary", model.clone(), ModelRef::new("primary", "model"))
+        .circuit_breaker(
+            CircuitBreakerConfig::new(1, Duration::from_secs(30))
+                .unwrap()
+                .failure_policy(crate::CircuitFailurePolicy::ServiceAvailability),
+        )
+        .build()
+        .unwrap();
+    let clone = router.clone();
+    futures_executor::block_on(router.invoke(request(), ModelCallContext::new())).unwrap_err();
+    assert_eq!(router.route_health()[0].state, CircuitState::Closed);
+    futures_executor::block_on(clone.invoke(request(), ModelCallContext::new())).unwrap_err();
+    assert_eq!(router.route_health()[0].state, CircuitState::Open);
+    let rejected =
+        futures_executor::block_on(router.invoke(request(), ModelCallContext::new())).unwrap_err();
+    assert_eq!(
+        rejected.metadata["runifold.router.failures"][0]["kind"],
+        "circuit_open"
+    );
+    assert_eq!(model.calls(), 2);
+}
+
 #[test]
 fn unknown_retry_safety_requires_explicit_authority() {
     let primary = Arc::new(TestModel::new(Script::OpenError(error(

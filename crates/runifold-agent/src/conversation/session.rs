@@ -309,6 +309,8 @@ impl AgentSession {
             .map_err(|_| AgentSessionError::RequestMismatch)?;
         // Context retrieval can insert transient messages before the original user
         // message. Locate the first non-transient message in the appended suffix.
+        // Only runtime-owned context markers/plans are excluded from identity;
+        // role, content and every other metadata field must still match.
         let message = state
             .transcript
             .iter()
@@ -316,7 +318,8 @@ impl AgentSession {
             .find(|message| !super::is_transient_context(message));
         if durable.conversation_id != self.conversation_id
             || durable.namespace != self.namespace
-            || message != Some(&runifold_model::Message::user(input))
+            || message.map(crate::agent::clean_message)
+                != Some(runifold_model::Message::user(input))
         {
             return Err(AgentSessionError::RequestMismatch);
         }

@@ -49,7 +49,8 @@ or capability is rejected.
 
 The initial executor:
 
-1. checks Run capability, cancellation, and deadline;
+1. checks Run capability, exact agreement between the granted and requested
+   effect classification, cancellation, and deadline;
 2. resolves Effect ID or idempotency key;
 3. creates `Prepared` if no record exists;
 4. emits `Effect::Requested`;
@@ -60,6 +61,12 @@ The initial executor:
 9. emits the corresponding terminal event.
 
 A completed record returns its stored output without executing the handler.
+Capability/classification checks also precede completed-result replay and remote
+reconciliation. A matching capability ID alone cannot authorize a caller to
+relabel a write as `Pure` or `ReadOnly` and acquire `RetrySafe` recovery.
+Classification mismatch returns `CapabilityDenied` (`RF-EFFECT-001`) before
+store access or handler/reconciler invocation. Callers must use the current
+granted descriptor; this check cannot verify the behavior of trusted host code.
 
 The EffectStore always retains the output required for recovery. Journal output
 capture is separate: `EffectEventPayloadPolicy::Redacted` is the default and
@@ -80,7 +87,8 @@ Applications whose remote system exposes operation lookup can use
 stable remote/idempotency identity before recovery:
 
 - `Completed(output)` durably records and replays the observed remote result;
-- `NotExecuted` is proof that even a non-idempotent handler may now execute;
+- `NotExecuted` proves the operation did not execute and no previous attempt
+  can still commit, so even a non-idempotent handler may now execute;
 - `Ambiguous` retains the normal recovery policy and never grants retry by
   itself;
 - reconciliation transport failures return `Reconciliation` and leave the
@@ -95,6 +103,20 @@ reconcile the remote operation or apply the explicit safe-retry policy.
 The reconciler is a recovery boundary, not a distributed transaction. A
 remote system that cannot query a stable operation identity cannot close the
 post-commit/pre-`Completed` crash window safely.
+
+Receipt absence while an old worker or remote request remains active is not a
+`NotExecuted` proof. The application must stop or externally fence prior
+attempts, or return `Ambiguous`. CAS only prevents stale local commits; it does
+not cancel or fence a remote request already in flight. Recovery callers that
+observe different revisions cannot infer exclusive external ownership from
+those revisions alone.
+
+The SQLite `effect_concurrent_recovery` test synchronizes independent
+connections after both loaded the same `Started` revision. For both completed
+receipt reconciliation and proven-not-executed recovery, exactly one caller
+commits; the stale caller fails without dispatching another handler. A fresh
+connection replays the winning result. This proves same-revision contention,
+not automatic exclusion of a live external owner.
 
 It rejects:
 
@@ -133,6 +155,15 @@ state solely from events.
 7. Revision CAS rejects stale writers.
 8. Effect events use the owning Run's Journal.
 9. Complete effect output is not copied into the Journal by default.
+10. Requested effect classification must match the granted capability even on
+    recovery and completed-result replay.
+
+The SQLite `effect_commit_failure` integration test injects an actual database
+trigger failure on `Completed` after a separate file publisher has committed.
+Fresh connections observe `Started`, reject a non-idempotent `RetrySafe` retry
+even with a key, reconcile the receipt, and replay the persisted completion.
+The publisher uses exclusive file creation so a second physical write fails.
+This is a local persistence-fault test, not a power-loss or remote-service test.
 
 ## Limitations and deferred decisions
 

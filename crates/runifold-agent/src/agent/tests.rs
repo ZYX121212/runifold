@@ -50,7 +50,7 @@ struct TypedAnswer {
 }
 
 #[derive(Debug)]
-struct EchoTool {
+pub(super) struct EchoTool {
     descriptor: ToolDescriptor,
 }
 
@@ -106,7 +106,7 @@ impl Journal for FailingJournal {
 }
 
 impl EchoTool {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             descriptor: ToolDescriptor {
                 id: CapabilityId::new(),
@@ -2877,7 +2877,7 @@ fn streaming_applies_backpressure_at_each_visible_event() {
     assert_eq!(model.recorded_requests().len(), 1);
 }
 
-fn response_events(
+pub(super) fn response_events(
     id: &str,
     content: Vec<ContentPart>,
     finish_reason: FinishReason,

@@ -37,6 +37,14 @@ A capability is an explicitly granted reference to a model, tool, agent,
 resource, or extension. Descriptors carry versioned input/output schemas,
 effect class, and risk metadata.
 
+Child grants select a subset of the parent's complete descriptors. Identity
+alone is insufficient: a child cannot retain an ID while changing its name,
+version, kind, schemas, effect, risk or metadata. `CapabilitySet::is_subset_of`
+and `first_missing_from` both enforce this contract, including reserved child
+creation. Put child-specific execution metadata in `RunContext::metadata_mut`
+rather than rewriting a granted descriptor. This is exact contract matching,
+not inference of arbitrary JSON Schema or application-policy containment.
+
 ## Initial invariants
 
 1. Run, event, effect, and capability IDs are globally unique UUIDv7 values.
@@ -49,6 +57,12 @@ effect class, and risk metadata.
 8. Budget consumption is atomic: a rejected update changes no counters.
 9. Core errors are structured and expose retry safety.
 10. Extension events and metadata are namespaced.
+11. A child grant preserves its parent's complete capability descriptor.
+
+The facade's `authority_contract` integration test exercises ordinary and
+reserved child creation, Gateway delegation and Workflow steps. A reclassified
+write is rejected before child work or delegation budget consumption. Core
+tests cover every descriptor field, including policy metadata.
 
 ## Deferred decisions
 

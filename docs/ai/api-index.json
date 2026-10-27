@@ -1,32 +1,32 @@
 {
   "schema_version": 1,
-  "version": "0.10.3",
+  "version": "0.10.4",
   "symbols": {
     "runifold::ProviderRuntime": {
       "source": "crates/runifold/src/lib.rs",
       "declaration": "pub struct ProviderRuntime",
-      "source_sha256": "1ef613764ad47719fe48c51617c081fd312ab147379cc949f115e407ff28f82d",
+      "source_sha256": "21c0804642086422d3a60e721fac08f837d058b17fcace7ccde6fe8598d2660b",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
     "runifold::ProviderRuntime::agent": {
       "source": "crates/runifold/src/lib.rs",
       "declaration": "pub fn agent(&self, name: impl Into<String>) -> AgentBuilder",
-      "source_sha256": "1ef613764ad47719fe48c51617c081fd312ab147379cc949f115e407ff28f82d",
+      "source_sha256": "21c0804642086422d3a60e721fac08f837d058b17fcace7ccde6fe8598d2660b",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
     "runifold::Agent": {
       "source": "crates/runifold-agent/src/agent.rs",
       "declaration": "pub struct Agent",
-      "source_sha256": "669e4061d8efb53e360043c12ef890f21b2cf62637142af40dd9d78f47544f46",
+      "source_sha256": "2876fa4c697314e713442025cf9d2098967e2ea500c54d0494570bba8ad52c24",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
     "runifold::AgentBuilder": {
       "source": "crates/runifold-agent/src/builder.rs",
       "declaration": "pub struct AgentBuilder",
-      "source_sha256": "3a7376c286c76d7231565171cb1f652ca9981fb51f74410fa42ec33d05bf63be",
+      "source_sha256": "f8e1f726de924cb3eda89f880b643918d5f30e4de6dbe643d0cf30fb70813244",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
@@ -47,21 +47,21 @@
     "runifold::AgentSession": {
       "source": "crates/runifold-agent/src/conversation/session.rs",
       "declaration": "pub struct AgentSession",
-      "source_sha256": "14275cfc566327e9af3e82290769261f01a70e37452c53e6c7c64fe6f9ebf52c",
+      "source_sha256": "d02737c56062d4383f713189de890fd81757f1ae330c6d820e3558b2d1d8a388",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
     "runifold::RunContext": {
       "source": "crates/runifold-core/src/context.rs",
       "declaration": "pub struct RunContext",
-      "source_sha256": "199bb6cf84114002a5cef15f84cec4432ced36d026986c7d04b50f85cacf8504",
+      "source_sha256": "a8ff0cde83b71c70195a28e0be0d4b3cd2dc2a93a143d1e2cdf8bb71f407fa36",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
     "runifold::EffectExecutor": {
       "source": "crates/runifold-effect/src/executor.rs",
       "declaration": "pub struct EffectExecutor",
-      "source_sha256": "b22f27e7e6736ff615b9eae24c6bf41781183bea494a9a07866af6f35f331cc3",
+      "source_sha256": "d24510702f78fff64e277e337607580dc8c13d2c54fec5f05503e7306c711073",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
@@ -89,7 +89,7 @@
     "runifold::AgentStreamEvent": {
       "source": "crates/runifold-agent/src/stream.rs",
       "declaration": "pub enum AgentStreamEvent",
-      "source_sha256": "01c0f875329ad64d731787eab2579e8222b05e2c48844e2927a9164836561ef2",
+      "source_sha256": "06e92995fd56e29c072496c7ee1097243711bb0d89045d2e31af0be578e31ee5",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
@@ -97,6 +97,139 @@
       "source": "crates/runifold-retrieval/src/retriever.rs",
       "declaration": "pub trait Retriever: Send + Sync",
       "source_sha256": "39e7c94105b142231d0a6749a82f9b24c2c8acc53c378c4880f8a8b9fe768259",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ModelScheduler": {
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "declaration": "pub struct ModelScheduler",
+      "source_sha256": "20b534437d6397c389e0b5b315a7a011abf907da9e76f7879d83a4e869cd5b31",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ModelSchedulerConfig": {
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "declaration": "pub struct ModelSchedulerConfig",
+      "source_sha256": "20b534437d6397c389e0b5b315a7a011abf907da9e76f7879d83a4e869cd5b31",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ModelCapacityPoolId": {
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "declaration": "pub struct ModelCapacityPoolId(String);\n\nimpl ModelCapacityPoolId",
+      "source_sha256": "20b534437d6397c389e0b5b315a7a011abf907da9e76f7879d83a4e869cd5b31",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ModelCapacityLimits": {
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "declaration": "pub struct ModelCapacityLimits",
+      "source_sha256": "20b534437d6397c389e0b5b315a7a011abf907da9e76f7879d83a4e869cd5b31",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ModelRateLimit": {
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "declaration": "pub struct ModelRateLimit",
+      "source_sha256": "20b534437d6397c389e0b5b315a7a011abf907da9e76f7879d83a4e869cd5b31",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ScheduledModel": {
+      "source": "crates/runifold-model/src/scheduling/model.rs",
+      "declaration": "pub struct ScheduledModel<M>",
+      "source_sha256": "bc30355f861ee9ca1c38f430bcb9f294b166422840553435df0aecfa3a7ea110",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ModelTokenEstimator": {
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "declaration": "pub trait ModelTokenEstimator: Send + Sync",
+      "source_sha256": "20b534437d6397c389e0b5b315a7a011abf907da9e76f7879d83a4e869cd5b31",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ModelTokenSettlement": {
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "declaration": "pub enum ModelTokenSettlement",
+      "source_sha256": "20b534437d6397c389e0b5b315a7a011abf907da9e76f7879d83a4e869cd5b31",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ContextBudget": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub struct ContextBudget",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ContextComponentDescriptor": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub struct ContextComponentDescriptor",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ContextManager": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub struct ContextManager",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ContextPlan": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub struct ContextPlan",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ContextGroup": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub struct ContextGroup",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ContextGroupKind": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub enum ContextGroupKind",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ContextError": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub enum ContextError",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ContextTokenCounter": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub trait ContextTokenCounter: Send + Sync",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::ContextSelectionStrategy": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub trait ContextSelectionStrategy: Send + Sync",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::RecentContext": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub struct RecentContext;\n\nimpl ContextSelectionStrategy for RecentContext",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
+      "verification": "source_declaration_plus_compile_contract",
+      "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
+    },
+    "runifold::SerializedBytesCounter": {
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "declaration": "pub struct SerializedBytesCounter;\n\nimpl ContextTokenCounter for SerializedBytesCounter",
+      "source_sha256": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     }

@@ -89,7 +89,7 @@ async fn maps_retrieval_task_dimensions_usage_and_credentials() {
 async fn maps_structured_embedding_errors_without_input_disclosure() {
     let response = ScriptedResponse::json(
         400,
-        &json!({"error":{"message":"unsupported embedding task"}}),
+        &json!({"error":{"message":"unsupported embedding task for private input"}}),
     )
     .unwrap();
     let server = CassetteServer::start(vec![HttpExchange::new(
@@ -111,6 +111,6 @@ async fn maps_structured_embedding_errors_without_input_disclosure() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("unsupported embedding task"));
+    assert!(error.to_string().contains("400"));
     assert!(!error.to_string().contains("private input"));
 }

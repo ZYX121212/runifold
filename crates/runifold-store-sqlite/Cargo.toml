@@ -21,20 +21,20 @@ runifold-agent.workspace = true
 runifold-core.workspace = true
 runifold-effect.workspace = true
 runifold-model.workspace = true
-runifold-ops = { version = "0.10.1", path = "../runifold-ops" }
+runifold-ops = { version = "0.10.4", path = "../runifold-ops" }
 runifold-workflow.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 sha2 = "0.11.0"
 thiserror.workspace = true
-tokio = { version = "1.53.1", features = ["rt"] }
+tokio = { version = "1.53.3", features = ["rt"] }
 uuid.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
 runifold-testkit.workspace = true
 runifold-tool.workspace = true
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time"] }
 
 [lints]
 workspace = true

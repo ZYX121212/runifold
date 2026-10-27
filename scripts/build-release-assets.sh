@@ -8,7 +8,8 @@ version="$(
     cargo metadata --no-deps --format-version 1 |
         jq -r '.packages[0].version'
 )"
-release_dir="$repo_root/target/release-assets"
+workspace_target="$(cargo metadata --no-deps --format-version 1 | jq -er '.target_directory')"
+release_dir="$workspace_target/release-assets"
 generated_sboms=()
 for manifest in crates/*/Cargo.toml; do
     crate_dir="$(dirname "$manifest")"
@@ -32,7 +33,7 @@ find "$release_dir" -type f -delete
 # `release-check.sh` performs the isolated package compilation. This pass only
 # materializes the exact archives that become release assets.
 cargo package --workspace --allow-dirty --locked --no-verify
-cp target/package/*-"$version".crate "$release_dir/crates/"
+cp "$workspace_target"/package/*-"$version".crate "$release_dir/crates/"
 
 cargo cyclonedx --format json --spec-version 1.5 --all-features --target all
 while IFS= read -r manifest; do

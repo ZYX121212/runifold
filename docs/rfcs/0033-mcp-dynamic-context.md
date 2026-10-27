@@ -69,6 +69,14 @@ inside an attenuated child run and honors cancellation and deadline. Results
 are capped at 100 non-empty values, and an advertised total may not be smaller
 than the returned count.
 
+The referenced Prompt/Resource identity and version must match the completion
+provider. The server scopes the request to the exact registered reference
+capability, and completion preserves that granted descriptor in its child.
+It does not replace the parent schema, risk or metadata with a completion-shaped
+projection under the same ID. Failure to create the scope rejects the request;
+there is no fallback to the broader server authority. The standalone
+`CompletionDescriptor::capability` remains available for direct registry use.
+
 Completion inputs and values are never logged by the MCP layer. Applications
 remain responsible for provider-specific rate limits and for avoiding sensitive
 suggestions.

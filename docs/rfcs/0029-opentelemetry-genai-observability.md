@@ -116,7 +116,12 @@ Provider events. The logical Model span records the selected route, attempt
 identity, whether fallback occurred, and the number of prior failures. Every
 prior failure is projected as a safe span event containing route, target,
 failure category, attempt number, and retry-safety classification. Provider
-error messages are not exported.
+error messages are not exported. Validated HTTP status, known provider error
+classifications, retry timing and local lifecycle facts use the same bounded
+`ModelError::diagnostic_metadata` projection. Incoming Provider-event projections
+are revalidated before export rather than trusted as arbitrary attributes.
+Terminal routing errors also project their attempt history, including when no
+route succeeds. Already reported attempts are not counted or emitted twice.
 
 The adapter also records:
 

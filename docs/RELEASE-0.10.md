@@ -60,6 +60,22 @@ operation already accepted by another system.
   Older claim SQL retains a concurrency race and must not share the worker pool.
 - Workflow checkpoint schema v5 and its existing v3/v4 reader compatibility are unchanged.
   The older v0.7/v0.8 mixed-worker restriction in `RELEASING.md` still applies.
+  A read-only load or completed-result replay does not migrate the envelope.
+  The first successful state advance atomically writes the current schema and
+  payload; an unsuccessful CAS cannot partially promote the schema.
+
+The repeatable [upgrade gate](RELEASING.md#workflow-checkpoint-compatibility)
+executes SQLite/PostgreSQL reconnect, legacy advance, future-schema rejection
+and stale-owner contracts. It also builds an actual v0.7.2 reader from its Git
+object and verifies that advanced v5 checkpoints cannot be read by that worker.
+This verifies the specified reader/drained-owner boundaries, not a live mixed
+worker deployment or automatic external-operation fencing.
+
+The gate also rejects Session admission schemas 0/1/2 and future versions without
+rewriting records or dispatching models, through SQLite reopen and independent
+PostgreSQL connections. Current-schema PostgreSQL Session replay is checked to
+return a committed result after reconnect without another Provider call. These
+are rejection/replay contracts, not silent migration of older active Sessions.
 
 For an occupied Session: first stop or fence its owner, inspect the active request
 and revision, restore known budget usage with `recovery_usage`, then call

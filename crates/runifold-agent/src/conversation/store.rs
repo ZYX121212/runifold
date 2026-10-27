@@ -7,7 +7,9 @@ use support::{
     retrieval_store_error, validate_memory, validate_sources, validate_summary,
     validate_transcript_messages,
 };
-pub(crate) use support::{is_transient_context, semantic_memory_message, summary_message};
+pub(crate) use support::{
+    is_transient_context, is_turn_start, semantic_memory_message, summary_message,
+};
 
 use std::{
     collections::BTreeMap,
@@ -195,6 +197,21 @@ pub struct ConversationView {
 }
 
 impl ConversationView {
+    /// Promotes a window-truncated prefix into bounded, explicitly configured compaction.
+    pub(crate) fn align_summary_prefix(&mut self, batch: ConversationSummaryBatch) {
+        if self.requires_summary() {
+            return;
+        }
+        let prefix = self
+            .window
+            .iter()
+            .take_while(|entry| !is_turn_start(&entry.message))
+            .count();
+        let take = prefix.min(usize::from(batch.get()));
+        self.summary_buffer.extend(self.window.drain(..take));
+        self.summary_backlog = u64::try_from(prefix.saturating_sub(take)).unwrap_or(u64::MAX);
+    }
+
     /// Returns whether another summary must be committed before bounded Agent execution.
     pub fn requires_summary(&self) -> bool {
         !self.summary_buffer.is_empty()

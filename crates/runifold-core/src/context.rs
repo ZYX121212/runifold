@@ -10,7 +10,9 @@ use thiserror::Error;
 
 /// A child Run cannot receive authority absent from its parent.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-#[error("child Run requested capability `{capability}` ({capability_id}) absent from its parent")]
+#[error(
+    "child Run requested capability `{capability}` ({capability_id}) absent from or inconsistent with its parent"
+)]
 pub struct AuthorityAmplification {
     /// Stable identity of the rejected capability.
     pub capability_id: CapabilityId,
@@ -170,11 +172,12 @@ impl RunContext {
     ///
     /// The child shares the root budget tracker, receives a descendant
     /// cancellation token, and does not inherit metadata or capabilities.
+    /// Explicit grants must preserve their complete parent descriptors.
     ///
     /// # Errors
     ///
     /// Returns [`AuthorityAmplification`] when the child requests any
-    /// capability absent from this Run.
+    /// capability absent from or inconsistent with this Run's grant.
     pub fn child(&self, capabilities: CapabilitySet) -> Result<Self, AuthorityAmplification> {
         self.validate_child_authority(&capabilities)?;
         Ok(self.child_with_budget(capabilities, self.budget.clone()))
@@ -184,8 +187,8 @@ impl RunContext {
     ///
     /// # Errors
     ///
-    /// Returns [`ChildRunError`] when the child requests authority absent from
-    /// this Run or the reservation was created by another run tree.
+    /// Returns [`ChildRunError`] when a child grant is absent from or inconsistent
+    /// with this Run's grant, or the reservation was created by another run tree.
     pub fn child_reserved(
         &self,
         capabilities: CapabilitySet,

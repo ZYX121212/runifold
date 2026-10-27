@@ -1497,10 +1497,7 @@ pub(super) fn provider_failure(provider: &str, payload: &Value) -> ModelError {
         .and_then(|response| response.get("error"))
         .or_else(|| payload.get("error"))
         .unwrap_or(payload);
-    let message = error
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("OpenAI response failed");
+    let message = "provider reported a failed response; inspect structured error classification";
     let mut model_error = ModelError::local(ModelErrorKind::Provider, message);
     model_error.provider = Some(provider.into());
     for name in ["type", "code", "param"] {
@@ -2480,7 +2477,7 @@ mod tests {
                     "error":{
                         "type":"provider_error",
                         "code":"server_error",
-                        "message":"generation failed",
+                        "message":"private upstream prompt",
                         "param":"tools[0]"
                     }
                 }
@@ -2488,7 +2485,7 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.provider.as_deref(), Some("custom-openai"));
-        assert_eq!(error.message, "generation failed");
+        assert!(!error.to_string().contains("private upstream prompt"));
         assert_eq!(error.metadata["custom-openai.error.type"], "provider_error");
         assert_eq!(error.metadata["custom-openai.error.code"], "server_error");
         assert_eq!(error.metadata["custom-openai.error.param"], "tools[0]");

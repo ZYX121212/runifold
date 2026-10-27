@@ -89,6 +89,17 @@ Retry delay is computed by the store clock. Terminal tasks are never claimed.
 7. Runtime operations never perform hidden schema migrations.
 8. PostgreSQL is an edge adapter, not a workflow-domain dependency.
 
+## Upgrade acceptance
+
+The `workflow_upgrade` adapter tests release the previous lease, reconnect a
+new worker and require a higher fence. Schema v3/v4 checkpoints promote to v5
+on advance; completed prior work and usage survive. A pre-0.10 PostgreSQL
+fixture removes the admission helper: runtime claim returns a typed storage
+failure without changing queue state, and explicit `ensure_schema` restores
+admission. This fixture targets the helper-installation boundary, not every
+historical database DDL layout. Run `scripts/verify-workflow-upgrade.py` for
+adapter contracts and the actual historical reader probe.
+
 ## Deferred
 
 - timer and signal delivery;

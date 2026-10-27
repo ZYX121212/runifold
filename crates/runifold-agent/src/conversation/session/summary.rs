@@ -219,7 +219,7 @@ impl AgentSession {
             .create(self.conversation_id, self.namespace.clone())
             .await
             .map_err(AgentConversationError::from)?;
-        let view = self
+        let mut view = self
             .store
             .load_view(
                 self.conversation_id,
@@ -229,6 +229,9 @@ impl AgentSession {
             )
             .await
             .map_err(AgentConversationError::from)?;
+        if self.agent.context_manager.is_some() {
+            view.align_summary_prefix(self.policy.summary_batch);
+        }
         let Some(last) = view.summary_buffer.last() else {
             return Ok(None);
         };

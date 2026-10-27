@@ -110,6 +110,23 @@ The write-ahead sequence for every node is:
 
 Completed recovery returns the stored outcome without executing any node.
 
+### Checkpoint schema upgrades
+
+The current writer emits schema v5 and reads schemas v3/v4/v5. Reading a legacy
+checkpoint or replaying a completed outcome preserves its envelope. The first
+successful state advance writes the current schema version and new payload in
+the same revision CAS. Failed CAS leaves both the persisted winner and local
+cursor unchanged; schema promotion is not a separate pre-execution migration.
+
+The compatibility gate runs real SQLite and PostgreSQL recovery after draining
+the previous owner. It preserves completed outputs, usage, execution identity
+and history, rejects stale owners, and rejects future schemas without replacing
+their payloads. The historical reader probe is built from the v0.7.2 Git object:
+it accepts legacy fixtures and rejects their v5 successors produced through the
+current canonical Workflow resume path. Old/new worker pools are still not
+supported concurrently; an external write already in flight needs its own
+idempotency or fencing contract.
+
 ## Conservative recovery
 
 `WorkflowResumePolicy::RejectAmbiguous` is the default. It rejects a

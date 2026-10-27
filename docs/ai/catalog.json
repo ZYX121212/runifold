@@ -21,16 +21,21 @@
       ],
       "local_rules": [
         "RF-LAW-001: no model/provider/protocol/store dependencies in the kernel.",
-        "RF-LAW-003: parent authority and structured run lifetime remain enforceable."
+        "RF-LAW-003: parent authority and structured run lifetime remain enforceable.",
+        "Child grants select unchanged parent capability descriptors; the same ID cannot redefine schemas, versions, effects, risk or metadata."
       ],
       "extension": "Prefer kernel-neutral contracts. A protocol-specific need belongs in an edge adapter; test cancellation, budgets and authority when changing RunContext."
     },
     "runifold-model": {
       "area": "model",
-      "owns": "Provider-neutral content, model invocation, streams, routing and retry contracts",
+      "owns": "Provider-neutral content, model invocation, streams, routing, retry and shared physical-request scheduling",
       "does_not_own": "Vendor wire types and Agent tool loops",
       "entry": "src/invocation.rs",
-      "test": "cargo test -p runifold-model --locked"
+      "test": "cargo test -p runifold-model --locked",
+      "key_files": [
+        "src/invocation.rs",
+        "src/scheduling.rs"
+      ]
     },
     "runifold-agent": {
       "area": "execution",
@@ -44,7 +49,9 @@
         "src/agent/review.rs",
         "src/agent/completion.rs",
         "src/checkpoint.rs",
-        "src/conversation/session.rs"
+        "src/conversation/session.rs",
+        "src/agent/context.rs",
+        "src/agent/context_runtime.rs"
       ],
       "local_rules": [
         "RF-AGENT-LAW-001: prompt, run, stream, checkpoint and session execution share the canonical engine.",
@@ -81,7 +88,8 @@
       ],
       "local_rules": [
         "RF-EFFECT-003: ambiguous non-idempotent effects cannot be retried without evidence.",
-        "Stable keys bind capability, effect class and canonical input. Completed outcomes replay without handler execution."
+        "Stable keys bind capability, effect class and canonical input. Completed outcomes replay without handler execution.",
+        "NotExecuted must exclude still-active previous attempts; receipt absence alone is not proof. Store CAS fences local commits, not remote writes."
       ],
       "extension": "Add handler-specific reconciliation through EffectReconciler. Keep durable Started/Completed transitions and observability failure behavior intact."
     },
@@ -90,7 +98,11 @@
       "owns": "Deterministic composition, durable steps, workers, leases, timers and signals",
       "does_not_own": "Provider transport and business-specific workflows",
       "entry": "src/lib.rs",
-      "test": "cargo test -p runifold-workflow --locked"
+      "test": "cargo test -p runifold-workflow --locked",
+      "local_rules": [
+        "Read supported legacy checkpoint schemas without rewriting them; the first successful state advance promotes schema and payload together to the current version.",
+        "Unknown schemas fail closed. Drain old workers and explicitly initialize database schema before admitting new workers; validate with scripts/verify-workflow-upgrade.py."
+      ]
     },
     "runifold-providers": {
       "area": "providers",
@@ -748,6 +760,116 @@
         "runifold::Agent"
       ],
       "runtime_path": "Public caller \u2192 owning crate API \u2192 existing canonical implementation; facade re-exports preserve that path"
+    },
+    {
+      "id": "schedule-model-requests",
+      "title": "Share model request capacity across Agents",
+      "audience": "application",
+      "api": "ModelScheduler \u2192 ProviderModelExt::scheduled \u2192 ProviderRuntime \u2192 Agent",
+      "source": "crates/runifold/examples/shared_model_capacity.rs",
+      "start": "use std::",
+      "end": null,
+      "production": "Construct one ModelScheduler at application startup. Bind physical providers before calling runtime so each retry reacquires capacity. Bind all account/deployment/model pools applying to a route. Configure request/token windows to match reviewed upstream constraints. Token limits require an explicit ModelTokenEstimator for billable input plus bounded output; estimates are not guaranteed upper bounds. Token settlement defaults to Conservative: it retains at least the reservation even after a terminal usage snapshot. Select ModelTokenSettlement::ReportedUsage only for adapters verified to report complete final billable input/output usage. The complete example runs 100 Agents offline without credentials. Capacity sharing and circuit health are separate scopes. Preserve the adapter runtime_profile and use without_circuit_breaker when independent tasks should not share route-health suppression, or select CircuitFailurePolicy::ServiceAvailability to count configured transport and HTTP 429/5xx failures only. Inspect runtime.profile().diagnostic_snapshot() for effective policy without private provider options. Scheduled errors expose admission/opening/waiting-first-event/streaming, separate queue/execution times and released local capacity; provider_invoked does not prove remote acceptance or cancellation. ModelError::diagnostic_metadata projects bounded operational fields for logs. Capture runifold ai environment --json for locked resolved versions and actual vendor source identities; it is separate from the runtime policy snapshot. Verify repeated release/cancellation/EOF behavior and bounded resident growth with the request_stability public test.",
+      "do_not": [
+        "Do not create independent schedulers for routes sharing an upstream quota.",
+        "Do not wrap a retrying router when physical-attempt accounting is required.",
+        "Do not confuse execution Token budgets with rate limits, or assume an estimate guarantees the provider TPM ceiling.",
+        "Do not claim process-local admission coordinates other processes or proves remote cancellation.",
+        "Do not infer complete final usage merely because a stream emitted UsageUpdated; partial snapshots must not authorize refunds."
+      ],
+      "validation": [
+        "cargo run -p runifold --example shared_model_capacity --locked",
+        "cargo test -p runifold --test model_scheduling --locked",
+        "cargo test -p runifold-model scheduling:: --locked",
+        "cargo test -p runifold --test ai_api_contract --locked",
+        "cargo test -p runifold --test request_stability --locked"
+      ],
+      "related": [
+        "docs/rfcs/0075-shared-model-request-scheduling.md",
+        "crates/runifold-model/src/scheduling.rs",
+        "crates/runifold-model/src/scheduling/model.rs",
+        "crates/runifold-model/src/scheduling/state.rs",
+        "crates/runifold-model/src/scheduling/tests_lifecycle.rs",
+        "docs/rfcs/0021-router-circuit-breaker.md",
+        "crates/runifold-model/src/error.rs",
+        "crates/runifold-model/src/runtime_profile.rs",
+        "crates/runifold/tests/request_stability.rs",
+        "crates/runifold-cli/src/ai/environment.rs",
+        "docs/rfcs/0067-reliability-evidence-gates.md"
+      ],
+      "requirements": [
+        "runifold with runtime",
+        "One shared scheduler per local capacity domain",
+        "Explicit positive concurrency and bounded queue limits",
+        "Provider-aware reservation policy when token limits are configured",
+        "Offline example: runifold-testkit, futures-util, tokio and anyhow; no credentials"
+      ],
+      "applies_to": [
+        "crates/runifold-model/**",
+        "crates/runifold/src/lib.rs"
+      ],
+      "validation_profile": "runifold-model",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::ModelScheduler",
+        "runifold::ModelSchedulerConfig",
+        "runifold::ModelCapacityPoolId",
+        "runifold::ModelCapacityLimits",
+        "runifold::ModelRateLimit",
+        "runifold::ScheduledModel",
+        "runifold::ModelTokenEstimator",
+        "runifold::ModelTokenSettlement"
+      ],
+      "production_source": "crates/runifold/examples/shared_model_capacity.rs",
+      "runtime_path": "Agent \u2192 ProviderRuntime/ModelRouter \u2192 physical attempt \u2192 ScheduledModel atomic admission \u2192 provider stream \u2192 settlement and release"
+    },
+    {
+      "id": "manage-context",
+      "title": "Budget context for continuous analysis",
+      "audience": "application",
+      "api": "AgentBuilder::context_manager -> AgentSession::run -> AgentOutcome::context_plans",
+      "source": "crates/runifold/examples/continuous_analysis.rs",
+      "start": "    let context = ContextManager::new",
+      "end": "    let mut state = AnalysisState::default();",
+      "production": "Use AgentSession for durable conversation and a ContextManager on each analyst or summarizer Agent for per-model-call input bounds. Keep raw evidence separate from typed analysis state; validate source references before accepting a new state. The built-in text counter estimates JSON bytes and rejects media; install a versioned model-aware ContextTokenCounter for your provider. The ConversationWindow bounds stored messages loaded for a request, while ContextBudget bounds the model input selected from that view. Excluded complete turns remain in the archive. Keep component IDs stable and bump their versions when behavior changes. Persist conversation, namespace and logical request IDs; reuse the same request ID on retries. With an explicit summarizer, managed execution rolls a window-truncated prior turn into the summary before analysis, within the configured batch and pass limits. Without a summarizer, IncompleteHistory reports excluded partial prefixes and retains the archive; incomplete current Tool exchanges still fail.",
+      "do_not": [
+        "Do not confuse RunContext with model-visible conversation history.",
+        "Do not treat a model hypothesis or lossy summary as verified evidence.",
+        "Do not claim the built-in approximate counter measures exact provider token usage.",
+        "Do not silently retry an ambiguous external effect after a context failure."
+      ],
+      "validation": [
+        "cargo test -p runifold-agent --locked",
+        "cargo check -p runifold --example continuous_analysis --features sqlite-bundled --locked",
+        "cargo test -p runifold --test ai_api_contract --locked"
+      ],
+      "related": [
+        "docs/rfcs/0078-budgeted-agent-context.md",
+        "docs/ai/recipes/durable-conversation.md",
+        "crates/runifold-agent/src/agent/context_runtime.rs"
+      ],
+      "requirements": [
+        "runifold with sqlite-bundled",
+        "runifold-testkit, tokio, serde with derive, serde_json, anyhow",
+        "No vendor credentials required"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**",
+        "crates/runifold/examples/continuous_analysis.rs"
+      ],
+      "validation_profile": "runifold-agent",
+      "difficulty": "advanced",
+      "uses": [
+        "runifold::AgentBuilder",
+        "runifold::AgentSession",
+        "runifold::ContextManager",
+        "runifold::ContextBudget",
+        "runifold::ContextTokenCounter",
+        "runifold::ContextSelectionStrategy",
+        "runifold::ContextPlan"
+      ],
+      "production_source": "crates/runifold/examples/continuous_analysis.rs",
+      "runtime_path": "Canonical Agent context preparation -> protected atomic groups -> additive input accounting -> checkpointed context plan -> existing model turn -> durable conversation commit and request replay"
     }
   ],
   "symbols": [
@@ -834,6 +956,120 @@
       "source": "crates/runifold-retrieval/src/retriever.rs",
       "name": "Retriever",
       "kind": "trait"
+    },
+    {
+      "symbol": "runifold::ModelScheduler",
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "name": "ModelScheduler",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ModelSchedulerConfig",
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "name": "ModelSchedulerConfig",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ModelCapacityPoolId",
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "name": "ModelCapacityPoolId",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ModelCapacityLimits",
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "name": "ModelCapacityLimits",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ModelRateLimit",
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "name": "ModelRateLimit",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ScheduledModel",
+      "source": "crates/runifold-model/src/scheduling/model.rs",
+      "name": "ScheduledModel",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ModelTokenEstimator",
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "name": "ModelTokenEstimator",
+      "kind": "trait"
+    },
+    {
+      "symbol": "runifold::ModelTokenSettlement",
+      "source": "crates/runifold-model/src/scheduling.rs",
+      "name": "ModelTokenSettlement",
+      "kind": "enum"
+    },
+    {
+      "symbol": "runifold::ContextBudget",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "ContextBudget",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ContextComponentDescriptor",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "ContextComponentDescriptor",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ContextManager",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "ContextManager",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ContextPlan",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "ContextPlan",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ContextGroup",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "ContextGroup",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ContextGroupKind",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "ContextGroupKind",
+      "kind": "enum"
+    },
+    {
+      "symbol": "runifold::ContextError",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "ContextError",
+      "kind": "enum"
+    },
+    {
+      "symbol": "runifold::ContextTokenCounter",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "ContextTokenCounter",
+      "kind": "trait"
+    },
+    {
+      "symbol": "runifold::ContextSelectionStrategy",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "ContextSelectionStrategy",
+      "kind": "trait"
+    },
+    {
+      "symbol": "runifold::RecentContext",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "RecentContext",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::SerializedBytesCounter",
+      "source": "crates/runifold-agent/src/agent/context.rs",
+      "name": "SerializedBytesCounter",
+      "kind": "struct"
     }
   ]
 }

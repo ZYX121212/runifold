@@ -21,6 +21,14 @@ pub struct AgentOutcome {
 }
 
 impl AgentOutcome {
+    /// Returns persisted input-selection reports for this managed request.
+    ///
+    /// # Errors
+    /// Returns a recovery mismatch if runtime plan metadata is malformed.
+    pub fn context_plans(&self) -> Result<Vec<crate::ContextPlan>, crate::ContextError> {
+        crate::agent::context_runtime::outcome_plans(&self.transcript)
+    }
+
     /// Collects model-visible terminal text in canonical content order.
     #[must_use]
     pub fn text(&self) -> String {

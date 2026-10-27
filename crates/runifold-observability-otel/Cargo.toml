@@ -20,7 +20,7 @@ futures-util.workspace = true
 opentelemetry = "0.32.0"
 runifold-core.workspace = true
 runifold-model.workspace = true
-runifold-workflow = { version = "0.10.1", path = "../runifold-workflow" }
+runifold-workflow = { version = "0.10.4", path = "../runifold-workflow" }
 serde_json.workspace = true
 thiserror.workspace = true
 
@@ -29,5 +29,5 @@ opentelemetry-prometheus = { version = "0.32.0", default-features = false }
 opentelemetry_sdk = { version = "0.32.1", features = ["trace", "metrics", "testing"] }
 prometheus = { version = "0.14", default-features = false }
 runifold-testkit.workspace = true
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time"] }
 yaml-rust2 = "0.11.0"

@@ -46,6 +46,9 @@ pub enum AgentBuildError {
     /// A static or dynamic context registration was invalid.
     #[error("agent retrieval configuration failed: {0}")]
     Retrieval(#[from] RetrievalError),
+    /// Context management configuration failed.
+    #[error("agent context configuration failed: {0}")]
+    Context(#[from] crate::ContextError),
 }
 
 impl AgentBuildError {
@@ -182,6 +185,16 @@ impl AgentBuilder {
                     .push(DynamicContext { limit, retriever });
             }
         }
+        self
+    }
+
+    /// Applies a per-model-call input budget without changing canonical history.
+    #[must_use]
+    pub fn context_manager(mut self, manager: crate::ContextManager) -> Self {
+        if let Err(error) = manager.validate() {
+            return self.with_error(AgentBuildError::Context(error));
+        }
+        self.agent.context_manager = Some(manager);
         self
     }
 

@@ -41,7 +41,9 @@ jobs:
           key: cargo-soak-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Execute repeated real-boundary suites
-        run: scripts/run-soak.sh
+        run: |
+          python3 scripts/test-soak-evidence.py
+          scripts/run-soak.sh
 
       - name: Upload soak evidence
         if: always()

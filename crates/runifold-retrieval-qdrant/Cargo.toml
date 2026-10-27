@@ -28,4 +28,4 @@ workspace = true
 
 [dev-dependencies]
 runifold-provider-testkit.workspace = true
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time"] }

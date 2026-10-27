@@ -839,7 +839,8 @@ pub(super) fn transport_error(
     } else {
         ModelErrorKind::Transport
     };
-    let mut model_error = ModelError::local(kind, format!("OpenAI transport failed: {error}"));
+    let mut model_error =
+        ModelError::local(kind, crate::reliability::transport_failure_message(error));
     model_error.provider = Some(provider.into());
     crate::reliability::classify_transport(error, &mut model_error);
     model_error
@@ -857,10 +858,7 @@ pub(super) fn http_error(
         .as_ref()
         .and_then(|payload| payload.get("error"))
         .unwrap_or(&Value::Null);
-    let message = error.get("message").and_then(Value::as_str).map_or_else(
-        || format!("OpenAI returned HTTP {status}"),
-        std::convert::Into::into,
-    );
+    let message = crate::reliability::http_failure_message(status);
     let mut model_error = ModelError::local(ModelErrorKind::Provider, message);
     model_error.provider = Some(provider.into());
     crate::reliability::classify_status(status, &mut model_error);
@@ -883,6 +881,11 @@ pub(super) fn http_error(
             model_error
                 .metadata
                 .insert(format!("openai.error.{field}"), value.clone());
+            // Preserve the historical protocol alias, while exposing the
+            // actual compatible Provider namespace to neutral diagnostics.
+            model_error
+                .metadata
+                .insert(format!("{provider}.error.{field}"), value.clone());
         }
     }
     model_error
@@ -912,6 +915,29 @@ mod tests {
         assert_eq!(error.metadata["openai.request_id"], "req_123");
         assert_eq!(error.metadata["openai.error.code"], "slow_down");
         assert_eq!(error.metadata["retry.after_ms"], 2_000);
+    }
+
+    #[test]
+    fn compatible_http_error_diagnostics_use_the_actual_provider_namespace() {
+        let error = http_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("private-request-id".into()),
+            r#"{"error":{"message":"private body","type":"server_error","code":"provider_unavailable","param":"private prompt"}}"#,
+            "gateway",
+            None,
+        );
+        assert_eq!(error.metadata["gateway.error.type"], "server_error");
+        assert_eq!(error.metadata["openai.error.type"], "server_error");
+        let diagnostics = error.diagnostic_metadata();
+        assert_eq!(diagnostics["provider.error.type"], "server_error");
+        assert_eq!(diagnostics["provider.error.code"], "provider_unavailable");
+        assert_eq!(diagnostics["http.status"], 503);
+        assert!(
+            !serde_json::to_string(&diagnostics)
+                .unwrap()
+                .contains("private")
+        );
+        assert_eq!(error.retry_safety, runifold_core::RetrySafety::Unknown);
     }
 
     #[test]

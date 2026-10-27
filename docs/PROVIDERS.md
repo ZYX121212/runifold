@@ -416,6 +416,32 @@ provider-neutral `ProviderRuntimeProfile` to
 `ProviderModelExt::runtime_with_profile` when a deployment needs an explicit
 override, including strict capability enforcement.
 
+Capacity sharing and circuit health are separate scopes. For independent batch
+tasks, preserve the adapter's `runtime_profile()` and apply
+`without_circuit_breaker()` before `runtime_with_profile`. Alternatively, retain
+a shared breaker and select `CircuitFailurePolicy::ServiceAvailability`: only
+configured transport failures and Provider HTTP 429/5xx errors establish service
+unavailability. Unknown Provider statuses and request/output failures are excluded.
+This is opt-in; existing defaults and unknown-safety retry authority do not change.
+As before, a failed half-open probe conservatively reopens until the next cooldown.
+
+`runtime.profile().diagnostic_snapshot()` serializes effective delivery,
+capability, retry and circuit policy, including unknown-safety exceptions. It
+omits private Provider option keys and values and is not a resolved build/vendor
+fingerprint. Pair it with `scheduler.snapshot()` when capacity is configured.
+For failures, `ModelError::diagnostic_metadata()` and each routed attempt's
+`diagnostics` retain bounded operational facts without raw error messages,
+request IDs, parameter names or response bodies. Scheduler errors distinguish
+queue/execution time and local slot release; a Provider invocation or local
+cancellation does not prove remote receipt, termination or zero cost.
+
+Native OpenAI-compatible, Anthropic, Gemini and Ollama HTTP/stream failures do
+not reflect untrusted upstream message text in ordinary error Display output.
+Transport messages also omit request URLs and query values. Status, known error
+classifications and retry safety remain available. Embedding errors use the same
+safe HTTP/transport messages. Provider metadata remains explicit diagnostic data;
+use `diagnostic_metadata()` rather than dumping arbitrary metadata into logs.
+
 Chat request fields also follow an explicit endpoint dialect. Verified public
 OpenAI configurations use `max_completion_tokens` and request the final
 streaming usage chunk. Generic compatible and custom configurations retain the

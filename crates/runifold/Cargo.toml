@@ -46,10 +46,10 @@ archive-s3 = [
 runifold-agent = { workspace = true, optional = true }
 runifold-core.workspace = true
 runifold-effect = { workspace = true, optional = true }
-runifold-mcp = { version = "0.10.1", path = "../runifold-mcp", optional = true }
+runifold-mcp = { version = "0.10.4", path = "../runifold-mcp", optional = true }
 runifold-model.workspace = true
 runifold-macros = { workspace = true, optional = true }
-runifold-observability-otel = { version = "0.10.1", path = "../runifold-observability-otel", optional = true }
+runifold-observability-otel = { version = "0.10.4", path = "../runifold-observability-otel", optional = true }
 runifold-retrieval = { workspace = true, optional = true }
 runifold-retrieval-pgvector = { workspace = true, optional = true }
 runifold-retrieval-qdrant = { workspace = true, optional = true }
@@ -70,13 +70,13 @@ secrecy = { workspace = true, optional = true }
 anyhow = "1.0.104"
 futures-executor.workspace = true
 futures-util.workspace = true
-runifold-providers = { path = "../runifold-providers", features = ["anthropic", "gemini", "ollama", "openai-realtime"] }
+runifold-providers = { version = "0.10.4", path = "../runifold-providers", features = ["anthropic", "gemini", "ollama", "openai-realtime"] }
 serde.workspace = true
 serde_json.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-runifold-testkit = { path = "../runifold-testkit" }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+runifold-testkit = { version = "0.10.4", path = "../runifold-testkit" }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros"] }
 
 [target.wasm32-unknown-unknown.dev-dependencies]
 futures-timer = { version = "3", features = ["wasm-bindgen"] }
@@ -144,3 +144,11 @@ required-features = ["runtime"]
 [[example]]
 name = "ai_retrieval"
 required-features = ["runtime"]
+
+[[example]]
+name = "shared_model_capacity"
+required-features = ["runtime"]
+
+[[example]]
+name = "continuous_analysis"
+required-features = ["sqlite"]

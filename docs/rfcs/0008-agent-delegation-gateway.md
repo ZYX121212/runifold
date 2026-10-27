@@ -62,6 +62,9 @@ invoked.
 A route declares the exact capabilities its child receives. The gateway
 requires this set to be a subset of the parent's capability set. The child does
 not ambiently inherit capabilities or metadata.
+Subset checks preserve complete parent descriptors, not only capability IDs.
+Redefining the schema, effect, version, risk or metadata under an existing ID
+is authority escalation and fails before delegation budget or child model work.
 
 This gives delegation a monotonic authority invariant:
 

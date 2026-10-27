@@ -38,8 +38,8 @@ impl OllamaChunkDecoder {
         if self.completed {
             return Err(protocol("Ollama chunk arrived after response completion"));
         }
-        if let Some(message) = chunk.get("error").and_then(Value::as_str) {
-            return Err(provider_error(message));
+        if chunk.get("error").and_then(Value::as_str).is_some() {
+            return Err(provider_error());
         }
         self.validate_model(chunk)?;
         let mut events = Vec::new();
@@ -209,8 +209,11 @@ fn unsigned(value: &Value, key: &str) -> u64 {
     value.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
-fn provider_error(message: &str) -> ModelError {
-    let mut error = ModelError::local(ModelErrorKind::Provider, message);
+fn provider_error() -> ModelError {
+    let mut error = ModelError::local(
+        ModelErrorKind::Provider,
+        "Ollama reported a failed response",
+    );
     error.provider = Some("ollama".into());
     error
 }

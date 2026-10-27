@@ -1049,11 +1049,13 @@ async fn assert_signal_cancel_and_compaction(
         )
         .await
         .unwrap();
+    // Other consumed signals must remain inside retention under slow CI runs.
+    // The two selected records were aged explicitly with the database clock.
     assert_eq!(
         store
             .compact_signals(
                 WorkflowTenantId::default(),
-                WorkflowSignalRetention::new(Duration::from_secs(1)).unwrap(),
+                WorkflowSignalRetention::new(Duration::from_secs(30 * 60)).unwrap(),
             )
             .await
             .unwrap(),

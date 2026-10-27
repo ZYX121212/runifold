@@ -19,6 +19,8 @@ Start at `src/agent/execution.rs` and follow its module declarations and calls.
 - `src/agent/completion.rs`
 - `src/checkpoint.rs`
 - `src/conversation/session.rs`
+- `src/agent/context.rs`
+- `src/agent/context_runtime.rs`
 
 ## Extension points
 

@@ -222,11 +222,9 @@ async fn http_error(
         Either::Left(_) => return Err(cancelled()),
         Either::Right((result, _)) => result.map_err(|error| transport(&error, deadline))?,
     };
-    let payload = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
-    let message = payload
-        .get("error")
-        .and_then(Value::as_str)
-        .map_or_else(|| format!("Ollama returned HTTP {status}"), String::from);
+    // Consume the response for transport completion without reflecting its body.
+    drop(text);
+    let message = crate::reliability::http_failure_message(status);
     let mut error = ModelError::local(ModelErrorKind::Provider, message);
     error.provider = Some("ollama".into());
     crate::reliability::classify_status(status, &mut error);
@@ -277,7 +275,7 @@ fn transport(error: &reqwest::Error, deadline: Option<Instant>) -> ModelError {
     };
     let mut model_error = with_provider(ModelError::local(
         kind,
-        format!("Ollama transport failed: {error}"),
+        crate::reliability::transport_failure_message(error),
     ));
     crate::reliability::classify_transport(error, &mut model_error);
     model_error

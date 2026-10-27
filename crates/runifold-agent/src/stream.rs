@@ -150,6 +150,11 @@ pub enum AgentStreamEvent {
         /// One-based repair number.
         attempt: u32,
     },
+    /// One payload-free, budgeted model-input plan was persisted before dispatch.
+    ContextPrepared {
+        /// Selection and accounting for this model turn.
+        plan: crate::ContextPlan,
+    },
 }
 
 pub(crate) trait AgentObserver: Send + Sync {

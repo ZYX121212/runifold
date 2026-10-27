@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+workspace_target="$(cargo metadata --no-deps --format-version 1 | jq -er '.target_directory')"
 msrv="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].rust_version')"
 if [[ -z "$msrv" || "$msrv" == "null" ]]; then
     echo "workspace packages must declare rust-version" >&2
@@ -39,25 +40,28 @@ cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo build -p runifold --example durable_publish --features sqlite-bundled --locked
-python3 scripts/verify-durable-publish.py target/debug/examples/durable_publish
+python3 scripts/verify-durable-publish.py "$workspace_target/debug/examples/durable_publish"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 
 # This independent workspace must continue compiling against the current source.
-cargo check --manifest-path benchmarks/rig-compare/Cargo.toml --all-targets --locked
-cargo test --manifest-path benchmarks/rig-compare/Cargo.toml --locked
+CARGO_TARGET_DIR="$workspace_target/benchmark-build" \
+    cargo check --manifest-path benchmarks/rig-compare/Cargo.toml --all-targets --locked
+CARGO_TARGET_DIR="$workspace_target/benchmark-build" \
+    cargo test --manifest-path benchmarks/rig-compare/Cargo.toml --locked
 
 escaped_msrv_toolchain="${msrv_toolchain//./\\.}"
 if ! rustup toolchain list | awk '{print $1}' |
     rg -q "^${escaped_msrv_toolchain}(-|$)"; then
     rustup toolchain install "$msrv_toolchain" --profile minimal
 fi
-cargo "+$msrv_toolchain" check --workspace --all-targets --all-features --locked
+CARGO_TARGET_DIR="$workspace_target/msrv-build" \
+    cargo "+$msrv_toolchain" check --workspace --all-targets --all-features --locked
 
 scripts/semver-check.sh
 scripts/publish-crates.sh --list >/dev/null
 cargo package --workspace --allow-dirty --locked --no-verify
 
-package_count="$(find target/package -maxdepth 1 -name "*-$version.crate" | wc -l | tr -d ' ')"
+package_count="$(find "$workspace_target/package" -maxdepth 1 -name "*-$version.crate" | wc -l | tr -d ' ')"
 workspace_count="$(
     cargo metadata --no-deps --format-version 1 |
         jq '.workspace_members | length'

@@ -40,6 +40,14 @@ use crate::{TerminalReviewPolicy, TerminalReviewer, TurnReviewPolicy, TurnReview
 
 mod callable;
 mod checkpointing;
+mod context;
+pub(crate) mod context_runtime;
+pub use context::{
+    ContextBudget, ContextComponentDescriptor, ContextError, ContextGroup, ContextGroupKind,
+    ContextManager, ContextPlan, ContextSelectionStrategy, ContextTokenCounter, RecentContext,
+    SerializedBytesCounter,
+};
+pub(crate) use context::{ContextManagerContract, REFERENCE_IDS, SUMMARY_THROUGH, clean_message};
 pub(crate) mod completion;
 mod execution;
 mod observability;
@@ -112,6 +120,7 @@ pub struct Agent {
     pub(crate) instructions: Vec<Message>,
     pub(crate) context: Vec<Document>,
     pub(crate) dynamic_context: Vec<DynamicContext>,
+    pub(crate) context_manager: Option<ContextManager>,
     pub(crate) tools: ToolRegistry,
     pub(crate) agents: AgentGateway,
     pub(crate) effects: EffectExecutor,
@@ -154,6 +163,7 @@ impl Agent {
             instructions: Vec::new(),
             context: Vec::new(),
             dynamic_context: Vec::new(),
+            context_manager: None,
             tools: ToolRegistry::new(),
             agents: AgentGateway::new(),
             effects: EffectExecutor::new(Arc::new(InMemoryEffectStore::new())),
@@ -436,3 +446,6 @@ impl std::fmt::Debug for Agent {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod context_tests;

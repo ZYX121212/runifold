@@ -255,11 +255,19 @@ runifold ai context --json
 runifold ai recipe add-tool --json
 runifold ai explain RF-TOOL-003 --json
 runifold doctor --ai --json --manifest-path /path/to/app/Cargo.toml
+runifold ai environment --json --manifest-path /path/to/app/Cargo.toml
 runifold ai check --json
 ```
 
 `ai check` operates on a Runifold source workspace; add `--execute` to run its
 selected checks. `doctor --ai` inspects application Cargo declarations offline.
+`ai environment` resolves locked dependencies offline and fingerprints their
+actual source bytes, including local vendor patches, dependency edges and
+resolved features. It excludes raw source URLs, paths, private environment files
+and payloads from output. Use `--features`, `--all-features`,
+`--no-default-features` and `--target` to identify the intended graph. This is a
+source/resolution identity, not proof of an already running binary's contents.
+Pair it with `runtime.profile().diagnostic_snapshot()` for effective runtime policy.
 Recipes are bundled into the CLI and carry their knowledge version. See the
 [generated manifest](runifold.ai.json), [validation contract](docs/rfcs/0074-ai-native-developer-experience.md)
 and [AI coding evaluation suite](ai-evals/README.md).

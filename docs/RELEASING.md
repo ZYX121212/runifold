@@ -42,6 +42,25 @@ restoring a pre-upgrade store snapshot; deploy an ordinary forward fix for all
 other rollback scenarios. This restriction applies to workflow checkpoints,
 not to application payloads that merely pass through a workflow.
 
+A restored database snapshot does not undo external operations already accepted.
+Stop/fence the old owners and reconcile those operations before recovery; do
+not use restoration as permission to repeat ambiguous writes.
+
+Run the upgrade compatibility gate before releasing persistence changes:
+
+```sh
+python3 scripts/verify-workflow-upgrade.py
+```
+
+It requires Python 3.12+, Docker, Cargo, and the historical `v0.7.2` Git tag
+(`git fetch --tags` if this checkout lacks it). It builds that tagged reader,
+checks old and upgraded fixtures, and runs SQLite and real PostgreSQL upgrade
+contracts. Missing prerequisites or any failed assertion fail the gate. The
+evidence records the resolved historical commit, current source fingerprint,
+dirty status, compiler and reader matrix in
+`target/reliability-evidence/workflow-upgrade.json`. CI runs the same command in
+`Workflow upgrade compatibility`; a configured job is not a successful CI run.
+
 ## Prepare a release
 
 1. Move relevant entries from `Unreleased` in `CHANGELOG.md` to the new version.

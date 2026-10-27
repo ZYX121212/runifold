@@ -17,8 +17,17 @@ multiple requests can accidentally become half-open probes.
 
 ## Opt-in policy
 
-Circuit breaking is disabled by default. `CircuitBreakerConfig` enables the
-same policy independently for every physical `ModelRoute`.
+`ModelRouter::builder` starts with circuit breaking disabled.
+`ProviderModelExt::runtime` and `::resilient` preconfigure it through the adapter's
+runtime profile. `CircuitBreakerConfig` applies the same policy independently
+to every physical `ModelRoute`; clones share each route's state.
+
+Use `ProviderRuntimeProfile::without_circuit_breaker`,
+`ModelRouterBuilder::without_circuit_breaker`, or
+`CircuitBreakerConfig::disabled` to remove that fault-sharing policy explicitly.
+These do not change retry authority or independently configured shared capacity.
+Creating separate schedulers to isolate circuit state would incorrectly split
+an account's local capacity allowance; the two scopes are independent.
 
 Configuration includes:
 
@@ -26,10 +35,24 @@ Configuration includes:
 - a non-zero cooldown;
 - explicit `ModelErrorKind` values that count as route-health failures.
 
-The default counted kinds are transport, provider, protocol, and stream-state
-failures. Cancellation and caller/configuration failures do not damage route
+The default counted kinds are transport, provider, protocol, stream-state and
+malformed Tool-argument failures. Cancellation and caller/configuration failures do not damage route
 health unless an application deliberately replaces the counted-kind set.
 Cancellation itself is always excluded.
+
+The additive `CircuitFailurePolicy::ServiceAvailability` intersects that kind
+set with transport failures and Provider failures carrying numeric HTTP 429 or
+500..=599. Other HTTP statuses, output/protocol failures and unknown Provider
+statuses do not establish service unavailability. It does not alter retry safety.
+The default `ConfiguredKinds` policy preserves existing behavior. Applications
+must select a policy appropriate to their gateway's verified status semantics;
+HTTP status alone does not prove execution or billing outcome.
+
+`ProviderRuntimeProfile::diagnostic_snapshot` records the effective delivery,
+capability, retry and circuit policy, including unknown-safety retry exceptions
+and the enabled flag. Its schema is versioned; private Provider option keys and
+values are omitted. This is not a build fingerprint, capacity snapshot or
+recoverable execution contract.
 
 ## State machine
 

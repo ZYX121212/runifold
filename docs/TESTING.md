@@ -52,6 +52,14 @@ Testcontainers to start disposable `pgvector/pgvector:pg16` databases, so a
 working Docker-compatible daemon is required. Containers and their writable
 layers are removed automatically when each test binary finishes.
 
+Fixtures select explicit ports outside default outbound ephemeral ranges and
+check readiness with bounded SQL queries. Only a typed Docker start rejection
+that explicitly identifies an occupied port permits reprovisioning, at most four
+attempts, with cleanup of each owned failed container. SQL failures, unknown
+startup outcomes and test assertions are never retried. The `fixture_provisioning`
+regressions occupy a Docker-published port: a host-only listener does not reliably
+conflict with the daemon inside Docker Desktop or a remote Docker host.
+
 Rich Tool results and durable artifacts have a dedicated reproducible gate:
 
 ```bash
@@ -188,7 +196,32 @@ Long-lived Provider keys must never be supplied to downloadable browser
 artifacts. See [Browser and edge deployment](EDGE.md) for the verified
 application-gateway boundary.
 
-Before merging persistence changes, run:
+Before merging persistence changes, run the dedicated fail-closed upgrade gate:
+
+```bash
+python3 scripts/verify-workflow-upgrade.py
+```
+
+See [release compatibility](RELEASING.md#workflow-checkpoint-compatibility) for
+Python, Docker, historical-tag prerequisites and evidence scope. This runs
+SQLite/PostgreSQL adapter matrices and an actual historical reader; it does not
+replace the broader checks below.
+
+For resolved environment/patch auditing and bounded request stability:
+
+```bash
+cargo run -p runifold-cli -- ai environment --manifest-path Cargo.toml --json
+cargo test -p runifold --test request_stability --locked -- --nocapture
+python3 scripts/test-soak-evidence.py
+```
+
+`RUNIFOLD_SOAK_MINUTES=5 scripts/run-soak.sh` performs a short repeated-boundary
+check; the default is 180 minutes. Reports are bound to before/after source
+contents and use monotonic elapsed time. Only complete release-duration runs
+can set `release_eligible=true`. No vendor credentials are required; Docker is
+required for real PostgreSQL. Short runs do not replace release acceptance.
+
+Then run the workspace validation:
 
 ```bash
 cargo fmt --all -- --check

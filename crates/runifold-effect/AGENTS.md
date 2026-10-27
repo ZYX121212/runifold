@@ -24,6 +24,7 @@ Add handler-specific reconciliation through EffectReconciler. Keep durable Start
 
 - RF-EFFECT-003: ambiguous non-idempotent effects cannot be retried without evidence.
 - Stable keys bind capability, effect class and canonical input. Completed outcomes replay without handler execution.
+- NotExecuted must exclude still-active previous attempts; receipt absence alone is not proof. Store CAS fences local commits, not remote writes.
 
 Public exports are in the crate entry point. Consult
 [the architecture map](../../docs/ai/architecture.md) before crossing a crate boundary.
