@@ -185,7 +185,8 @@ class Client:
     async def aclose(self, *, timeout: float = 5.0, wait_for_callbacks: bool = True) -> None:
         """Close local execution, optionally waiting for actual callback completion."""
         if (
-            type(timeout) not in (int, float)
+            not isinstance(timeout, (int, float))
+            or isinstance(timeout, bool)
             or not math.isfinite(timeout)
             or not 0 < timeout <= 3600
         ):

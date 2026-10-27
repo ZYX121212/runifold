@@ -229,3 +229,12 @@ async def test_denied_tool_capability_does_not_execute_callback():
         assert effects == []
         assert len(recorded_requests(client)) == 1
         assert client.snapshot()["active_callbacks"] == 0
+
+
+async def test_close_accepts_a_float_subclass_without_coercing_boolean():
+    class Seconds(float):
+        pass
+
+    client = scripted_client()
+    await client.aclose(timeout=Seconds(5))
+    assert client.snapshot()["closed"] is True
