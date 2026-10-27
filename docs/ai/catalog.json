@@ -870,6 +870,43 @@
       ],
       "production_source": "crates/runifold/examples/continuous_analysis.rs",
       "runtime_path": "Canonical Agent context preparation -> protected atomic groups -> additive input accounting -> checkpointed context plan -> existing model turn -> durable conversation commit and request replay"
+    },
+    {
+      "id": "application-sdk",
+      "title": "Build an offline application SDK example",
+      "audience": "application",
+      "api": "AgentBuilder -> Agent -> canonical Tool and stream execution",
+      "source": "crates/runifold/examples/application_sdk.rs",
+      "start": "use std::",
+      "end": null,
+      "production": "Use explicit model injection for deterministic offline validation. For hosted execution reuse ProviderRuntime; see create-agent. SQLite recovery is demonstrated separately by durable-session.",
+      "do_not": [
+        "Do not rebuild ProviderRuntime per HTTP request: clones share route health and retry state.",
+        "Do not implement another model/tool loop."
+      ],
+      "validation": [
+        "cargo run -p runifold --example application_sdk --locked"
+      ],
+      "related": [
+        "docs/rfcs/0079-application-sdks.md",
+        "bindings/python/README.md"
+      ],
+      "requirements": [
+        "runifold with runtime (default)",
+        "runifold-testkit for scripted offline validation",
+        "tokio, serde, serde_json, futures-util, anyhow"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent",
+        "runifold::RunContext"
+      ],
+      "production_source": "crates/runifold/examples/quickstart.rs",
+      "runtime_path": "ProviderRuntime \u2192 AgentBuilder \u2192 Agent \u2192 canonical execute_state \u2192 model/callables \u2192 validated outcome"
     }
   ],
   "symbols": [

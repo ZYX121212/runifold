@@ -26,3 +26,4 @@ Use recipes for application development; read architecture for framework changes
 - [docs/ai/recipes/public-api-change.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.4/docs/ai/recipes/public-api-change.md)
 - [docs/ai/recipes/schedule-model-requests.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.4/docs/ai/recipes/schedule-model-requests.md)
 - [docs/ai/recipes/manage-context.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.4/docs/ai/recipes/manage-context.md)
+- [docs/ai/recipes/application-sdk.md](https://raw.githubusercontent.com/ZYX121212/runifold/v0.10.4/docs/ai/recipes/application-sdk.md)

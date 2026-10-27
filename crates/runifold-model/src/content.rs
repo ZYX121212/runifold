@@ -127,7 +127,11 @@ pub struct ToolResult {
     pub content: Vec<ContentPart>,
     /// Optional structured result value kept separate from presentation
     /// content so protocol adapters can preserve both representations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_json",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub structured_content: Option<Value>,
     /// Whether tool execution failed.
     pub is_error: bool,
@@ -294,5 +298,33 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.name, None);
+    }
+}
+
+// A present JSON null is structured data, distinct from an absent channel.
+fn present_json<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
+#[cfg(test)]
+mod nullable_channel_tests {
+    use super::*;
+    #[test]
+    fn absent_and_explicit_null_remain_distinct() {
+        let mut wire = serde_json::json!({"content":[],"model_visible":true,"call_id":"c","is_error":false,"metadata":{}});
+        assert!(
+            serde_json::from_value::<ToolResult>(wire.clone())
+                .unwrap()
+                .structured_content
+                .is_none()
+        );
+        wire["structured_content"] = Value::Null;
+        let value: ToolResult = serde_json::from_value(wire).unwrap();
+        assert_eq!(value.structured_content, Some(Value::Null));
+        let roundtrip: ToolResult =
+            serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap();
+        assert_eq!(roundtrip.structured_content, Some(Value::Null));
     }
 }
