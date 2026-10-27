@@ -172,7 +172,10 @@ fn context_counts_callable_overhead_and_refuses_current_tool_overflow() {
         error,
         AgentError::Context(ContextError::Overflow { .. })
     ));
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
 }
 
 #[test]
@@ -204,7 +207,10 @@ fn context_sets_output_limit_and_rejects_oversized_output_before_dispatch() {
         futures_executor::block_on(bad.prompt("input")),
         Err(AgentError::Context(ContextError::OutputReserveExceeded))
     ));
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
 }
 
 #[test]
@@ -890,7 +896,10 @@ fn context_zero_output_limit_fails_before_model_dispatch() {
         futures_executor::block_on(agent.prompt("input")),
         Err(AgentError::Context(ContextError::InvalidConfiguration))
     ));
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
 }
 
 #[test]
@@ -989,5 +998,8 @@ fn context_partial_tool_turn_compaction_respects_the_summary_pass_limit() {
         }
     ));
     assert_eq!(summaries.recorded_requests().len(), 1);
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(
+        model.recorded_requests(),
+        [] as [runifold_model::ModelRequest; 0]
+    );
 }

@@ -102,7 +102,7 @@ fn gateway_rejects_relabelled_child_grant_before_budget_or_model_work() {
         .expect_err("a route cannot redefine the parent grant");
     assert_eq!(error.kind, GatewayErrorKind::AuthorityEscalation);
     assert_eq!(parent.budget().usage(), Usage::default());
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(model.recorded_requests(), [] as [runifold::ModelRequest; 0]);
 }
 
 struct CountingStep(Arc<AtomicUsize>);

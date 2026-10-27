@@ -62,12 +62,15 @@ async fn unsupported_session_schemas_survive_reopen_without_execution_or_rewrite
             .run(CheckpointId::new(), "new work", &root_run())
             .await;
         assert!(matches!(result, Err(AgentSessionError::InvalidAdmission)));
-        assert!(model.recorded_requests().is_empty());
+        assert_eq!(
+            model.recorded_requests(),
+            [] as [runifold_model::ModelRequest; 0]
+        );
         assert_eq!(
             CheckpointStore::load(reopened.as_ref(), conversation.as_checkpoint_id()).unwrap(),
             old
         );
-        assert!(
+        assert_eq!(
             reopened
                 .list_transcript(
                     conversation,
@@ -76,8 +79,8 @@ async fn unsupported_session_schemas_survive_reopen_without_execution_or_rewrite
                     ConversationWindow::new(8).unwrap()
                 )
                 .await
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [runifold_agent::ConversationTranscriptEntry; 0]
         );
     }
     fs::remove_file(path).unwrap();

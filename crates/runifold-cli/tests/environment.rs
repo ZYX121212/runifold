@@ -112,7 +112,7 @@ fn resolved_features_and_renamed_dependency_edges_are_recorded() {
     let project = Project::new();
     let default = project.snapshot(&[]);
     let configured = project.snapshot(&["--features", "extra,engine/extra"]);
-    assert!(!configured["compiler_host"].as_str().unwrap().is_empty());
+    assert_ne!(configured["compiler_host"].as_str().unwrap(), "");
     assert_eq!(
         configured["compiler_details_sha256"]
             .as_str()
