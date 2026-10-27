@@ -6,7 +6,20 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+### Added
+
+- Independent `bindings/python/` application SDK using the canonical Rust runtime:
+  asyncio calls and streams, typed Python Tools, Pydantic outputs, bounded shared
+  request capacity, per-run budgets/deadlines, safe errors and SQLite recovery.
+  Includes wheel/source packaging, type hints, installed-native HTTP tests,
+  artifact/configuration fingerprints and reproducible offline examples.
+- Offline Rust application SDK example and generated task recipe.
+
+
 ### Fixed
+
+- Preserve a present JSON `null` structured Tool channel through Effect and
+  transcript serialization, distinct from an absent structured channel.
 
 - Include internal development and build dependencies in publication order,
   publishing SQLite before its MCP test consumer. The protected registry workflow

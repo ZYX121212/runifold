@@ -2,13 +2,18 @@
 use anyhow::Context;
 use futures_util::StreamExt;
 use runifold::{
-    AgentStreamEvent, Budget, BudgetTracker, CapabilitySet, ProviderModelExt, RunContext,
+    AgentStreamEvent, Budget, BudgetTracker, CapabilitySet, ProviderModel, ProviderModelExt,
+    RunContext, model::ResponseMode,
 };
 use runifold_providers::openai::OpenAiClient;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let runtime = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?.runtime("gpt-5")?;
+    let client = OpenAiClient::from_api_key(std::env::var("OPENAI_API_KEY")?)?;
+    let profile = client
+        .runtime_profile()
+        .response_mode(ResponseMode::Streaming);
+    let runtime = client.runtime_with_profile("gpt-5", profile)?;
     let agent = runtime.agent("streamer").build()?;
     let run = RunContext::root(
         BudgetTracker::new(Budget {

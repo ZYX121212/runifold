@@ -22,7 +22,11 @@ pub struct ToolOutput {
     pub content: Vec<ContentPart>,
     /// Optional structured output value used for contract validation and by
     /// protocols that support a separate structured result channel.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_json",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub structured_content: Option<Value>,
     /// Namespaced host metadata retained across Agent and protocol bridges.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -113,4 +117,32 @@ pub trait Tool: Send + Sync {
         input: Value,
         context: ToolContext,
     ) -> ToolFuture<'_, Result<ToolOutput, ToolError>>;
+}
+
+// A present JSON null is structured data, distinct from an absent channel.
+fn present_json<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
+#[cfg(test)]
+mod nullable_channel_tests {
+    use super::*;
+    #[test]
+    fn absent_and_explicit_null_remain_distinct() {
+        let mut wire = serde_json::json!({"content":[],"model_visible":true,"call_id":"c","is_error":false,"metadata":{}});
+        assert!(
+            serde_json::from_value::<ToolOutput>(wire.clone())
+                .unwrap()
+                .structured_content
+                .is_none()
+        );
+        wire["structured_content"] = Value::Null;
+        let value: ToolOutput = serde_json::from_value(wire).unwrap();
+        assert_eq!(value.structured_content, Some(Value::Null));
+        let roundtrip: ToolOutput =
+            serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap();
+        assert_eq!(roundtrip.structured_content, Some(Value::Null));
+    }
 }

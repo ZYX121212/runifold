@@ -1260,6 +1260,36 @@
         "crates/runifold-agent/src/agent/context_runtime.rs"
       ],
       "source_sha256": "ea367285e2071cef28fbc25016793dc559cde3f99bd07d542ab4f0339eb235d7"
+    },
+    "application-sdk": {
+      "title": "Build an offline application SDK example",
+      "audience": "application",
+      "api": "AgentBuilder -> Agent -> canonical Tool and stream execution",
+      "requirements": [
+        "runifold with runtime (default)",
+        "runifold-testkit for scripted offline validation",
+        "tokio, serde, serde_json, futures-util, anyhow"
+      ],
+      "validation": [
+        "cargo run -p runifold --example application_sdk --locked"
+      ],
+      "applies_to": [
+        "crates/runifold-agent/**"
+      ],
+      "validation_profile": "runifold",
+      "difficulty": "basic",
+      "uses": [
+        "runifold::Agent",
+        "runifold::RunContext"
+      ],
+      "runtime_path": "ProviderRuntime \u2192 AgentBuilder \u2192 Agent \u2192 canonical execute_state \u2192 model/callables \u2192 validated outcome",
+      "path": "docs/ai/recipes/application-sdk.md",
+      "source": "crates/runifold/examples/application_sdk.rs",
+      "related": [
+        "docs/rfcs/0079-application-sdks.md",
+        "bindings/python/README.md"
+      ],
+      "source_sha256": "77cd014555c684369a49a8d2e8c153a5afd71b3100b574540ea1ed68b1e9cb03"
     }
   },
   "validation": {
@@ -2074,6 +2104,7 @@
       "ai/diagnostics.json": "169381e6d46c8c79a62094c9af94f64455d066829f10742312177e4202cef999",
       "ai/schemas/runifold-ai.schema.json": "acac3f6396e0f24809d4ee26501c3aaa54421857c296b6a7c2dc195e26aaee60",
       "ai/validation.json": "ba19551e6bb98b5e176af0ade0e15a8d5395db021d17cda45f39f51e131701bb",
+      "bindings/python/README.md": "7ff5b1033a0435377198e252762b1a7b9b391eab681ef4af48dc6ff171e4f501",
       "crates/runifold-agent/Cargo.toml": "08de8128a5db67eea256f00cf43a837d0c2b5625fb671e3b8cdc817eba9af85b",
       "crates/runifold-agent/src/agent.rs": "2876fa4c697314e713442025cf9d2098967e2ea500c54d0494570bba8ad52c24",
       "crates/runifold-agent/src/agent/callable.rs": "8eaa6dabdd3ae4b503ac461964dfb5b55a39732f6d829544d03d366de37f6d48",
@@ -2132,12 +2163,13 @@
       "crates/runifold-tool/src/error.rs": "7f1704a0de3628b4e52cbf78d210b4e1ed4b584f9e74f51e5bf1a6dc5ad7251a",
       "crates/runifold-tool/src/registry.rs": "4bd49d13c9716848b76a9f2bf1b239753df8ba96dcdad0d3e930f8878a272588",
       "crates/runifold-workflow/Cargo.toml": "867809da9aac25caae43f90740b9db415c7857c08adb64607014cc276dfec7a2",
-      "crates/runifold/Cargo.toml": "c33cea2605961d9c9aeeeb530b697bafd823c4dae9fa7f3382b1ca597a47bdca",
+      "crates/runifold/Cargo.toml": "1026fe44403611c39f8cd5ba769a2641c57bea5d50b51cd618516962c59960a2",
       "crates/runifold/examples/ai_retrieval.rs": "37db3138beed08432b9e5bc7c550f319b54296fc4dba85146813de1e605ca48f",
       "crates/runifold/examples/ai_reviewer.rs": "7e6da57c73dc8e623a10d350cd88f6d4b1adace786337363125610aa6d3f7148",
-      "crates/runifold/examples/ai_stream.rs": "382ef803cb3c770341bfc05da45d273b154f9c5d6880031297c3c751e35644d3",
+      "crates/runifold/examples/ai_stream.rs": "f1ffff65ccde696aaba235f84778ee493358f9debdfefdaebe800fff53997bd4",
       "crates/runifold/examples/ai_structured.rs": "5c863394b6c0bcdfdfb2fb1a5aa070fd501c6e0bed316d0fa8c1cf6769e3652b",
       "crates/runifold/examples/ai_tool.rs": "b4b439c7ca643c52ab8698ed8285b92900d621aee6d386fe9426dfef3c708f4f",
+      "crates/runifold/examples/application_sdk.rs": "77cd014555c684369a49a8d2e8c153a5afd71b3100b574540ea1ed68b1e9cb03",
       "crates/runifold/examples/continuous_analysis.rs": "ea367285e2071cef28fbc25016793dc559cde3f99bd07d542ab4f0339eb235d7",
       "crates/runifold/examples/durable_publish.rs": "420dca347e0bca597052fe4442d02f801fc9dff1a7340eeed0a4b40e15540721",
       "crates/runifold/examples/durable_session.rs": "a01aeba65e572f317095fe158815c6b5c54ff86f9a1a040903f5d18262210942",
@@ -2151,7 +2183,7 @@
       "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
       "docs/PROVIDERS.md": "d505b0522fc9f0fd2eb5c2ae8993540e21bc9ff636807666863dee3771101864",
       "docs/RELEASING.md": "c6a9c652ca9a4b6487a31a87d6793cf2f427dd50e4be75af2b3160ea34a38cc7",
-      "docs/ai/catalog.json": "c41870400efb6a3b7517739c2ef1974a104cd8e213984ffce7e6dd36df859e78",
+      "docs/ai/catalog.json": "d4ba08353ae8d11d4bc8bfc7b2ebcaf9010ee9c9848e5959d6fd34db877a3e3a",
       "docs/rfcs/0013-agent-callable-effects.md": "ee1dd43df9d5859e93a5b5f93dd01f6634b5e5e4dcbb07c16d887f4a5d89ef17",
       "docs/rfcs/0016-typed-function-tools.md": "5de77af96529a348709b4e271fedc10d3280bd53723a8a48e7ed9250fa6f2599",
       "docs/rfcs/0017-tool-state-and-errors.md": "c1844189849fa7a8dc4b35739e7097416ba10584b2fe4a7878379e2bf2f4ce76",
@@ -2168,10 +2200,11 @@
       "docs/rfcs/0073-production-agent-sessions.md": "f65fa4aa23c567e7b80981fe42a04cde7b167dbf99d6fdbb1a34c3343c16f6ed",
       "docs/rfcs/0075-shared-model-request-scheduling.md": "ffb475c93832ca0b752a9afab856a3aa87835d61ac395f1aa34e0417a85102ac",
       "docs/rfcs/0078-budgeted-agent-context.md": "506607b90709ce57fbc392e33f8d024f46203825ff4da0bedd1b39cf23f624f8",
+      "docs/rfcs/0079-application-sdks.md": "6628e259925eb0386933c671fb42443685e4d7695bd23f211f16a69362a1b2d3",
       "scripts/ai-check.py": "0eed3e3cc4db13cc0c51983690d5949260e0f9b9b80ce18e4e376f29567bb89d",
       "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
       "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
     },
-    "digest": "88982f41f1a57cb572b6552a6f2a44f41982c07239149113e23642c0067442ed"
+    "digest": "6967d3496d7d259df67840d401d03ee4d8dbac07dc198f4cbe345f95d31d8c2e"
   }
 }

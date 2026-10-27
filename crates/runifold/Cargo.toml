@@ -152,3 +152,7 @@ required-features = ["runtime"]
 [[example]]
 name = "continuous_analysis"
 required-features = ["sqlite"]
+
+[[example]]
+name = "application_sdk"
+required-features = ["runtime"]

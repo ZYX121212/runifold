@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.12,<2"]
+build-backend = "maturin"
+
+[project]
+name = "runifold-sdk"
+dynamic = ["version"]
+description = "Typed Python SDK backed by the canonical Runifold Rust runtime"
+requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+dependencies = ["pydantic>=2.12,<3"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/ZYX121212/runifold"
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.24", "mypy>=1.18"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "runifold._native"
+include = ["python/runifold/py.typed", "python/runifold/_native.pyi", "examples/*.py"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["python/runifold"]

@@ -5,6 +5,8 @@
   agents, and workflows in Rust.
 </p>
 
+Application SDKs: [Rust recipes](docs/ai/README.md), [offline Rust application](crates/runifold/examples/application_sdk.rs), and [Python native SDK](bindings/python/README.md).
+
 <p align="center">
   <a href="https://runifold-docs.hiayun.chatgpt.site/"><img src="https://img.shields.io/badge/docs-Runifold-dca282.svg" alt="Runifold technical documentation"></a>&nbsp;
   <a href="https://docs.rs/runifold/latest/runifold/"><img src="https://img.shields.io/badge/docs-API%20Reference-dca282.svg" alt="API reference"></a>&nbsp;

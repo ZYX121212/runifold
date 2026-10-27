@@ -1,0 +1,34 @@
+[package]
+name = "runifold-python"
+version = "0.10.4"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ZYX121212/runifold"
+publish = false
+description = "Native Python adaptation of the canonical Runifold runtime"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+
+[workspace]
+resolver = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+futures-util = "0.3.34"
+pyo3 = { version = "0.30.1", features = ["abi3-py310"] }
+pyo3-async-runtimes = { version = "0.30.0", features = ["tokio-runtime"] }
+runifold = { version = "=0.10.4", path = "../../crates/runifold", features = ["sqlite-bundled"] }
+runifold-providers = { version = "=0.10.4", path = "../../crates/runifold-providers", default-features = false, features = ["openai", "anthropic", "gemini", "ollama"] }
+runifold-testkit = { version = "=0.10.4", path = "../../crates/runifold-testkit" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
