@@ -91,8 +91,12 @@ After inspecting the GitHub Release assets, manually run **Publish crates.io**:
 - `tag`: the existing release tag, such as `v0.2.0`;
 - `confirmation`: the exact manifest version without `v`, such as `0.2.0`.
 
-The workflow checks out that tag, validates the dependency order, assembles
-the whole workspace, and calls `scripts/publish-crates.sh --execute`. Archive
+The workflow checks out that tag as a clean, detached source tree. Its publication
+controller comes from the exact workflow commit in a separate checkout, so an
+ordering or orchestration repair does not require changing signed release sources.
+`RUNIFOLD_PUBLISH_ROOT` binds that controller to the release source directory.
+It validates normal, build and development dependency order, assembles the whole
+workspace, and calls `scripts/publish-crates.sh --execute`. Archive
 assembly uses `--no-verify` because an unpublished workspace version cannot
 resolve its own dependent crates from crates.io. The publish script then uses
 Cargo's normal verification while publishing dependencies before their

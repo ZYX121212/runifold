@@ -27,12 +27,24 @@ jobs:
     name: Publish workspace in dependency order
     runs-on: ubuntu-latest
     environment: crates-io
+    defaults:
+      run:
+        working-directory: release-source
+    env:
+      RUNIFOLD_PUBLISH_ROOT: ${{ github.workspace }}/release-source
     steps:
+      - name: Check out publication controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tools
+
       - name: Check out release tag
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
+          path: release-source
 
       - name: Cache Cargo
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
@@ -40,7 +52,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            release-source/target
           key: cargo-publish-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Validate requested version
@@ -53,7 +65,7 @@ jobs:
           test "$CONFIRM_RUNIFOLD_PUBLISH" = "$version"
 
       - name: Verify publish dependency order
-        run: scripts/publish-crates.sh --list
+        run: ../release-tools/scripts/publish-crates.sh --list
 
       - name: Assemble packages before publication
         run: cargo package --workspace --locked --no-verify
@@ -62,4 +74,4 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           CONFIRM_RUNIFOLD_PUBLISH: ${{ inputs.confirmation }}
-        run: scripts/publish-crates.sh --execute
+        run: ../release-tools/scripts/publish-crates.sh --execute

@@ -31,6 +31,7 @@ jobs:
           python3 scripts/test-ai-system.py
           python3 scripts/test-soak-evidence.py
           python3 scripts/test-semver-baseline.py
+          python3 scripts/test-publish-order.py
           python3 scripts/ai-check.py --json
 
       - name: Verify CLI and public diagnostic contracts
