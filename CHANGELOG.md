@@ -6,6 +6,8 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-10-27
+
 ### Added
 
 - Independent `bindings/python/` application SDK using the canonical Rust runtime:

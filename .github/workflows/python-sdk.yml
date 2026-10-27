@@ -3,6 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -91,3 +92,10 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal
           CARGO_TARGET_DIR=target/python-sdk-msrv cargo +1.88.0 check --manifest-path bindings/python/Cargo.toml --locked
+
+      - name: Preserve verified source distribution
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: python-sdk-source
+          path: dist/*.tar.gz
+          if-no-files-found: error

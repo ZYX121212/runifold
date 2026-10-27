@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "0.10.4",
+  "version": "0.10.5",
   "symbols": {
     "runifold::ProviderRuntime": {
       "source": "crates/runifold/src/lib.rs",

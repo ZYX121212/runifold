@@ -1,6 +1,6 @@
 [package]
 name = "runifold-python"
-version = "0.10.4"
+version = "0.10.5"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -25,9 +25,9 @@ all = "warn"
 futures-util = "0.3.34"
 pyo3 = { version = "0.30.1", features = ["abi3-py310"] }
 pyo3-async-runtimes = { version = "0.30.0", features = ["tokio-runtime"] }
-runifold = { version = "=0.10.4", path = "../../crates/runifold", features = ["sqlite-bundled"] }
-runifold-providers = { version = "=0.10.4", path = "../../crates/runifold-providers", default-features = false, features = ["openai", "anthropic", "gemini", "ollama"] }
-runifold-testkit = { version = "=0.10.4", path = "../../crates/runifold-testkit" }
+runifold = { version = "=0.10.5", path = "../../crates/runifold", features = ["sqlite-bundled"] }
+runifold-providers = { version = "=0.10.5", path = "../../crates/runifold-providers", default-features = false, features = ["openai", "anthropic", "gemini", "ollama"] }
+runifold-testkit = { version = "=0.10.5", path = "../../crates/runifold-testkit" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11"

@@ -1494,7 +1494,7 @@ dependencies = [
 
 [[package]]
 name = "runifold"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "runifold-agent",
  "runifold-core",
@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-agent"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "futures-core",
  "futures-timer",
@@ -1530,7 +1530,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-core"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "event-listener",
  "serde",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-effect"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "futures-util",
  "runifold-core",
@@ -1553,7 +1553,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-macros"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-model"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -1579,7 +1579,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-ops"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "runifold-core",
  "serde",
@@ -1589,7 +1589,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-providers"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -1611,7 +1611,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-python"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "futures-util",
  "pyo3",
@@ -1627,7 +1627,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-retrieval"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "futures-util",
  "runifold-core",
@@ -1638,7 +1638,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-store-sqlite"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "futures-executor",
  "runifold-agent",
@@ -1657,7 +1657,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-testkit"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "futures-core",
  "futures-util",
@@ -1672,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-tool"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "futures-util",
  "jsonschema",
@@ -1686,7 +1686,7 @@ dependencies = [
 
 [[package]]
 name = "runifold-workflow"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "futures-timer",
  "futures-util",

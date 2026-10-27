@@ -1,0 +1,81 @@
+name: Publish Python SDK
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published GitHub release tag, such as v0.10.5
+        required: true
+        type: string
+      confirmation:
+        description: Exact version without v
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: python-sdk-pypi-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/runifold-sdk
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - name: Validate immutable source and requested version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          CONFIRM_VERSION: ${{ inputs.confirmation }}
+        run: |
+          python scripts/python-sdk-version.py
+          python - <<'PY'
+          import os, subprocess, tomllib
+          version = tomllib.load(open('Cargo.toml', 'rb'))['workspace']['package']['version']
+          assert os.environ['RELEASE_TAG'] == 'v' + version
+          assert os.environ['CONFIRM_VERSION'] == version
+          tagged = subprocess.check_output(['git', 'rev-parse', 'refs/tags/' + os.environ['RELEASE_TAG'] + '^{commit}'], text=True).strip()
+          assert tagged == subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          PY
+      - name: Download qualified GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release download "$RELEASE_TAG" --dir dist --pattern 'runifold_sdk-*.whl' --pattern 'runifold_sdk-*.tar.gz' --pattern SHA256SUMS-PYTHON
+      - name: Verify the exact complete SDK bundle
+        run: |
+          python - <<'PY'
+          import hashlib, pathlib, tomllib
+          version = tomllib.load(open('Cargo.toml', 'rb'))['workspace']['package']['version']
+          folder = pathlib.Path('dist')
+          packages = {file.name for file in folder.iterdir() if file.name != 'SHA256SUMS-PYTHON'}
+          assert len(packages) == 4, 'Expected three platform wheels and one source archive'
+          assert sum(name.endswith('.whl') for name in packages) == 3
+          assert sum(name.endswith('.tar.gz') for name in packages) == 1
+          checked = set()
+          for line in (folder / 'SHA256SUMS-PYTHON').read_text().splitlines():
+              digest, name = line.split()
+              name = name.lstrip('*')
+              assert pathlib.PurePath(name).name == name and name in packages and name not in checked
+              assert name.startswith('runifold_sdk-' + version + '-') or name == 'runifold_sdk-' + version + '.tar.gz'
+              assert len(digest) == 64 and hashlib.sha256((folder / name).read_bytes()).hexdigest() == digest
+              checked.add(name)
+          assert checked == packages
+          (folder / 'SHA256SUMS-PYTHON').unlink()
+          PY
+          python -m pip install 'twine>=6,<7'
+          python -m twine check dist/*
+      - name: Publish with PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
+        with:
+          packages-dir: dist/

@@ -4,7 +4,7 @@ An in-process Python adapter over Runifold's Rust runtime. Agent execution, Tool
 authorization, budgets, routing, retry and SQLite recovery use the existing native
 contracts. There is no required gateway service or Python Agent loop.
 
-This first binding is delivered from source and local build artifacts. It has not been published to PyPI.
+Prebuilt wheels and source archives are delivered through the repository GitHub Releases. It has not been published to PyPI.
 Distribution name: `runifold-sdk`; import name: `runifold`.
 
 ## Build and install

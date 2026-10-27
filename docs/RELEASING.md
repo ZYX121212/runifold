@@ -114,3 +114,27 @@ external state. Never publish from a branch or a dirty worktree.
   crate versions are skipped, and publication resumes at the first missing one.
 - A crate is incorrect after publication: yank it if necessary, fix forward,
   and release a new patch version. crates.io versions cannot be overwritten.
+
+## Python SDK artifacts and PyPI
+
+The SDK version and exact native requirements follow the root manifest. Run
+`python3 scripts/python-sdk-version.py --write` after a version bump, refresh the
+independent Cargo lockfile, then regenerate AI knowledge. Tagged SDK CI qualifies
+CPython 3.10/3.14 on Linux (manylinux_2_28 x86_64), macOS ARM64 and Windows AMD64,
+plus an isolated source install and native advisory/MSRV gates.
+
+After both tagged release workflows pass, attach the Python 3.10-built stable-ABI
+wheel for each of those three platforms and the qualified source archive to the
+same GitHub Release. Do not attach both ABI-identical matrix filenames. Generate
+`SHA256SUMS-PYTHON` over all four basenames and verify every archive before upload.
+All assets must come from the exact tagged revision; do not overwrite published
+assets to repair a bad release.
+
+To enable PyPI, the package owner must configure a trusted (or pending) publisher
+for project `runifold-sdk`: GitHub owner `ZYX121212`, repository `runifold`,
+workflow `publish-python.yml`, environment `pypi`. No API token belongs in chat.
+The manual **Publish Python SDK** workflow accepts the existing release tag and
+exact version confirmation, verifies tag/source/version and the complete asset
+checksum set, checks distribution metadata, then publishes those exact archives
+with OIDC. It never rebuilds a package while publishing. PyPI credentials/trust
+and project ownership are external prerequisites, not proof of publication.
