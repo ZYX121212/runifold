@@ -6,7 +6,10 @@ mod execution;
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize},
+    },
     time::Duration,
 };
 
@@ -160,6 +163,7 @@ impl NativeRuntime {
         let state = Arc::new(RunState {
             context,
             finished: AtomicBool::new(false),
+            checkpoint_operations: AtomicUsize::new(0),
             terminal: Mutex::new(None),
             events: tokio::sync::Mutex::new(receiver),
             notify: Notify::new(),
@@ -251,13 +255,23 @@ impl NativeRuntime {
                 let _runs = runs.acquire_many_owned(max_runs).await.map_err(|_| PyRuntimeError::new_err("Run capacity closed unexpectedly"))?;
                 let _tools = if callbacks { Some(tools.acquire_many_owned(max_tools).await.map_err(|_| PyRuntimeError::new_err("Callback capacity closed unexpectedly"))?) } else { None };
                 Ok(())
-            }).await.map_err(|_| PyTimeoutError::new_err("Client shutdown timed out; running synchronous callbacks may still complete effects"))?
+            }).await.map_err(|_| PyTimeoutError::new_err("Client shutdown timed out; blocking checkpoint work or synchronous callbacks may still complete"))?
         })
     }
 
     fn snapshot(&self) -> String {
         let state = self.scheduler.snapshot();
+        let checkpoint_operations: usize = lock(&self.registry)
+            .runs
+            .values()
+            .filter_map(std::sync::Weak::upgrade)
+            .map(|run| {
+                run.checkpoint_operations
+                    .load(std::sync::atomic::Ordering::Acquire)
+            })
+            .sum();
         json!({"active_runs": self.max_runs as usize - self.runs.available_permits(),
+            "active_checkpoint_operations": checkpoint_operations,
             "active_callbacks":self.max_callbacks as usize - self.callbacks.available_permits(),
             "closed":lock(&self.registry).runtime.is_none(), "policy": self.policy, "limits": self.limits,
             "model": {"queued":state.queued,"admitted":state.admitted,"rejected":state.rejected,"cancelled":state.cancelled,"expired":state.expired,"unknown_usage":state.unknown_usage,

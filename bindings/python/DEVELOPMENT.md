@@ -45,7 +45,9 @@ preserves the native classification, including conservative classification of
 queued cancellation. Do not infer replay safety from a Python exception class.
 Configuration/type errors before native execution use `ValueError`/`TypeError`.
 Client admission errors are typed and safe; shutdown of a still-running sync
-callback can raise `TimeoutError`. It does not refund that callback's capacity.
+callback or checkpoint startup operation can raise `TimeoutError`. Admission
+capacity stays occupied until the blocking work actually returns.
+`active_checkpoint_operations` reports queued/running checkpoint startup work.
 
 The SDK selects native streaming delivery for its Client runtime, including
 `agent.run()` which collects the canonical result. This allows `agent.stream()`

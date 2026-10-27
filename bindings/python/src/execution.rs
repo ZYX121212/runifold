@@ -3,7 +3,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc, Mutex, Weak,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -33,6 +33,7 @@ pub struct Registry {
 pub struct RunState {
     pub context: RunContext,
     pub finished: AtomicBool,
+    pub checkpoint_operations: AtomicUsize,
     pub terminal: Mutex<Option<Value>>,
     pub events: tokio::sync::Mutex<mpsc::Receiver<String>>,
     pub notify: Notify,
@@ -61,7 +62,7 @@ impl RunState {
 
 struct DriverGuard {
     state: Arc<RunState>,
-    permit: Option<OwnedSemaphorePermit>,
+    permit: Option<Arc<OwnedSemaphorePermit>>,
 }
 impl Drop for DriverGuard {
     fn drop(&mut self) {
@@ -256,7 +257,38 @@ async fn startup<F: std::future::Future>(future: F, run: &RunContext) -> Result<
     }
 }
 
-async fn execute(job: &StartExecution) -> Value {
+struct StartupLease {
+    _permit: Arc<OwnedSemaphorePermit>,
+    state: Arc<RunState>,
+}
+impl Drop for StartupLease {
+    fn drop(&mut self) {
+        self.state
+            .checkpoint_operations
+            .fetch_sub(1, Ordering::AcqRel);
+    }
+}
+fn blocking_startup<F, T>(
+    work: F,
+    permit: &Arc<OwnedSemaphorePermit>,
+    state: &Arc<RunState>,
+) -> tokio::task::JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    state.checkpoint_operations.fetch_add(1, Ordering::AcqRel);
+    let lease = StartupLease {
+        _permit: permit.clone(),
+        state: state.clone(),
+    };
+    tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        work()
+    })
+}
+
+async fn execute(job: &StartExecution, permit: &Arc<OwnedSemaphorePermit>) -> Value {
     if job.state.context.cancellation().is_cancelled() {
         return failure(
             "runifold.cancelled",
@@ -269,7 +301,11 @@ async fn execute(job: &StartExecution) -> Value {
     let checkpoint = if let Some(path) = &job.options.checkpoint_path {
         let path = path.clone();
         let store = match startup(
-            tokio::task::spawn_blocking(move || runifold::sqlite::SqliteStore::open(path)),
+            blocking_startup(
+                move || runifold::sqlite::SqliteStore::open(path),
+                permit,
+                &job.state,
+            ),
             &job.state.context,
         )
         .await
@@ -342,7 +378,7 @@ async fn execute(job: &StartExecution) -> Value {
             .0
             .clone();
         let loaded = startup(
-            tokio::task::spawn_blocking(move || handle.load()),
+            blocking_startup(move || handle.load(), permit, &job.state),
             &job.state.context,
         )
         .await;
@@ -424,13 +460,13 @@ pub fn start(job: StartExecution, permit: OwnedSemaphorePermit) {
     pyo3_async_runtimes::tokio::get_runtime().spawn(async move {
         // Keep ownership of the permit and terminal notification even on panic.
         let state = job.state.clone();
-        let _guard = DriverGuard { state: state.clone(), permit: Some(permit) };
+        let _guard = DriverGuard { state: state.clone(), permit: Some(Arc::new(permit)) };
         // Let native cancellation produce its own classification/diagnostics.
         // The host timer signals cancellation for startup IO and callbacks,
         // which may otherwise have no deadline wakeup of their own.
         let deadline = state.context.deadline();
         let value = {
-            let work = execute(&job);
+            let work = execute(&job, _guard.permit.as_ref().expect("driver owns admission until terminal settlement"));
             tokio::pin!(work);
             tokio::select! {
                 biased;

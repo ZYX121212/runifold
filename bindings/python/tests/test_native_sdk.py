@@ -253,3 +253,44 @@ async def test_raw_callback_exception_is_not_exposed_and_write_is_not_repeated()
         assert calls == [1]
         assert 'private password' not in json.dumps(result.canonical)
         assert result.tool_calls == 1
+
+
+async def test_cancelled_sqlite_startup_retains_admission_until_actual_completion(tmp_path):
+    import subprocess
+    import sys
+    path = str(tmp_path / 'locked.sqlite')
+    script = """
+import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1])
+connection.execute('CREATE TABLE blocker(value)')
+connection.commit()
+connection.execute('BEGIN EXCLUSIVE')
+print('locked', flush=True)
+sys.stdin.readline()
+connection.rollback()
+connection.close()
+"""
+    # Use a separate process so this is a real OS-level competing database lock.
+    holder = subprocess.Popen([sys.executable, '-u', '-c', script, path],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert await asyncio.wait_for(asyncio.to_thread(holder.stdout.readline), 5) == 'locked\n'
+    client = scripted_client(text('unused'), run_concurrency=1)
+    try:
+        task = asyncio.create_task(client.agent('locked').run_checkpointed('hello', path=path))
+        await eventually(lambda: client.snapshot()['active_checkpoint_operations'] == 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        assert client.snapshot()['active_runs'] == 1
+        with pytest.raises(RunifoldError) as caught:
+            client.agent('bounded').start('must not start another database operation')
+        assert caught.value.kind == 'AdmissionDenied'
+        with pytest.raises(TimeoutError):
+            await client.aclose(timeout=0.05)
+        assert client.snapshot()['active_checkpoint_operations'] == 1
+        assert recorded_requests(client) == []
+    finally:
+        await asyncio.to_thread(holder.communicate, "release\n", timeout=5)
+        await client.aclose(timeout=5)
+    assert client.snapshot()['active_runs'] == 0
+    assert client.snapshot()['active_checkpoint_operations'] == 0

@@ -2105,7 +2105,7 @@
         "ai/diagnostics.json": "169381e6d46c8c79a62094c9af94f64455d066829f10742312177e4202cef999",
         "ai/schemas/runifold-ai.schema.json": "acac3f6396e0f24809d4ee26501c3aaa54421857c296b6a7c2dc195e26aaee60",
         "ai/validation.json": "ba19551e6bb98b5e176af0ade0e15a8d5395db021d17cda45f39f51e131701bb",
-        "bindings/python/README.md": "7ff5b1033a0435377198e252762b1a7b9b391eab681ef4af48dc6ff171e4f501",
+        "bindings/python/README.md": "0fa4657064b8837ba00c4ce5bc104d4bcc0cc8fe27dec235268578b376e0e988",
         "crates/runifold-agent/Cargo.toml": "08de8128a5db67eea256f00cf43a837d0c2b5625fb671e3b8cdc817eba9af85b",
         "crates/runifold-agent/src/agent.rs": "2876fa4c697314e713442025cf9d2098967e2ea500c54d0494570bba8ad52c24",
         "crates/runifold-agent/src/agent/callable.rs": "8eaa6dabdd3ae4b503ac461964dfb5b55a39732f6d829544d03d366de37f6d48",
@@ -2206,7 +2206,7 @@
         "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
         "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
       },
-      "digest": "6967d3496d7d259df67840d401d03ee4d8dbac07dc198f4cbe345f95d31d8c2e"
+      "digest": "3817a4ee2fac3bb63bcae4c916ba79b1b0b71e1dea5725d169e7f63a8e620779"
     }
   },
   "documents": {

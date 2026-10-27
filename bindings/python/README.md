@@ -81,6 +81,8 @@ Clients and their Agents share request capacity and route/circuit state. Set
   callbacks run in a worker thread; that thread may finish after local cancellation.
   Its native callback lease remains occupied until it actually returns. Client
   shutdown can time out rather than claim a still-running callback stopped.
+  Blocking SQLite startup also retains native admission capacity until it returns;
+  `snapshot()["active_checkpoint_operations"]` reports that work.
 - Declare Tool effects explicitly. Ordinary Python exceptions are hidden from
   model/operator messages. `ToolFailure` is an explicit public error contract.
 - `Outcome.canonical`, `.response` and `.transcript` retain rich content and
