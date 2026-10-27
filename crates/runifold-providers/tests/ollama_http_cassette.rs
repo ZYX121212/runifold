@@ -93,3 +93,51 @@ async fn rejects_midstream_provider_errors() {
     assert_eq!(error.kind, ModelErrorKind::Provider);
     assert!(!error.to_string().contains("model runner crashed"));
 }
+
+#[tokio::test]
+async fn parallel_same_name_tool_ids_survive_serialized_http_replay() {
+    let calls = json!([{"id":"call1","function":{"name":"lookup","arguments":{"key":1}}},
+        {"id":"call2","function":{"name":"lookup","arguments":{"key":2}}}]);
+    let first = json!({"model":"qwen3","message":{"role":"assistant","content":"","tool_calls":calls},"done":true,"done_reason":"tool_calls"});
+    let second = json!({"model":"qwen3","message":{"role":"assistant","content":"done"},"done":true,"done_reason":"stop"});
+    let response = |value: &serde_json::Value| {
+        ScriptedResponse::ok(vec![ResponseChunk::text(format!("{value}\n"))])
+            .with_header("content-type", "application/x-ndjson")
+    };
+    let server = CassetteServer::start(vec![
+        HttpExchange::new("POST", "/api/chat", response(&first)),
+        HttpExchange::new("POST", "/api/chat", response(&second)),
+    ])
+    .unwrap();
+    let client = client(&server);
+    let first = client
+        .invoke(request(), ModelCallContext::new())
+        .await
+        .unwrap();
+    let stored = serde_json::to_vec(&first.assistant_message().unwrap()).unwrap();
+    let restored: Message = serde_json::from_slice(&stored).unwrap();
+    let mut next = request().message(restored);
+    for id in ["call1", "call2"] {
+        next = next.message(
+            Message::new(
+                runifold_model::Role::Tool,
+                vec![ContentPart::ToolResult(runifold_model::ToolResult {
+                    call_id: id.into(),
+                    name: Some("lookup".into()),
+                    content: vec![ContentPart::text(id)],
+                    structured_content: None,
+                    is_error: false,
+                    metadata: std::collections::BTreeMap::default(),
+                })],
+            )
+            .unwrap(),
+        );
+    }
+    client.invoke(next, ModelCallContext::new()).await.unwrap();
+    server.assert_finished().unwrap();
+    let body = server.observed_requests()[1].json_body().unwrap();
+    assert_eq!(body["messages"][1]["tool_calls"][0]["id"], "call1");
+    assert_eq!(body["messages"][1]["tool_calls"][1]["id"], "call2");
+    assert_eq!(body["messages"][2]["tool_call_id"], "call1");
+    assert_eq!(body["messages"][3]["tool_call_id"], "call2");
+}

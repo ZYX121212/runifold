@@ -102,7 +102,7 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
                 builder = builder.header("x-openrouter-title", application_title);
             }
             if let Some(remaining) = context.remaining() {
-                builder = builder.timeout(remaining);
+                builder = builder.timeout(crate::reliability::request_timeout(remaining));
             }
 
             let started = Instant::now();

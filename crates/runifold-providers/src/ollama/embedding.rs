@@ -96,7 +96,7 @@ impl EmbeddingModel for OllamaEmbeddingModel {
                 builder = builder.bearer_auth(token.expose_secret());
             }
             if let Some(remaining) = context.remaining() {
-                builder = builder.timeout(remaining);
+                builder = builder.timeout(crate::reliability::request_timeout(remaining));
             }
 
             let started = Instant::now();

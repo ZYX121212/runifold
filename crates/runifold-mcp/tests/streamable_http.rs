@@ -95,8 +95,14 @@ async fn stateless_http_requests_never_allocate_or_reuse_a_session() {
     );
 
     assert_eq!(client.connect().await.unwrap(), McpProtocolMode::Stateless);
-    assert!(client.list_tools().await.unwrap().is_empty());
-    assert!(client.list_tools().await.unwrap().is_empty());
+    assert_eq!(
+        client.list_tools().await.unwrap(),
+        [] as [runifold_mcp::McpTool; 0]
+    );
+    assert_eq!(
+        client.list_tools().await.unwrap(),
+        [] as [runifold_mcp::McpTool; 0]
+    );
     assert_eq!(http_server.session_count().await, 0);
     assert!(transport.session_id().await.is_none());
     task.abort();
@@ -357,7 +363,10 @@ async fn sse_response_and_resumable_notification_stream_work_over_tcp() {
         McpClientConfig::new(Implementation::new("sse-client", "1")),
     );
     client.initialize().await.unwrap();
-    assert!(client.list_tools().await.unwrap().is_empty());
+    assert_eq!(
+        client.list_tools().await.unwrap(),
+        [] as [runifold_mcp::McpTool; 0]
+    );
     let session_id = transport.session_id().await.unwrap();
 
     http_server
@@ -393,7 +402,10 @@ async fn sse_response_and_resumable_notification_stream_work_over_tcp() {
     drop(resumed);
 
     // Closing an SSE connection is not request cancellation or session loss.
-    assert!(client.list_tools().await.unwrap().is_empty());
+    assert_eq!(
+        client.list_tools().await.unwrap(),
+        [] as [runifold_mcp::McpTool; 0]
+    );
     task.abort();
 }
 
@@ -727,7 +739,7 @@ impl MrtrToolGate for TestMrtrGate {
         self.calls.fetch_add(1, Ordering::AcqRel);
         Box::pin(async move {
             if request.request_state.is_none() {
-                assert!(request.input_responses.is_empty());
+                assert_eq!(request.input_responses.len(), 0);
                 return Ok(MrtrToolDecision::InputRequired(
                     InputRequiredResult::new(BTreeMap::from([
                         (

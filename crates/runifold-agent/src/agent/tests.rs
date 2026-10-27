@@ -1749,7 +1749,7 @@ fn tool_minimum_rejects_an_obviously_insufficient_shared_budget() {
             remaining: 2
         }
     ));
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -1976,7 +1976,7 @@ fn automatic_summary_stops_at_the_explicit_pass_limit_before_model_execution() {
         }
     ));
     assert_eq!(summarizer_model.recorded_requests().len(), 2);
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -2075,7 +2075,7 @@ fn explicit_run_denies_an_ungranted_retriever_before_model_execution() {
         AgentError::Retrieval(RetrievalError::CapabilityDenied { .. })
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -2214,7 +2214,7 @@ fn journal_failure_is_fail_closed_before_model_execution() {
     let error = futures_executor::block_on(agent.run("start", &run)).unwrap_err();
 
     assert!(matches!(error, AgentError::Journal(_)));
-    assert!(model.recorded_requests().is_empty());
+    assert_eq!(model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -2707,7 +2707,7 @@ fn gateway_rejects_child_authority_amplification_before_execution() {
             if error.kind == GatewayErrorKind::AuthorityEscalation
     ));
     assert_eq!(run.budget().usage().delegations, 0);
-    assert!(child_model.recorded_requests().is_empty());
+    assert_eq!(child_model.recorded_requests().len(), 0);
 }
 
 #[test]
@@ -2756,7 +2756,7 @@ fn delegation_budget_stops_before_the_child_model_runs() {
         AgentError::Gateway(ref error)
             if error.kind == GatewayErrorKind::BudgetExceeded
     ));
-    assert!(child_model.recorded_requests().is_empty());
+    assert_eq!(child_model.recorded_requests().len(), 0);
 }
 
 #[test]

@@ -272,7 +272,10 @@ async fn new_models_reject_incompatible_parameters_before_transport() {
         .insert("openai".into(), json!({"reasoning_effort":"none"}));
     request.generation.temperature = Some(0.2);
     assert!(encode_chat_request(&request, "openai").is_ok());
-    assert!(server.observed_requests().is_empty());
+    assert_eq!(
+        server.observed_requests(),
+        [] as [runifold_provider_testkit::ObservedRequest; 0]
+    );
 }
 
 #[tokio::test]
@@ -542,7 +545,12 @@ async fn custom_streams_preserve_text_input_and_reject_conflicting_final_input()
             .enumerate()
             .map(|(sequence, mut event)| {
                 event["sequence_number"] = json!(sequence);
-                ResponseChunk::text(format!("data: {event}\n\n"))
+                let chunk = ResponseChunk::text(format!("data: {event}\n\n"));
+                if final_input == "different" && sequence == 5 {
+                    chunk.after(std::time::Duration::from_millis(100))
+                } else {
+                    chunk
+                }
             })
             .collect();
         let server = CassetteServer::start(vec![HttpExchange::new(
@@ -562,6 +570,9 @@ async fn custom_streams_preserve_text_input_and_reject_conflicting_final_input()
                 result.unwrap_err().kind,
                 runifold_model::ModelErrorKind::Protocol
             );
+            // Rejecting item.done closes the response before the final chunk.
+            // The request must match; a successful trailing write is not required.
+            server.assert_finished().unwrap();
         } else {
             let response = result.unwrap();
             let ContentPart::ToolCall(call) = &response.content[0] else {
@@ -569,11 +580,11 @@ async fn custom_streams_preserve_text_input_and_reject_conflicting_final_input()
             };
             assert_eq!(call.arguments, json!(final_input));
             assert_eq!(call.metadata["openai.tool_type"], "custom_tool_call");
+            server
+                .wait_until_finished(std::time::Duration::from_secs(5))
+                .await
+                .unwrap();
         }
-        server
-            .wait_until_finished(std::time::Duration::from_secs(5))
-            .await
-            .unwrap();
     }
 }
 

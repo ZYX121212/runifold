@@ -107,7 +107,7 @@ async fn interleaved_lanes_decode_independently_and_steering_is_only_acknowledge
         }
         if event.payload["type"] == "response.steer.accepted" {
             acknowledged = true;
-            assert!(event.canonical.is_empty());
+            assert_eq!(event.canonical, [] as [runifold_model::ModelStreamEvent; 0]);
         }
         let lane = usize::from(event.stream_id.as_deref() != Some("a"));
         for canonical in event.canonical {
@@ -312,7 +312,10 @@ async fn failed_response_releases_its_lane_without_interrupting_other_lanes() {
         .await
         .unwrap();
     assert_eq!(failure.payload["type"], "response.failed");
-    assert!(failure.canonical.is_empty());
+    assert_eq!(
+        failure.canonical,
+        [] as [runifold_model::ModelStreamEvent; 0]
+    );
     for _ in 0..5 {
         assert_eq!(
             connection
@@ -483,7 +486,10 @@ async fn request_error_without_a_sequence_is_visible_and_connection_expiry_is_fi
         rejected.payload["error"]["code"],
         "previous_response_not_found"
     );
-    assert!(rejected.canonical.is_empty());
+    assert_eq!(
+        rejected.canonical,
+        [] as [runifold_model::ModelStreamEvent; 0]
+    );
     connection
         .create_response(request(), Some("a"), None, ModelCallContext::new())
         .await

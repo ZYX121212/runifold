@@ -329,7 +329,7 @@ mod tests {
 
         assert_eq!(error.kind, GatewayErrorKind::PolicyDenied);
         assert_eq!(run.budget().usage().delegations, 0);
-        assert!(model.recorded_requests().is_empty());
+        assert_eq!(model.recorded_requests().len(), 0);
         assert!(journal.events().iter().any(|event| {
             matches!(
                 &event.kind,
@@ -368,7 +368,7 @@ mod tests {
 
         assert_eq!(error.kind, GatewayErrorKind::CapabilityDenied);
         assert_eq!(run.budget().usage().delegations, 0);
-        assert!(model.recorded_requests().is_empty());
+        assert_eq!(model.recorded_requests().len(), 0);
     }
 
     #[test]

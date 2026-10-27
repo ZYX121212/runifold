@@ -802,6 +802,10 @@ impl SamplingService {
         Ok(true)
     }
 
+    #[allow(
+        deprecated,
+        reason = "AtomicU64::try_update requires Rust 1.99; retain the Rust 1.88 MSRV"
+    )]
     pub(crate) fn rollback_task_budget(&self, tokens: u64) {
         let requests =
             self.accepted_requests
@@ -842,6 +846,10 @@ impl std::fmt::Debug for SamplingService {
     }
 }
 
+#[allow(
+    deprecated,
+    reason = "AtomicU64::try_update requires Rust 1.99; retain the Rust 1.88 MSRV"
+)]
 fn reserve(
     counter: &AtomicU64,
     amount: u64,

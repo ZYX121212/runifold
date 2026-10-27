@@ -151,7 +151,7 @@ impl OpenAiControlPlane {
             builder = builder.header("openai-project", project);
         }
         if let Some(remaining) = context.remaining() {
-            builder = builder.timeout(remaining);
+            builder = builder.timeout(crate::reliability::request_timeout(remaining));
         }
         builder
     }

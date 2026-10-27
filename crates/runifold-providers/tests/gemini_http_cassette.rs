@@ -168,3 +168,75 @@ async fn maps_structured_http_errors() {
     assert_eq!(error.kind, ModelErrorKind::Provider);
     assert_eq!(error.metadata["gemini.error.status"], "INVALID_ARGUMENT");
 }
+
+#[tokio::test]
+async fn signed_function_without_native_id_replays_exactly_with_its_result() {
+    let part = json!({"functionCall":{"name":"lookup","args":{"key":1}},"thoughtSignature":"private-signature"});
+    let first = json!({"candidates":[{"content":{"parts":[part.clone()]},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":10,"toolUsePromptTokenCount":2,"candidatesTokenCount":3,"thoughtsTokenCount":7}});
+    let second =
+        json!({"candidates":[{"content":{"parts":[{"text":"done"}]},"finishReason":"STOP"}]});
+    let response = |value: &serde_json::Value| {
+        ScriptedResponse::ok(vec![ResponseChunk::text(format!("data: {value}\n\n"))])
+            .with_header("content-type", "text/event-stream")
+    };
+    let path = "/v1beta/models/gemini-test:streamGenerateContent?alt=sse";
+    let server = CassetteServer::start(vec![
+        HttpExchange::new("POST", path, response(&first)),
+        HttpExchange::new("POST", path, response(&second)),
+    ])
+    .unwrap();
+    let client = client(&server);
+    let first = client
+        .invoke(request(), ModelCallContext::new())
+        .await
+        .unwrap();
+    assert_eq!(first.usage.total_tokens(), 22);
+    let call = first
+        .content
+        .iter()
+        .find_map(|part| {
+            if let ContentPart::ToolCall(call) = part {
+                Some(call)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    let result = runifold_model::ToolResult {
+        call_id: call.id.clone(),
+        name: Some(call.name.clone()),
+        content: vec![ContentPart::text("ok")],
+        structured_content: None,
+        is_error: false,
+        metadata: BTreeMap::new(),
+    };
+    let stored = serde_json::to_vec(&first.assistant_message().unwrap()).unwrap();
+    let restored: Message = serde_json::from_slice(&stored).unwrap();
+    let mut next = request().message(restored).message(
+        Message::new(
+            runifold_model::Role::Tool,
+            vec![ContentPart::ToolResult(result)],
+        )
+        .unwrap(),
+    );
+    next.generation.seed = Some(42);
+    next.provider_options.insert(
+        "gemini".into(),
+        json!({"generationConfig":{"thinkingConfig":{"thinkingBudget":128}}}),
+    );
+    client.invoke(next, ModelCallContext::new()).await.unwrap();
+    server.assert_finished().unwrap();
+    let body = server.observed_requests()[1].json_body().unwrap();
+    assert_eq!(body["contents"][1]["parts"][0], part);
+    assert!(
+        body["contents"][2]["parts"][0]["functionResponse"]
+            .get("id")
+            .is_none()
+    );
+    assert_eq!(body["generationConfig"]["seed"], 42);
+    assert_eq!(
+        body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+        128
+    );
+}

@@ -48,7 +48,7 @@ fn inspect_rejects_empty_and_invalid_exports() {
             .output()
             .unwrap();
         assert!(!output.status.success());
-        assert!(!output.stderr.is_empty());
+        assert_ne!(output.stderr, Vec::<u8>::new());
         fs::remove_file(path).unwrap();
     }
 }
@@ -65,7 +65,7 @@ fn inspect_unknown_sqlite_run_is_read_only_and_fails_cleanly() {
         .unwrap();
 
     assert!(!output.status.success());
-    assert!(!output.stderr.is_empty());
+    assert_ne!(output.stderr, Vec::<u8>::new());
     assert!(path.exists());
     fs::remove_file(path).unwrap();
 }
@@ -154,12 +154,7 @@ fn ai_explain_resolves_runtime_codes_and_existing_aliases() {
         assert!(output.status.success(), "{}", stderr(&output));
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["diagnostic"]["code"], expected);
-        assert!(
-            !value["diagnostic"]["canonical_fix"]
-                .as_str()
-                .unwrap()
-                .is_empty()
-        );
+        assert_ne!(value["diagnostic"]["canonical_fix"].as_str().unwrap(), "");
     }
     for args in [
         ["ai", "recipe", "missing", "--json"],

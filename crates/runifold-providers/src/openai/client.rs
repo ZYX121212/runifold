@@ -301,7 +301,7 @@ impl OpenAiClient {
             builder = builder.header("X-OpenRouter-Title", application_title);
         }
         if let Some(remaining) = context.remaining() {
-            builder = builder.timeout(remaining);
+            builder = builder.timeout(crate::reliability::request_timeout(remaining));
         }
         builder
     }
@@ -795,6 +795,14 @@ fn adapter_capabilities_for(config: &OpenAiConfig) -> ModelCapabilities {
         capabilities.structured_output = native();
         capabilities.image_input = native();
         capabilities.document_input = native();
+    }
+    if config.wire_protocol == OpenAiWireProtocol::ChatCompletions
+        && matches!(
+            config.provider.as_str(),
+            "deepseek" | "openrouter" | "zhipu" | "minimax" | "qwen"
+        )
+    {
+        capabilities.reasoning = FeatureSupport::new(SupportLevel::Native);
     }
     if config.provider == "ark" && config.wire_protocol == OpenAiWireProtocol::Responses {
         capabilities.reasoning = FeatureSupport::new(SupportLevel::Native);

@@ -193,7 +193,8 @@ browser Responses sockets and automatic host async scheduling retain the
 exclusions below. They are explicit integration prerequisites or feature limits,
 not assertions established by loopback tests.
 
-Completion evidence for this audit:
+Original source-worktree audit evidence (including the separately developed
+request scheduler, which is excluded from this provider-repair release):
 
 - `cargo test --workspace --all-features --locked`: 868 passed, 4 explicitly
   ignored (MinIO service acceptance, Ark live canary, OpenAI Realtime live canary
@@ -221,6 +222,24 @@ These are offline loopback and storage tests. They do not establish live model
 quality, account access, all OpenAI endpoints, browser Responses sockets, automatic
 hosted async scheduling, or server-side exactly-once effects. Decisions, GPT-Live
 and the managed Agents API are separate product/protocol integrations.
+
+## Release qualification follow-up
+
+The release gates also exposed two infrastructure issues: cargo-semver-checks
+0.49.0 cannot read Rust 1.99 rustdoc JSON, and a PostgreSQL fault fixture could
+lose a 40 ms cleanup lease before its heartbeat on a busy runner. CI and release
+validation now require checker 0.51.0, including replacement of older cached
+binaries. The fixture grants normal leases, checks the persisted heartbeat
+expiration, then explicitly expires a fenced lease with the database clock. It
+still checks rejection of expired heartbeats, owner takeover and stale writes.
+Neither fix relaxes the production lease or compatibility contracts. The final
+candidate must complete fresh CI, reference application, benchmark and soak gates.
+
+Malformed custom-tool and text-stream fixtures also distinguish a matched request
+from a fully written response: a protocol rejection intentionally closes the
+socket before later chunks can be sent. Rejection branches assert the error and
+matched request; valid branches still await successful writer completion. The
+custom-tool fixture delays the trailing chunk to exercise early closure explicitly.
 
 ## Official sources
 

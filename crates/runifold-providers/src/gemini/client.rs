@@ -89,7 +89,7 @@ impl GeminiClient {
             builder = builder.header("x-goog-api-key", api_key.expose_secret());
         }
         if let Some(remaining) = context.remaining() {
-            builder = builder.timeout(remaining);
+            builder = builder.timeout(crate::reliability::request_timeout(remaining));
         }
         Ok(builder)
     }

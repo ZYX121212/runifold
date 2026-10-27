@@ -145,7 +145,7 @@ async fn invokes_binary_event_stream_with_sigv4_and_redacted_temporary_credentia
             ..ModelUsage::default()
         }
     );
-    assert!(!response.provider_events.is_empty());
+    assert_ne!(response.provider_events, Vec::new());
     server.assert_finished().unwrap();
 
     let observed = server.observed_requests();
@@ -220,4 +220,89 @@ async fn one_sdk_client_isolates_sixteen_concurrent_binary_streams() {
     assert!(report.throughput_per_second.is_finite());
     server.assert_finished().unwrap();
     assert!(server.stats().max_in_flight > 1);
+}
+
+#[tokio::test]
+async fn signed_and_redacted_reasoning_survive_binary_http_and_serialization() {
+    let body = [
+        event("messageStart", &json!({"role":"assistant"})),
+        event("contentBlockStart", &json!({"contentBlockIndex":0})),
+        event("contentBlockDelta", &json!({"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"thought"}}})),
+        event("contentBlockDelta", &json!({"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"sig"}}})),
+        event("contentBlockStop", &json!({"contentBlockIndex":0})),
+        event("contentBlockStart", &json!({"contentBlockIndex":1})),
+        event("contentBlockDelta", &json!({"contentBlockIndex":1,"delta":{"reasoningContent":{"redactedContent":"cHJp"}}})),
+        event("contentBlockDelta", &json!({"contentBlockIndex":1,"delta":{"reasoningContent":{"redactedContent":"dmF0ZQ=="}}})),
+        event("contentBlockStop", &json!({"contentBlockIndex":1})),
+        event("messageStop", &json!({"stopReason":"end_turn"})),
+        event("metadata", &json!({"usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2},"metrics":{"latencyMs":1}})),
+    ].concat();
+    let server = CassetteServer::start(vec![
+        exchange(event_stream_response(&body)),
+        HttpExchange::new(
+            "POST",
+            format!("/model/{MODEL}/converse-stream"),
+            event_stream_response(&successful_body("done")),
+        ),
+    ])
+    .unwrap();
+    let client = client(&server);
+    let response = client
+        .invoke(request(), ModelCallContext::new())
+        .await
+        .unwrap();
+    let stored = serde_json::to_vec(&response.assistant_message().unwrap()).unwrap();
+    let restored: Message = serde_json::from_slice(&stored).unwrap();
+    client
+        .invoke(
+            request()
+                .message(restored)
+                .message(Message::user("continue")),
+            ModelCallContext::new(),
+        )
+        .await
+        .unwrap();
+    server.assert_finished().unwrap();
+    let body = server.observed_requests()[1].json_body().unwrap();
+    assert_eq!(
+        body["messages"][1]["content"][0]["reasoningContent"],
+        json!({"reasoningText":{"text":"thought","signature":"sig"}})
+    );
+    assert_eq!(
+        body["messages"][1]["content"][1]["reasoningContent"]["redactedContent"],
+        "cHJpdmF0ZQ=="
+    );
+}
+
+#[tokio::test]
+async fn native_json_schema_reaches_converse_output_config() {
+    let server = CassetteServer::start(vec![HttpExchange::new(
+        "POST",
+        format!("/model/{MODEL}/converse-stream"),
+        event_stream_response(&successful_body("{\"ok\":true}")),
+    )])
+    .unwrap();
+    let schema = json!({"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false});
+    let mut input = request();
+    input.output_format = runifold_model::OutputFormat::JsonSchema {
+        name: "answer".into(),
+        schema: schema.clone(),
+        strict: true,
+    };
+    client(&server)
+        .invoke(input, ModelCallContext::new())
+        .await
+        .unwrap();
+    server.assert_finished().unwrap();
+    let body = server.observed_requests()[0].json_body().unwrap();
+    let format = &body["outputConfig"]["textFormat"];
+    assert_eq!(format["type"], "json_schema");
+    assert_eq!(format["structure"]["jsonSchema"]["name"], "answer");
+    let actual: Value = serde_json::from_str(
+        format["structure"]["jsonSchema"]["schema"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(actual, schema);
 }

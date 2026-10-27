@@ -9,7 +9,7 @@ use runifold_model::{
 use serde_json::Value;
 
 /// Stateful translator from Anthropic Messages SSE payloads to canonical events.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct AnthropicEventDecoder {
     started: bool,
     completed: bool,
@@ -25,6 +25,13 @@ pub struct AnthropicEventDecoder {
 struct OpaqueBlock {
     value: Value,
     input_json: String,
+}
+
+impl std::fmt::Debug for AnthropicEventDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnthropicEventDecoder")
+            .finish_non_exhaustive()
+    }
 }
 
 impl AnthropicEventDecoder {
@@ -156,10 +163,6 @@ impl AnthropicEventDecoder {
                 signature: optional_string(block, "signature"),
                 redacted: false,
             },
-            "redacted_thinking" => ContentBlockKind::Reasoning {
-                signature: None,
-                redacted: true,
-            },
             _ => {
                 self.opaque_blocks.insert(
                     index,
@@ -173,6 +176,17 @@ impl AnthropicEventDecoder {
         };
         self.open_blocks.insert(index);
         let mut events = vec![ModelStreamEvent::ContentBlockStarted { index, kind }];
+        if block_type == "tool_use"
+            && let Some(caller) = block.get("caller")
+        {
+            if !caller.is_object() {
+                return Err(protocol("Anthropic tool caller must be an object"));
+            }
+            events.push(ModelStreamEvent::ContentBlockMetadata {
+                index,
+                metadata: BTreeMap::from([("anthropic.caller".into(), caller.clone())]),
+            });
+        }
         match block_type {
             "text" => {
                 if let Some(text) = block.get("text").and_then(Value::as_str)
@@ -338,8 +352,18 @@ impl AnthropicEventDecoder {
 
 fn decode_usage(value: Option<&Value>, previous: ModelUsage) -> ModelUsage {
     let value = value.unwrap_or(&Value::Null);
+    let cached =
+        optional_unsigned(value, "cache_read_input_tokens").unwrap_or(previous.cached_input_tokens);
+    let written = optional_unsigned(value, "cache_creation_input_tokens")
+        .unwrap_or(previous.cache_write_tokens);
+    let uncached = optional_unsigned(value, "input_tokens").unwrap_or_else(|| {
+        previous
+            .input_tokens
+            .saturating_sub(previous.cached_input_tokens)
+            .saturating_sub(previous.cache_write_tokens)
+    });
     ModelUsage {
-        input_tokens: optional_unsigned(value, "input_tokens").unwrap_or(previous.input_tokens),
+        input_tokens: uncached.saturating_add(cached).saturating_add(written),
         output_tokens: optional_unsigned(value, "output_tokens").unwrap_or(previous.output_tokens),
         cached_input_tokens: optional_unsigned(value, "cache_read_input_tokens")
             .unwrap_or(previous.cached_input_tokens),
@@ -429,6 +453,21 @@ mod tests {
     use serde_json::json;
 
     use super::AnthropicEventDecoder;
+
+    #[test]
+    fn cached_input_is_included_once_across_partial_usage_updates() {
+        let initial = super::decode_usage(
+            Some(&json!({"input_tokens":3,
+            "cache_read_input_tokens":7,"cache_creation_input_tokens":5})),
+            runifold_model::ModelUsage::default(),
+        );
+        assert_eq!(initial.input_tokens, 15);
+        let updated = super::decode_usage(Some(&json!({"output_tokens":9})), initial);
+        assert_eq!(updated.input_tokens, 15);
+        assert_eq!(updated.output_tokens, 9);
+        assert_eq!(updated.cached_input_tokens, 7);
+        assert_eq!(updated.cache_write_tokens, 5);
+    }
 
     #[test]
     fn decodes_fragmented_tool_input_and_usage() {

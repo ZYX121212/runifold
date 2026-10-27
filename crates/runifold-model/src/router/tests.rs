@@ -576,7 +576,7 @@ fn incompatible_capability_constraints_degrade_to_unknown() {
     let capabilities = futures_executor::block_on(router.capabilities(&logical())).unwrap();
 
     assert_eq!(capabilities.tools.level, SupportLevel::Unknown);
-    assert!(capabilities.tools.constraints.is_empty());
+    assert_eq!(capabilities.tools.constraints.len(), 0);
 }
 
 #[test]
@@ -722,7 +722,7 @@ fn retry_is_truncated_before_it_can_cross_the_deadline() {
 
     assert_eq!(error.kind, ModelErrorKind::DeadlineExceeded);
     assert_eq!(model.calls(), 1);
-    assert!(sleeper.delays().is_empty());
+    assert_eq!(sleeper.delays(), [] as [std::time::Duration; 0]);
 }
 
 #[test]

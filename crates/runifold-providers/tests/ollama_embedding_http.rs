@@ -72,6 +72,9 @@ async fn empty_batches_do_not_open_the_transport() {
         .await
         .unwrap();
 
-    assert!(batch.embeddings.is_empty());
-    assert!(server.observed_requests().is_empty());
+    assert_eq!(batch.embeddings, [] as [runifold_retrieval::Embedding; 0]);
+    assert_eq!(
+        server.observed_requests(),
+        [] as [runifold_provider_testkit::ObservedRequest; 0]
+    );
 }

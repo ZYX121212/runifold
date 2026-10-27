@@ -29,12 +29,17 @@ async fn rerank_maps_indices_to_original_documents() {
             "model":"rerank-test",
             "query":"capital",
             "documents":["alpha","beta"],
-            "top_n":2
+            "top_n":2,
+            "max_tokens_per_doc":2048,
+            "priority":10
         })),
     ])
     .unwrap();
     let reranker =
         CohereReranker::with_base_url("secret-test-token", "rerank-test", &server.base_url())
+            .unwrap()
+            .with_max_tokens_per_doc(std::num::NonZeroU32::new(2048).unwrap())
+            .with_priority(10)
             .unwrap();
     let candidates = ["alpha", "beta"]
         .into_iter()
@@ -59,4 +64,21 @@ async fn rerank_maps_indices_to_original_documents() {
         server.observed_requests()[0].headers["authorization"],
         "[REDACTED]"
     );
+}
+
+#[test]
+fn rejects_invalid_priority_and_credential_bearing_urls() {
+    assert!(
+        CohereReranker::new("key", "test")
+            .unwrap()
+            .with_priority(1000)
+            .is_err()
+    );
+    for url in [
+        "https://user:secret@example.com/",
+        "https://example.com/?key=secret",
+        "https://example.com/#fragment",
+    ] {
+        assert!(CohereReranker::with_base_url("key", "test", url).is_err());
+    }
 }

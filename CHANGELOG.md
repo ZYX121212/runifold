@@ -6,6 +6,8 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-27
+
 ### Fixed
 
 - Honor Cargo's resolved target directory throughout release verification and
@@ -127,6 +129,31 @@ breaking changes require a minor-version increment.
   `RF-PROVIDER-010` diagnostic; local admission denial is never automatically
   retried or bypassed through fallback.
 
+## [0.10.3] - 2026-10-14
+
+### Added
+
+- Added native Anthropic and Bedrock JSON Schema output, strict tool metadata,
+  native Anthropic PDF documents and explicit Cohere rerank truncation/priority.
+
+### Fixed
+
+- Updated rustls to 0.23.46 in workspace and standalone benchmark locks for
+  RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348 and RUSTSEC-2026-0349.
+  Also repaired the standalone benchmark h2 advisory and yanked chacha20 lock.
+- Preserved Anthropic/Bedrock private reasoning, Gemini signed function-call
+  parts, and DeepSeek/OpenRouter/Qwen/MiniMax/Zhipu thinking through persisted
+  assistant history and subsequent requests.
+- Preserved Ollama parallel tool-call/result IDs and opaque Gemini native parts
+  across persisted history and subsequent requests.
+- Corrected cached/thinking/tool-prompt usage accounting for Anthropic, Gemini,
+  DeepSeek and xAI; corrected Mistral seed and Groq output-limit field names.
+- Bounded Cohere streaming response reads and Bedrock encrypted reasoning,
+  protected private decoder Debug output and validated incompatible thinking
+  tool choices. See RFC 0077 for official sources and verification limits.
+
+## [0.10.2] - 2026-10-14
+
 ### Added
 
 - Added explicit OpenAI background response creation, retrieval, cancellation,
@@ -142,6 +169,23 @@ breaking changes require a minor-version increment.
 
 
 ### Fixed
+
+- Updated locked QUIC/TLS dependencies to resolve six RustSec advisories while
+  retaining the workspace MSRV; updated standalone benchmark locks together.
+- Kept current Rust quality checks passing and rebuilt the real MinIO CI fixture
+  from pinned official source commits after upstream images became unavailable.
+  Reliability evidence records source commits and actual build identities.
+- Rounded browser request timeouts up to Fetch's millisecond precision and
+  bounded them to the supported timer range, preserving deadline classification
+  without changing native timeout precision.
+- Included continuation, stream consistency and native WebSocket ownership
+  regressions in the multi-hour reliability soak.
+- Updated the pinned API compatibility checker for Rust 1.99 rustdoc output and
+  replaced stale cached checker versions during CI and release validation.
+- Made PostgreSQL cleanup lease fault injection use explicit database-clock expiry,
+  preserving heartbeat, expired-owner and fencing assertions under CI load.
+- Corrected malformed-stream fixtures to verify protocol rejection and matched
+  requests without requiring successful writes after the client closes its socket.
 
 - Corrected the client Tool Search regression fixture to use valid function
   metadata values, ensuring it tests unsupported Tool kinds rather than an

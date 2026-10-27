@@ -55,38 +55,7 @@ pub(crate) fn encode_chat_request_for(
             ResponseMode::Streaming
         )),
     );
-    insert_optional(
-        &mut body,
-        "temperature",
-        request.generation.temperature.map(Value::from),
-    );
-    insert_optional(
-        &mut body,
-        "top_p",
-        request.generation.top_p.map(Value::from),
-    );
-    let token_limit_field = match dialect {
-        OpenAiChatDialect::OpenAi => "max_completion_tokens",
-        OpenAiChatDialect::Compatible => "max_tokens",
-    };
-    insert_optional(
-        &mut body,
-        token_limit_field,
-        request.generation.max_output_tokens.map(Value::from),
-    );
-    if dialect == OpenAiChatDialect::OpenAi
-        && matches!(request.selected_response_mode(), ResponseMode::Streaming)
-    {
-        body.insert("stream_options".into(), json!({"include_usage": true}));
-    }
-    insert_optional(&mut body, "seed", request.generation.seed.map(Value::from));
-    if !request.generation.stop.is_empty() {
-        body.insert(
-            "stop".into(),
-            serde_json::to_value(&request.generation.stop)
-                .map_err(|error| invalid(format!("failed to encode stop sequences: {error}")))?,
-        );
-    }
+    encode_chat_generation(&mut body, request, provider, dialect)?;
     if !request.tools.is_empty() {
         body.insert(
             "tools".into(),
@@ -132,6 +101,7 @@ pub(crate) fn encode_chat_request_for(
         );
     }
     merge_options(&mut body, request, provider)?;
+    validate_compatible_thinking(&mut body, provider)?;
     super::encode::validate_model_parameters(&body, provider, true)?;
     Ok(Value::Object(body))
 }
@@ -160,6 +130,56 @@ fn validate_chat_tool_metadata(
     Ok(())
 }
 
+fn encode_chat_generation(
+    body: &mut Map<String, Value>,
+    request: &ModelRequest,
+    provider: &str,
+    dialect: OpenAiChatDialect,
+) -> Result<(), ModelError> {
+    insert_optional(
+        body,
+        "temperature",
+        request.generation.temperature.map(Value::from),
+    );
+    insert_optional(body, "top_p", request.generation.top_p.map(Value::from));
+    let token_limit_field = match dialect {
+        OpenAiChatDialect::OpenAi => "max_completion_tokens",
+        OpenAiChatDialect::Compatible if provider == "groq" => "max_completion_tokens",
+        OpenAiChatDialect::Compatible => "max_tokens",
+    };
+    insert_optional(
+        body,
+        token_limit_field,
+        request.generation.max_output_tokens.map(Value::from),
+    );
+    if dialect == OpenAiChatDialect::OpenAi
+        && matches!(request.selected_response_mode(), ResponseMode::Streaming)
+    {
+        body.insert("stream_options".into(), json!({"include_usage": true}));
+    }
+    insert_optional(
+        body,
+        if provider == "mistral" {
+            "random_seed"
+        } else {
+            "seed"
+        },
+        request.generation.seed.map(Value::from),
+    );
+    if !request.generation.stop.is_empty() {
+        body.insert(
+            "stop".into(),
+            serde_json::to_value(&request.generation.stop)
+                .map_err(|error| invalid(format!("failed to encode stop sequences: {error}")))?,
+        );
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "One exhaustive canonical content-to-chat mapping keeps role and flush boundaries together"
+)]
 fn encode_chat_messages(
     request: &ModelRequest,
     provider: &str,
@@ -167,6 +187,8 @@ fn encode_chat_messages(
 ) -> Result<Vec<Value>, ModelError> {
     let mut messages = Vec::with_capacity(request.messages.len());
     for message in &request.messages {
+        let first_output = messages.len();
+        let mut reasoning = String::new();
         if message
             .metadata
             .contains_key(&format!("{provider}.message_blocks"))
@@ -185,6 +207,7 @@ fn encode_chat_messages(
                 "role": chat_role(message.role, dialect)?,
                 "content": text,
             }));
+            apply_chat_reasoning(&mut messages[first_output..], message, provider, &reasoning)?;
             continue;
         }
         let mut content = Vec::new();
@@ -237,6 +260,22 @@ fn encode_chat_messages(
                         "content": encode_tool_result_envelope(result)?
                     }));
                 }
+                ContentPart::Reasoning(part)
+                    if message.role == Role::Assistant
+                        && matches!(
+                            provider,
+                            "deepseek" | "openrouter" | "zhipu" | "minimax" | "qwen"
+                        ) =>
+                {
+                    if part.signature.is_some() || part.redacted || !part.provider_data.is_empty() {
+                        return Err(unsupported(
+                            "signed/private chat reasoning requires its provider replay metadata",
+                        ));
+                    }
+                    if let Some(text) = &part.text {
+                        reasoning.push_str(text);
+                    }
+                }
                 ContentPart::Refusal { text } if message.role == Role::Assistant => {
                     content.push(json!({"type":"refusal","refusal":text}));
                 }
@@ -254,8 +293,102 @@ fn encode_chat_messages(
             &mut tool_calls,
             dialect,
         )?;
+        if message.role == Role::Assistant
+            && messages.len() == first_output
+            && (!reasoning.is_empty()
+                || message
+                    .metadata
+                    .contains_key(&format!("{provider}.chat_replay")))
+        {
+            messages.push(json!({"role":"assistant","content":null}));
+        }
+        apply_chat_reasoning(&mut messages[first_output..], message, provider, &reasoning)?;
     }
     Ok(messages)
+}
+
+fn validate_compatible_thinking(
+    body: &mut Map<String, Value>,
+    provider: &str,
+) -> Result<(), ModelError> {
+    let thinking = body
+        .get("thinking")
+        .and_then(|v| v.get("type"))
+        .and_then(Value::as_str)
+        == Some("enabled");
+    let forced = body
+        .get("tool_choice")
+        .is_some_and(|choice| choice == "required" || choice.is_object());
+    if forced
+        && ((provider == "qwen" && body.get("enable_thinking") == Some(&Value::Bool(true)))
+            || (provider == "deepseek" && thinking))
+    {
+        return Err(invalid(
+            "forced tool choice is incompatible with this provider's thinking mode",
+        ));
+    }
+    if provider == "deepseek" {
+        match body.get("tool_choice").and_then(Value::as_str) {
+            Some("auto") => {
+                body.remove("tool_choice");
+            }
+            Some("none") => {
+                body.remove("tool_choice");
+                body.remove("tools");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn apply_chat_reasoning(
+    messages: &mut [Value],
+    original: &runifold_model::Message,
+    provider: &str,
+    reasoning: &str,
+) -> Result<(), ModelError> {
+    if original.role != Role::Assistant {
+        return Ok(());
+    }
+    let replay = original.metadata.get(&format!("{provider}.chat_replay"));
+    if replay.is_none() && reasoning.is_empty() {
+        return Ok(());
+    }
+    if !matches!(
+        provider,
+        "deepseek" | "openrouter" | "zhipu" | "minimax" | "qwen"
+    ) {
+        return Err(unsupported(
+            "chat reasoning replay is not defined for this provider",
+        ));
+    }
+    let target = messages
+        .last_mut()
+        .ok_or_else(|| invalid("reasoning replay requires an assistant message"))?;
+    if target.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Err(invalid("reasoning replay requires an assistant output"));
+    }
+    if let Some(replay) = replay {
+        let fields = replay
+            .as_object()
+            .ok_or_else(|| invalid("chat replay metadata must be an object"))?;
+        for (key, value) in fields {
+            match key.as_str() {
+                "reasoning_content" | "reasoning" | "thinking" if value.is_string() => {}
+                "reasoning_details" if provider == "openrouter" && value.is_array() => {}
+                _ => return Err(invalid("unsupported chat reasoning replay field or type")),
+            }
+            target[key] = value.clone();
+        }
+    } else {
+        target[if matches!(provider, "deepseek" | "zhipu" | "minimax" | "qwen") {
+            "reasoning_content"
+        } else {
+            "reasoning"
+        }] = Value::String(reasoning.into());
+    }
+    Ok(())
 }
 
 fn flush_chat_message(
@@ -401,7 +534,6 @@ fn insert_optional(body: &mut Map<String, Value>, name: &str, value: Option<Valu
 }
 
 /// Stateful decoder for OpenAI-compatible Chat Completions chunks.
-#[derive(Debug)]
 pub struct ChatCompletionsDecoder {
     provider: String,
     started: bool,
@@ -416,6 +548,15 @@ pub struct ChatCompletionsDecoder {
     next_index: u32,
     finish_reason: Option<FinishReason>,
     usage: ModelUsage,
+    replay: Map<String, Value>,
+    detail_positions: BTreeMap<String, usize>,
+}
+
+impl std::fmt::Debug for ChatCompletionsDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatCompletionsDecoder")
+            .finish_non_exhaustive()
+    }
 }
 
 impl ChatCompletionsDecoder {
@@ -435,6 +576,8 @@ impl ChatCompletionsDecoder {
             next_index: 0,
             finish_reason: None,
             usage: ModelUsage::default(),
+            replay: Map::new(),
+            detail_positions: BTreeMap::new(),
         }
     }
 
@@ -478,7 +621,7 @@ impl ChatCompletionsDecoder {
             self.started = true;
         }
         if let Some(usage) = payload.get("usage").filter(|value| value.is_object()) {
-            self.usage = chat_usage(usage);
+            self.usage = chat_usage(usage, &self.provider);
             events.push(ModelStreamEvent::UsageUpdated { usage: self.usage });
         }
         if choices.len() > 1 {
@@ -491,6 +634,12 @@ impl ChatCompletionsDecoder {
                 return Err(protocol("chat choice must explicitly identify index zero"));
             }
             let delta = choice.get("delta").unwrap_or(&Value::Null);
+            if matches!(
+                self.provider.as_str(),
+                "deepseek" | "openrouter" | "zhipu" | "minimax" | "qwen"
+            ) {
+                collect_chat_reasoning(delta, &mut self.replay, &mut self.detail_positions)?;
+            }
             if let Some(reasoning) = reasoning_delta(delta) {
                 let index = self.ensure_reasoning(&mut events)?;
                 events.push(ModelStreamEvent::ReasoningDelta {
@@ -595,7 +744,14 @@ impl ChatCompletionsDecoder {
         events.push(ModelStreamEvent::UsageUpdated { usage: self.usage });
         events.push(ModelStreamEvent::ResponseCompleted {
             finish_reason,
-            provider_metadata: BTreeMap::new(),
+            provider_metadata: if self.replay.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(
+                    format!("{}.chat_replay", self.provider),
+                    Value::Object(std::mem::take(&mut self.replay)),
+                )])
+            },
         });
         Ok(events)
     }
@@ -774,7 +930,13 @@ pub(crate) fn decode_complete_chat_response(
         .ok_or_else(|| protocol("complete chat choice is missing `finish_reason`"))?;
 
     let mut delta = Map::new();
-    for field in ["reasoning_content", "reasoning", "thinking", "refusal"] {
+    for field in [
+        "reasoning_content",
+        "reasoning",
+        "thinking",
+        "reasoning_details",
+        "refusal",
+    ] {
         if let Some(value) = message.get(field).filter(|value| !value.is_null()) {
             delta.insert(field.into(), value.clone());
         }
@@ -906,16 +1068,32 @@ fn normalize_complete_chat_content(
     }
 }
 
-fn chat_usage(usage: &Value) -> ModelUsage {
+fn chat_usage(usage: &Value, provider: &str) -> ModelUsage {
+    let input = usage
+        .get("prompt_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let reported_output = usage
+        .get("completion_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output = if provider == "xai" {
+        reported_output.max(
+            usage
+                .get("total_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .saturating_sub(input),
+        )
+    } else {
+        reported_output
+    };
     ModelUsage {
         input_tokens: usage
             .get("prompt_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0),
-        output_tokens: usage
-            .get("completion_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
+        output_tokens: output,
         reasoning_tokens: nested_or_top_level_u64(
             usage,
             "completion_tokens_details",
@@ -925,9 +1103,109 @@ fn chat_usage(usage: &Value) -> ModelUsage {
             usage,
             "prompt_tokens_details",
             "cached_tokens",
+        )
+        .max(
+            usage
+                .get("prompt_cache_hit_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
         ),
         ..ModelUsage::default()
     }
+}
+
+fn collect_chat_reasoning(
+    delta: &Value,
+    replay: &mut Map<String, Value>,
+    positions: &mut BTreeMap<String, usize>,
+) -> Result<(), ModelError> {
+    for field in ["reasoning_content", "reasoning", "thinking"] {
+        if let Some(value) = delta.get(field).filter(|value| !value.is_null()) {
+            let text = value
+                .as_str()
+                .ok_or_else(|| protocol("chat reasoning must be a string"))?;
+            let target = replay
+                .entry(field)
+                .or_insert_with(|| Value::String(String::new()));
+            if let Value::String(target) = target {
+                target.push_str(text);
+            }
+        }
+    }
+    if let Some(details) = delta
+        .get("reasoning_details")
+        .filter(|value| !value.is_null())
+    {
+        let details = details
+            .as_array()
+            .ok_or_else(|| protocol("reasoning_details must be an array"))?;
+        let target = replay
+            .entry("reasoning_details")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| protocol("reasoning_details state is invalid"))?;
+        for (position, detail) in details.iter().enumerate() {
+            let fields = detail
+                .as_object()
+                .ok_or_else(|| protocol("reasoning detail must be an object"))?;
+            for field in ["text", "summary", "data", "signature"] {
+                if fields
+                    .get(field)
+                    .is_some_and(|value| !value.is_null() && !value.is_string())
+                {
+                    return Err(protocol("reasoning detail fragment must be a string"));
+                }
+            }
+            let key = if let Some(index) = detail.get("index").filter(|v| !v.is_null()) {
+                format!(
+                    "index:{}",
+                    index
+                        .as_u64()
+                        .ok_or_else(|| protocol("reasoning detail index must be nonnegative"))?
+                )
+            } else if let Some(id) = detail.get("id").and_then(Value::as_str) {
+                format!("id:{id}")
+            } else {
+                format!("position:{position}")
+            };
+            if let Some(existing) = positions.get(&key) {
+                let current = target[*existing]
+                    .as_object_mut()
+                    .ok_or_else(|| protocol("reasoning detail state is invalid"))?;
+                for (field, value) in fields {
+                    if value.is_null() {
+                        continue;
+                    }
+                    if matches!(field.as_str(), "text" | "summary" | "data" | "signature") {
+                        let fragment = value.as_str().ok_or_else(|| {
+                            protocol("reasoning detail fragment must be a string")
+                        })?;
+                        if current.get(field).is_some_and(Value::is_null) {
+                            current.remove(field);
+                        }
+                        let old = current
+                            .entry(field.clone())
+                            .or_insert_with(|| Value::String(String::new()));
+                        let Value::String(old) = old else {
+                            return Err(protocol("reasoning detail changed its field type"));
+                        };
+                        old.push_str(fragment);
+                    } else if current
+                        .get(field)
+                        .is_some_and(|old| !old.is_null() && old != value)
+                    {
+                        return Err(protocol("reasoning detail changed identity between chunks"));
+                    } else {
+                        current.insert(field.clone(), value.clone());
+                    }
+                }
+            } else {
+                positions.insert(key, target.len());
+                target.push(detail.clone());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn reasoning_delta(delta: &Value) -> Option<&str> {
@@ -961,7 +1239,10 @@ fn chat_finish_reason(reason: &str) -> FinishReason {
 }
 
 fn chat_stream_error(provider: &str, value: &Value) -> ModelError {
-    let message = "provider reported a failed response; inspect structured error classification";
+    let message = value
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("compatible Chat Completions stream failed");
     let mut error = ModelError::local(ModelErrorKind::Provider, message);
     error.provider = Some(provider.into());
     for field in ["type", "code", "param"] {
@@ -1027,6 +1308,134 @@ mod tests {
     struct ChatAnswer {
         value: String,
         explanation: Option<String>,
+    }
+
+    #[test]
+    fn provider_usage_preserves_reasoning_and_cache_accounting() {
+        let usage = super::chat_usage(
+            &json!({"prompt_tokens":32,"completion_tokens":9,
+            "total_tokens":135,"completion_tokens_details":{"reasoning_tokens":94}}),
+            "xai",
+        );
+        assert_eq!(usage.output_tokens, 103);
+        assert_eq!(usage.total_tokens(), 135);
+        let usage = super::chat_usage(
+            &json!({"prompt_tokens":20,"completion_tokens":4,
+            "prompt_cache_hit_tokens":15}),
+            "deepseek",
+        );
+        assert_eq!(usage.cached_input_tokens, 15);
+        assert_eq!(usage.total_tokens(), 24);
+    }
+
+    #[test]
+    fn indexed_reasoning_fragments_validate_types_and_preserve_identity() {
+        let mut replay = serde_json::Map::new();
+        let mut positions = BTreeMap::new();
+        super::collect_chat_reasoning(
+            &json!({"reasoning_details":[{"index":0,"type":"reasoning.encrypted","data":null}]}),
+            &mut replay,
+            &mut positions,
+        )
+        .unwrap();
+        super::collect_chat_reasoning(
+            &json!({"reasoning_details":[{"index":0,"data":"a"}]}),
+            &mut replay,
+            &mut positions,
+        )
+        .unwrap();
+        super::collect_chat_reasoning(
+            &json!({"reasoning_details":[{"index":0,"data":"b"}]}),
+            &mut replay,
+            &mut positions,
+        )
+        .unwrap();
+        assert_eq!(replay["reasoning_details"][0]["data"], "ab");
+        assert!(
+            super::collect_chat_reasoning(
+                &json!({"reasoning_details":[{"index":0,"type":"reasoning.text"}]}),
+                &mut replay,
+                &mut positions
+            )
+            .is_err()
+        );
+        assert!(
+            super::collect_chat_reasoning(
+                &json!({"reasoning_details":[{"index":1,"data":42}]}),
+                &mut replay,
+                &mut positions
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn profile_parameter_names_match_vendor_contracts() {
+        let mut request =
+            ModelRequest::new(ModelRef::new("mistral", "test"), Message::user("hello"));
+        request.generation.seed = Some(42);
+        request.generation.max_output_tokens = Some(20);
+        let body = encode_chat_request(&request, "mistral").unwrap();
+        assert_eq!(body["random_seed"], 42);
+        assert!(body.get("seed").is_none());
+        let body = encode_chat_request(&request, "groq").unwrap();
+        assert_eq!(body["max_completion_tokens"], 20);
+        assert!(body.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn reasoning_tool_turn_replays_after_persistence() {
+        let response = decode_chunks_for(
+            "deepseek",
+            [json!({"id":"r1","model":"test",
+            "choices":[{"index":0,"delta":{"reasoning_content":"look up first",
+                "tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},
+                "finish_reason":"tool_calls"}]})],
+        );
+        let stored = serde_json::to_vec(&response.assistant_message().unwrap()).unwrap();
+        let restored: Message = serde_json::from_slice(&stored).unwrap();
+        let body = encode_chat_request(
+            &ModelRequest::new(ModelRef::new("deepseek", "test"), Message::user("hello"))
+                .message(restored),
+            "deepseek",
+        )
+        .unwrap();
+        assert_eq!(body["messages"][1]["reasoning_content"], "look up first");
+        assert_eq!(body["messages"][1]["tool_calls"][0]["id"], "call1");
+        assert_eq!(
+            body["messages"][1]["tool_calls"][0]["function"]["arguments"],
+            "{}"
+        );
+    }
+
+    #[test]
+    fn thinking_preflight_rejects_forced_choice_but_allows_default_auto() {
+        for (provider, options) in [
+            ("deepseek", json!({"thinking":{"type":"enabled"}})),
+            ("qwen", json!({"enable_thinking":true})),
+        ] {
+            let mut body = options.as_object().unwrap().clone();
+            body.insert("tool_choice".into(), json!("required"));
+            assert!(super::validate_compatible_thinking(&mut body, provider).is_err());
+            body.insert("tool_choice".into(), json!("auto"));
+            super::validate_compatible_thinking(&mut body, provider).unwrap();
+            if provider == "deepseek" {
+                assert!(!body.contains_key("tool_choice"));
+                body.insert("tool_choice".into(), json!("none"));
+                body.insert("tools".into(), json!([{"type":"function"}]));
+                super::validate_compatible_thinking(&mut body, provider).unwrap();
+                assert!(!body.contains_key("tool_choice"));
+                assert!(!body.contains_key("tools"));
+            }
+        }
+    }
+
+    #[test]
+    fn decoder_debug_omits_private_replay_payloads() {
+        let mut decoder = ChatCompletionsDecoder::new("openrouter");
+        decoder.decode(json!({"id":"r1","model":"test","choices":[{"index":0,
+            "delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"private-secret"}]},"finish_reason":null}]})).unwrap();
+        assert!(!format!("{decoder:?}").contains("private-secret"));
     }
 
     #[test]

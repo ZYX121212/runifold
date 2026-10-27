@@ -119,6 +119,6 @@ mod tests {
             RunErrorKind::Extension("acme.custom".into()).code(),
             "acme.custom"
         );
-        assert!(!RunErrorKind::Transport.recommendation().is_empty());
+        assert_ne!(RunErrorKind::Transport.recommendation(), "");
     }
 }

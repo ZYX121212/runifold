@@ -844,7 +844,7 @@
         "cargo test -p runifold --test ai_api_contract --locked"
       ],
       "related": [
-        "docs/rfcs/0077-budgeted-agent-context.md",
+        "docs/rfcs/0078-budgeted-agent-context.md",
         "docs/ai/recipes/durable-conversation.md",
         "crates/runifold-agent/src/agent/context_runtime.rs"
       ],
