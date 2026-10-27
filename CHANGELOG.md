@@ -18,6 +18,24 @@ breaking changes require a minor-version increment.
 
 ### Fixed
 
+- Make the S3 timeout fixture cover requests timing out before headers are sent,
+  retaining bounded completion and reliable server-thread cleanup.
+
+- Keep original Python Run/Stream consumers alive when another consumer or event
+  loop misuses the handle; reject restarts and invalid shutdown before mutation.
+- Preserve every native retry-safety variant across Python errors, keep legacy
+  Tool failure values compatible, and retain safe model categories/remediation.
+- Validate Python Tool identities/signatures early and close returned coroutine
+  objects without executing hidden work. Preserve rich canonical Tool results.
+- Retain InvalidOutput classification for Tool serialization failures, including
+  unsupported values and non-finite numeric output, in durable Effect receipts.
+- Isolate mutable Python usage projections from canonical execution facts.
+- Keep example scripts in source distributions instead of installing a generic
+  top-level `examples` namespace from wheels.
+- Retain complete API prefixes without requiring a trailing slash. Build Linux
+  SDK wheels under manylinux_2_28, audit the independent native lockfile, and gate
+  Python formatting/imports and installed-native regression tests in CI.
+
 - Preserve a present JSON `null` structured Tool channel through Effect and
   transcript serialization, distinct from an absent structured channel.
 

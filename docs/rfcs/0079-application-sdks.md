@@ -8,7 +8,7 @@
 The 22-crate Rust workspace already exposes ProviderRuntime, AgentBuilder,
 Agent, typed Tools, structured outputs, streams, budgets, cancellation and durable
 execution through the runifold facade. Application examples and AI recipes exist.
-There is no Python package, native Python binding or Python distribution gate.
+At proposal time there was no Python package, native Python binding or Python distribution gate.
 The product charter excludes a mandatory proxy service and a second Agent loop.
 
 ## Proposed directory boundary
@@ -98,6 +98,28 @@ Installed-extension tests found that serde mapped a present structured JSON null
 to an absent Tool output during Effect deserialization. ToolOutput and ToolResult
 now preserve this distinction without changing the wire shape or public fields;
 local and installed-native tests cover both absent and explicit null channels.
+
+## Host boundary hardening
+
+A Run/Stream has one active consumer on its starting asyncio loop. Rejecting a
+second consumer or a different loop must not cancel the original execution.
+Closing an unstarted Stream is terminal. Invalid shutdown arguments must fail
+before changing Client state; a closed Client takes precedence over admission
+pressure. Tool identity and Python-callable signature errors fail at registration.
+Returned coroutine objects are closed without executing hidden work.
+Mutable usage projections cannot modify canonical execution records.
+Output serialization failures retain the native InvalidOutput category in durable
+Effect receipts while preserving the canonical Tool-error policy.
+
+The Python retry enum carries all native states, including idempotency-required,
+unsafe-after-output and unsafe-after-effect. Retain the first binding's local
+`Unsafe` value for compatibility and translate it conservatively for Tool error
+serialization. Preserve safe model error categories and native remediation hints.
+
+Normalize a missing slash on API prefixes without discarding native endpoint
+validation. Installed HTTP tests cover both prefix spellings and partial-output
+failure without replay. Linux wheel qualification uses manylinux_2_28 and a
+PyPI compatibility audit; private native dependencies have their own audit gate.
 
 ## Implementation basis
 

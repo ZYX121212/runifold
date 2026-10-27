@@ -147,18 +147,6 @@ impl NativeRuntime {
                 })
             })
             .collect();
-        let permit = self.runs.clone().try_acquire_owned().map_err(|_| {
-            errors::NativeError::new_err(
-                errors::failure(
-                    "RF-PROVIDER-010",
-                    "AdmissionDenied",
-                    "Safe",
-                    "Client active-run limit reached; wait for an existing Run to close",
-                    &context,
-                )
-                .to_string(),
-            )
-        })?;
         let (events, receiver) = mpsc::channel(32);
         let state = Arc::new(RunState {
             context,
@@ -171,7 +159,7 @@ impl NativeRuntime {
             delivered: AtomicBool::new(false),
             checkpoint_id,
         });
-        let runtime = {
+        let (runtime, permit) = {
             let mut registry = lock(&self.registry);
             let runtime = registry
                 .runtime
@@ -189,11 +177,23 @@ impl NativeRuntime {
                     )
                 })?
                 .clone();
+            let permit = self.runs.clone().try_acquire_owned().map_err(|_| {
+                errors::NativeError::new_err(
+                    errors::failure(
+                        "RF-PROVIDER-010",
+                        "AdmissionDenied",
+                        "Safe",
+                        "Client active-run limit reached; wait for an existing Run to close",
+                        &state.context,
+                    )
+                    .to_string(),
+                )
+            })?;
             registry.runs.retain(|_, run| run.strong_count() > 0);
             registry
                 .runs
                 .insert(state.context.run_id().to_string(), Arc::downgrade(&state));
-            runtime
+            (runtime, permit)
         };
         execution::start(
             StartExecution {

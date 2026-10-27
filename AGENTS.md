@@ -7,7 +7,8 @@ execute and verify. Treat recurring AI mistakes as DX defects to investigate.
 
 ## Start here
 
-- Building an application: use [task recipes](docs/ai/README.md).
+- Building a Rust application: use [task recipes](docs/ai/README.md).
+- Building a Python application: use [SDK examples and lifetime rules](bindings/python/README.md).
 - Modifying the framework: read this file, then the affected crate's `AGENTS.md`.
 - Machine-readable architecture, features, recipes and checks:
   [runifold.ai.json](runifold.ai.json).
@@ -58,6 +59,7 @@ kinds and Cargo features. See [architecture](docs/ai/architecture.md) for entry 
 | Change callable dispatch | `crates/runifold-agent/src/agent/callable.rs`; preserve capability preflight, Effect identity and Tool/Gateway errors |
 | Add public API | Owning crate, its `lib.rs`, facade re-export if appropriate, rustdoc, public-surface regression test, changelog and relevant RFC |
 | Add durable state | Store contract first, backend implementations next; replay, conflict, crash and migration tests |
+| Change Python SDK | [adapter guide](bindings/python/AGENTS.md); independent Cargo lockfile, installed-wheel HTTP tests, MSRV and SDK CI |
 | Add a test | Local invariant near implementation; cross-crate public API in `tests/`; provider protocol with provider-testkit |
 | Change AI knowledge | Edit `docs/ai/catalog.json` / source; regenerate with `python3 scripts/ai-knowledge.py --write` |
 

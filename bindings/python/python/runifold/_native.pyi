@@ -1,4 +1,5 @@
-from typing import Any, Awaitable
+from collections.abc import Awaitable
+from typing import Any
 
 __version__: str
 __lock_sha256__: str
