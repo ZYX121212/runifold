@@ -603,15 +603,27 @@ mod tests {
 
     #[tokio::test]
     async fn request_timeout_bounds_put_and_reconciliation() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let endpoint = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
         let server = thread::spawn(move || {
-            let (put, request) = read_request(&listener);
-            assert!(request.starts_with("PUT "));
-            let (head, request) = read_request(&listener);
-            assert!(request.starts_with("HEAD "));
-            thread::sleep(Duration::from_millis(100));
-            drop((put, head));
+            // Keep every connection unresponsive. A PUT may time out before its
+            // headers reach this server, so HEAD can be the first visible
+            // request. Wire ordering/signatures are covered by the replay test.
+            let mut connections = Vec::new();
+            while !server_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((stream, _)) => connections.push(stream),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("timeout fixture accept failed: {error}"),
+                }
+            }
         });
         let signer = S3SigV4Presigner::new(
             S3SigV4PresignerConfig::new(endpoint, "us-east-1", 60, true).unwrap(),
@@ -628,11 +640,17 @@ mod tests {
         let archive = S3TombstoneArchive::new(config, Arc::new(signer));
 
         let started = Instant::now();
-        let error = archive.archive(batch()).await.unwrap_err();
+        let result = tokio::time::timeout(Duration::from_secs(1), archive.archive(batch())).await;
+        // Always stop the fixture before assertions, including a missing client
+        // deadline, so a failing test cannot leave an accept thread behind.
+        stop.store(true, Ordering::Release);
+        server.join().unwrap();
+        let error = result
+            .expect("PUT and reconciliation must enforce request deadlines")
+            .unwrap_err();
 
         assert_eq!(error.kind(), WorkflowTaskTombstoneArchiveErrorKind::Timeout);
         assert!(started.elapsed() < Duration::from_secs(1));
-        server.join().unwrap();
     }
 
     #[test]

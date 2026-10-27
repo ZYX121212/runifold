@@ -18,6 +18,9 @@ breaking changes require a minor-version increment.
 
 ### Fixed
 
+- Make the S3 timeout fixture cover requests timing out before headers are sent,
+  retaining bounded completion and reliable server-thread cleanup.
+
 - Keep original Python Run/Stream consumers alive when another consumer or event
   loop misuses the handle; reject restarts and invalid shutdown before mutation.
 - Preserve every native retry-safety variant across Python errors, keep legacy
