@@ -253,10 +253,10 @@ class Tool:
             try:
                 value = self._output.validate_python(result, strict=True)
                 output = ToolOutput.json(self._output.dump_python(value, mode="json"))
-            except ValidationError:
+            except (TypeError, ValueError):
                 return _error(
                     "InvalidOutput",
-                    "Tool result failed type validation",
+                    "Tool result must satisfy its type and finite JSON contract",
                     RetrySafety.UNKNOWN,
                 )
         try:

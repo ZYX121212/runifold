@@ -108,6 +108,8 @@ before changing Client state; a closed Client takes precedence over admission
 pressure. Tool identity and Python-callable signature errors fail at registration.
 Returned coroutine objects are closed without executing hidden work.
 Mutable usage projections cannot modify canonical execution records.
+Output serialization failures retain the native InvalidOutput category in durable
+Effect receipts while preserving the canonical Tool-error policy.
 
 The Python retry enum carries all native states, including idempotency-required,
 unsafe-after-output and unsafe-after-effect. Retain the first binding's local

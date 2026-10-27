@@ -254,3 +254,49 @@ async def test_usage_projection_cannot_mutate_canonical_execution_facts():
         original = result.canonical
         result.usage["tokens"] = 999
         assert result.canonical == original
+
+
+@pytest.mark.parametrize("bad_kind", ["nonfinite", "opaque"])
+async def test_invalid_outputs_keep_the_native_contract_error_policy(bad_kind, tmp_path):
+    import json
+    import sqlite3
+    from typing import Any
+
+    effects = []
+    if bad_kind == "nonfinite":
+
+        @tool(effect="non_idempotent_write", name="invalid")
+        async def invalid() -> float:
+            effects.append("one effect")
+            return float("nan")
+    else:
+
+        @tool(effect="non_idempotent_write", name="invalid")
+        async def invalid() -> dict[str, Any]:
+            effects.append("one effect")
+            return {"value": object()}
+
+    async with scripted_client(tool_call("invalid", {}), text("handled")) as client:
+        path = str(tmp_path / "contract.sqlite")
+        result = await client.agent("contract", tools=[invalid]).run_checkpointed(
+            "hello", path=path
+        )
+        part = next(item for item in result.transcript if item["role"] == "tool")["content"][0]
+        assert part["is_error"] is True
+        assert "finite JSON contract" in str(part["content"])
+        with sqlite3.connect(path) as database:
+            records = [
+                json.loads(row[0])
+                for row in database.execute("SELECT record_json FROM runifold_effects")
+            ]
+
+        def has_invalid_output(value):
+            if isinstance(value, dict):
+                return value.get("kind") == "InvalidOutput" or any(
+                    has_invalid_output(item) for item in value.values()
+                )
+            return isinstance(value, list) and any(has_invalid_output(item) for item in value)
+
+        assert any(has_invalid_output(record) for record in records)
+        assert effects == ["one effect"]
+        assert len(recorded_requests(client)) == 2

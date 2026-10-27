@@ -24,6 +24,8 @@ breaking changes require a minor-version increment.
   Tool failure values compatible, and retain safe model categories/remediation.
 - Validate Python Tool identities/signatures early and close returned coroutine
   objects without executing hidden work. Preserve rich canonical Tool results.
+- Retain InvalidOutput classification for Tool serialization failures, including
+  unsupported values and non-finite numeric output, in durable Effect receipts.
 - Isolate mutable Python usage projections from canonical execution facts.
 - Keep example scripts in source distributions instead of installing a generic
   top-level `examples` namespace from wheels.
