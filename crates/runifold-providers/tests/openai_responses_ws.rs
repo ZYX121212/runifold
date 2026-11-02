@@ -559,6 +559,10 @@ async fn websocket_model_maps_self_namespaced_calls_to_the_advertised_flat_tool(
         };
         assert_eq!(call.name, "lookup");
         assert_eq!(call.metadata["openai.namespace"], "lookup");
+        assert_eq!(
+            response.assistant_message().unwrap().metadata["runifold.response.origin_model.v1"],
+            json!(request().model)
+        );
     }
     server.await.unwrap();
 }

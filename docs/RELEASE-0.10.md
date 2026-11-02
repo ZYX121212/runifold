@@ -8,6 +8,21 @@ public contracts; incompatible changes require a new minor version and migration
 notes. This release does not promise 1.x API stability or a long-term support
 window for older minors.
 
+## Patch 0.10.6: model-scoped Responses continuation
+
+OpenAI Responses private reasoning is scoped to the physical request model,
+including compatible gateways, automatic fallback and reverse model switches.
+The adapter records the request alias instead of assuming a provider-reported
+deployment name is interchangeable. Public text and Tool call/result ordering
+remain intact; stored canonical history is not rewritten.
+
+Existing reasoning-bearing messages without verified origin metadata are
+rejected locally before transport. Explicitly migrate verified histories using
+`runifold.response.origin_model.v1`, or construct a derived sending view without
+private reasoning while retaining the original record. See
+[RFC 0005](rfcs/0005-provider-identity-and-wire-protocol.md#model-scoped-responses-continuation-state).
+This patch does not claim to resolve unrelated HTTP 400 responses.
+
 ## Supported paths and responsibilities
 
 | Path | Runtime contract | Application responsibility |

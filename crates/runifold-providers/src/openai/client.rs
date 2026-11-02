@@ -240,7 +240,7 @@ impl OpenAiClient {
             ));
         }
         let streaming = matches!(request.selected_response_mode(), ResponseMode::Streaming);
-        let warnings = self
+        let mut warnings = self
             .capabilities_for(&request.model)
             .validate_request(request, streaming)?;
         let body = match self.config.wire_protocol {
@@ -249,6 +249,18 @@ impl OpenAiClient {
                 encode_chat_request_for(request, &self.config.provider, self.config.chat_dialect)?
             }
         };
+        if self.config.wire_protocol == OpenAiWireProtocol::Responses {
+            let omitted = super::encode::omitted_reasoning_count(request)?;
+            if omitted > 0 {
+                warnings.push(ModelWarning {
+                    code: "openai.reasoning_model_projection".into(),
+                    message:
+                        "Private reasoning from another model was omitted from the sending view"
+                            .into(),
+                    metadata: BTreeMap::from([("omitted_items".into(), Value::from(omitted))]),
+                });
+            }
+        }
         if body.get("background").and_then(Value::as_bool) == Some(true) {
             return Err(ModelError::local(
                 ModelErrorKind::UnsupportedFeature,
@@ -375,7 +387,7 @@ impl Model for OpenAiClient {
                     BTreeMap::new()
                 },
             };
-            match response_mode {
+            let stream = match response_mode {
                 ResponseMode::Complete => {
                     let payload = read_complete_body(
                         response,
@@ -398,17 +410,30 @@ impl Model for OpenAiClient {
                         )?,
                     };
                     apply_tool_dispatch_aliases(&mut events, &decoder_config.tool_aliases);
-                    Ok(complete_event_stream(events, warnings))
+                    complete_event_stream(events, warnings)
                 }
-                _ => Ok(event_stream(
-                    response,
-                    decoder_config,
-                    cancellation,
-                    warnings,
-                )),
-            }
+                _ => event_stream(response, decoder_config, cancellation, warnings),
+            };
+            Ok(with_origin_model(stream, request.model))
         })
     }
+}
+
+pub(super) fn with_origin_model(stream: ModelEventStream, model: ModelRef) -> ModelEventStream {
+    Box::pin(stream.map(move |item| {
+        item.map(|mut event| {
+            if let ModelStreamEvent::ResponseCompleted {
+                provider_metadata, ..
+            } = &mut event
+            {
+                provider_metadata.insert(
+                    "runifold.response.origin_model.v1".into(),
+                    serde_json::to_value(&model).expect("ModelRef is serializable"),
+                );
+            }
+            event
+        })
+    }))
 }
 
 fn complete_event_stream(

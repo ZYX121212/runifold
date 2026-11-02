@@ -675,3 +675,228 @@ async fn background_stream_creation_and_reconnect_preserve_storage_policy_and_id
     assert_eq!(server.observed_requests().len(), 2);
     server.assert_finished().unwrap();
 }
+
+fn reasoning_switch_server(mode: ResponseMode, reasoning: &Value, call: &Value) -> CassetteServer {
+    let prefix = if mode == ResponseMode::Complete {
+        ScriptedResponse::json(200, &complete(json!([reasoning, call]))).unwrap()
+    } else {
+        let events = [
+            json!({"type":"response.created","response":{"id":"resp_test","model":"gpt-test"}}),
+            json!({"type":"response.output_item.done","output_index":0,"item":reasoning}),
+            json!({"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"lookup","arguments":"","status":"in_progress"}}),
+            json!({"type":"response.function_call_arguments.done","output_index":1,"item_id":"fc_a","arguments":"{}"}),
+            json!({"type":"response.output_item.done","output_index":1,"item":call}),
+            json!({"type":"response.completed","response":complete(json!([reasoning, call]))}),
+        ];
+        ScriptedResponse::ok(
+            events
+                .into_iter()
+                .enumerate()
+                .map(|(i, mut event)| {
+                    event["sequence_number"] = json!(i);
+                    ResponseChunk::text(format!("data: {event}\n\n"))
+                })
+                .collect(),
+        )
+        .with_header("content-type", "text/event-stream")
+    };
+    let b_reasoning =
+        json!({"type":"reasoning","id":"rs_b","encrypted_content":"private-b","summary":[]});
+    CassetteServer::start(vec![
+        HttpExchange::new("POST", "/v1/responses", prefix),
+        HttpExchange::new(
+            "POST",
+            "/v1/responses",
+            ScriptedResponse::json(429, &json!({"error":{"type":"rate_limit_error"}})).unwrap(),
+        ),
+        HttpExchange::new(
+            "POST",
+            "/v1/responses",
+            ScriptedResponse::json(
+                200,
+                &complete(json!([
+                    b_reasoning,
+                    message("msg_b", "final_answer", "done")
+                ])),
+            )
+            .unwrap(),
+        ),
+        HttpExchange::new(
+            "POST",
+            "/v1/responses",
+            ScriptedResponse::json(
+                200,
+                &complete(json!([message("msg_a", "final_answer", "back")])),
+            )
+            .unwrap(),
+        ),
+    ])
+    .unwrap()
+}
+
+fn lookup_tool_result() -> Message {
+    use runifold_model::{Role, ToolResult};
+    Message::new(
+        Role::Tool,
+        vec![ContentPart::ToolResult(ToolResult {
+            call_id: "call_a".into(),
+            name: Some("lookup".into()),
+            content: vec![ContentPart::text("tool result")],
+            structured_content: None,
+            is_error: false,
+            metadata: BTreeMap::new(),
+        })],
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn reasoning_is_scoped_to_physical_model_across_fallback_and_return() {
+    use runifold_model::ModelRouter;
+    use std::sync::Arc;
+
+    let reasoning =
+        json!({"type":"reasoning","id":"rs_a","encrypted_content":"private-a","summary":[]});
+    let call = json!({"type":"function_call","id":"fc_a","call_id":"call_a","name":"lookup","arguments":"{}","status":"completed"});
+    for mode in [ResponseMode::Complete, ResponseMode::Streaming] {
+        let server = reasoning_switch_server(mode, &reasoning, &call);
+        let client = Arc::new(OpenAiClient::new(
+            OpenAiConfig::compatible(
+                "ftai",
+                "test-secret",
+                &format!("{}v1/", server.base_url()),
+                runifold_providers::openai::OpenAiWireProtocol::Responses,
+            )
+            .unwrap(),
+        ));
+        let a = ModelRef::new("ftai", "alias-a");
+        let b = ModelRef::new("ftai", "alias-b");
+        let prefix = client
+            .invoke(
+                ModelRequest::new(a.clone(), Message::user("inspect")).response_mode(mode),
+                ModelCallContext::new(),
+            )
+            .await
+            .unwrap();
+        let history = prefix.assistant_message().unwrap();
+        let mut history: Message =
+            serde_json::from_value(serde_json::to_value(history).unwrap()).unwrap();
+        history
+            .content
+            .insert(0, ContentPart::text("public prefix"));
+        assert_eq!(
+            history.metadata["runifold.response.origin_model.v1"],
+            json!(a)
+        );
+        let result = lookup_tool_result();
+        let canonical = ModelRequest::new(a.clone(), Message::user("inspect"))
+            .message(history)
+            .message(result)
+            .response_mode(ResponseMode::Complete);
+        let before = serde_json::to_value(&canonical).unwrap();
+        let nested = ModelRouter::builder(ModelRef::new("logical", "inner"))
+            .route("a", client.clone(), a.clone())
+            .route("b", client.clone(), b.clone())
+            .build()
+            .unwrap();
+        let router = ModelRouter::builder(ModelRef::new("logical", "outer"))
+            .route(
+                "nested",
+                Arc::new(nested),
+                ModelRef::new("logical", "inner"),
+            )
+            .build()
+            .unwrap();
+        let mut invocation = canonical.clone();
+        invocation.model = ModelRef::new("logical", "outer");
+        let response = router
+            .invoke(invocation, ModelCallContext::new())
+            .await
+            .unwrap();
+        assert_eq!(serde_json::to_value(&canonical).unwrap(), before);
+        assert_eq!(
+            response
+                .warnings
+                .iter()
+                .filter(|warning| warning.code == "openai.reasoning_model_projection")
+                .count(),
+            1
+        );
+        let b_history = response.assistant_message().unwrap();
+        assert_eq!(
+            b_history.metadata["runifold.response.origin_model.v1"],
+            json!(b)
+        );
+        client
+            .invoke(canonical.message(b_history), ModelCallContext::new())
+            .await
+            .unwrap();
+        let observed = server.observed_requests();
+        let first = observed[1].json_body().unwrap();
+        let fallback = observed[2].json_body().unwrap();
+        let returned = observed[3].json_body().unwrap();
+        assert_eq!(first["input"][2], reasoning);
+        assert_eq!(fallback["model"], "alias-b");
+        assert_eq!(fallback["input"][1]["content"][0]["text"], "public prefix");
+        assert_eq!(fallback["input"][2], call);
+        assert_eq!(fallback["input"][3]["call_id"], "call_a");
+        assert_eq!(fallback["input"][3]["type"], "function_call_output");
+        assert_eq!(returned["input"][2], reasoning);
+        assert!(
+            !returned["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["id"] == "rs_b")
+        );
+        server.assert_finished().unwrap();
+    }
+}
+
+#[test]
+fn legacy_reasoning_requires_verified_origin_and_empty_projection_is_allowed() {
+    use runifold_model::{ModelErrorKind, ProviderData, Role};
+    let item = ContentPart::ProviderOpaque(ProviderData {
+        provider: "openai-compatible".into(),
+        kind: "input_item".into(),
+        value: json!({"type":"reasoning","encrypted_content":"encrypted-secret"}),
+    });
+    let mut history = Message::new(Role::Assistant, vec![item]).unwrap();
+    for origin in [
+        None,
+        Some(json!("bad")),
+        Some(json!({"provider":"openai","name":""})),
+    ] {
+        history.metadata.clear();
+        if let Some(origin) = origin {
+            history
+                .metadata
+                .insert("runifold.response.origin_model.v1".into(), origin);
+        }
+        let error = encode_request(&request().message(history.clone())).unwrap_err();
+        assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
+        assert!(!error.message.contains("encrypted-secret"));
+    }
+    history.metadata.insert(
+        "runifold.response.origin_model.v1".into(),
+        json!(ModelRef::new("openai", "other")),
+    );
+    assert_eq!(
+        encode_request(&request().message(history.clone())).unwrap()["input"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    history.metadata.insert(
+        "runifold.response.origin_model.v1".into(),
+        json!(request().model),
+    );
+    assert_eq!(
+        encode_request(&request().message(history)).unwrap()["input"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}

@@ -349,10 +349,16 @@ fn provider_message_metadata_survives_checkpoint_and_completed_replay() {
         vec![ContentPart::text("answer")],
         FinishReason::Stop,
     );
-    let metadata = BTreeMap::from([(
-        "openai.message_blocks".into(),
-        json!([{"id":"msg_done","phase":"final_answer"}]),
-    )]);
+    let metadata = BTreeMap::from([
+        (
+            "openai.message_blocks".into(),
+            json!([{"id":"msg_done","phase":"final_answer"}]),
+        ),
+        (
+            "runifold.response.origin_model.v1".into(),
+            json!(ModelRef::new("gateway", "physical-alias")),
+        ),
+    ]);
     if let Some(ModelStreamEvent::ResponseCompleted {
         provider_metadata, ..
     }) = events.last_mut()
@@ -1750,6 +1756,56 @@ fn tool_minimum_rejects_an_obviously_insufficient_shared_budget() {
         }
     ));
     assert_eq!(model.recorded_requests().len(), 0);
+}
+
+#[test]
+fn conversation_history_preserves_physical_origin() {
+    let model = ScriptedModel::new();
+    let origin = json!(ModelRef::new("gateway", "physical-alias"));
+    let mut events = response_events(
+        "first",
+        vec![ContentPart::text("hello")],
+        FinishReason::Stop,
+    );
+    if let Some(ModelStreamEvent::ResponseCompleted {
+        provider_metadata, ..
+    }) = events.last_mut()
+    {
+        provider_metadata.insert("runifold.response.origin_model.v1".into(), origin.clone());
+    } else {
+        panic!("fixture must end with response completion");
+    }
+    model.enqueue(events);
+    model.enqueue(response_events(
+        "second",
+        vec![ContentPart::text("back")],
+        FinishReason::Stop,
+    ));
+    let agent = Agent::new(
+        "assistant",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    );
+    let store = InMemoryConversationStore::new();
+    let id = ConversationId::new();
+    let namespace = MemoryNamespace::parse("tenant.user").unwrap();
+    let policy = ConversationContextPolicy::new(ConversationWindow::new(8).unwrap());
+    for input in ["hello", "continue"] {
+        futures_executor::block_on(agent.run_conversation(
+            input,
+            &root_run(Budget::default()),
+            &store,
+            id,
+            namespace.clone(),
+            policy,
+        ))
+        .unwrap();
+    }
+    let requests = model.recorded_requests();
+    assert_eq!(
+        requests[1].messages[1].metadata["runifold.response.origin_model.v1"],
+        origin
+    );
 }
 
 #[test]

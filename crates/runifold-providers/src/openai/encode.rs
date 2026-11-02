@@ -16,6 +16,10 @@ use super::schema::prepare_strict_schema;
 
 /// Encodes a canonical request as an `OpenAI` Responses API request.
 ///
+/// Private reasoning is replayed only to its recorded origin model. Reasoning
+/// from other models is omitted from this wire view; the request is unchanged.
+/// Legacy reasoning history requires verified origin metadata before encoding.
+///
 /// # Errors
 ///
 /// Returns [`ModelError`] when a canonical feature has no lossless Responses
@@ -413,6 +417,43 @@ fn message_blocks<'a>(
         .transpose()
 }
 
+// Only the protocol adapter interprets vendor item types. Canonical history is
+// never rewritten: each physical invocation independently derives its wire view.
+fn reasoning_matches_target(
+    message: &runifold_model::Message,
+    request: &ModelRequest,
+) -> Result<bool, ModelError> {
+    let origin = message.metadata.get("runifold.response.origin_model.v1")
+        .ok_or_else(|| invalid("reasoning history has no origin model; explicitly migrate verified history with runifold.response.origin_model.v1 or remove private reasoning from a derived input"))?;
+    let origin: runifold_model::ModelRef =
+        serde_json::from_value(origin.clone()).map_err(|_| {
+            invalid("reasoning history origin model is malformed; restore verified origin metadata")
+        })?;
+    if origin.provider.trim().is_empty() || origin.name.trim().is_empty() {
+        return Err(invalid(
+            "reasoning history origin model is empty; restore verified origin metadata",
+        ));
+    }
+    Ok(origin == request.model)
+}
+
+pub(super) fn omitted_reasoning_count(request: &ModelRequest) -> Result<u64, ModelError> {
+    let mut count = 0;
+    for message in &request.messages {
+        for part in &message.content {
+            if let ContentPart::ProviderOpaque(data) = part
+                && data.kind == "input_item"
+                && data.value["type"] == "reasoning"
+                && (data.provider == request.model.provider || data.provider == "openai-compatible")
+                && !reasoning_matches_target(message, request)?
+            {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
 pub(crate) fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelError> {
     let mut input = Vec::new();
     for message in &request.messages {
@@ -451,15 +492,7 @@ pub(crate) fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelEr
                 }
                 ContentPart::ToolCall(call) => {
                     flush_message(&mut input, message.role, &mut message_content, descriptor)?;
-                    let arguments = call
-                        .raw_arguments
-                        .clone()
-                        .unwrap_or_else(|| call.arguments.to_string());
-                    input.push(encode_function_call(
-                        call,
-                        arguments,
-                        &request.model.provider,
-                    )?);
+                    input.push(encode_function_call(call, &request.model.provider)?);
                 }
                 ContentPart::ToolResult(result) => {
                     flush_message(&mut input, message.role, &mut message_content, descriptor)?;
@@ -470,6 +503,11 @@ pub(crate) fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelEr
                         || data.provider == "openai-compatible")
                         && data.kind == "input_item" =>
                 {
+                    if data.value["type"] == "reasoning"
+                        && !reasoning_matches_target(message, request)?
+                    {
+                        continue;
+                    }
                     flush_message(&mut input, message.role, &mut message_content, descriptor)?;
                     input.push(data.value.clone());
                 }
@@ -518,9 +556,12 @@ pub(crate) fn encode_input(request: &ModelRequest) -> Result<Vec<Value>, ModelEr
 
 fn encode_function_call(
     call: &runifold_model::ToolCall,
-    arguments: String,
     provider: &str,
 ) -> Result<Value, ModelError> {
+    let arguments = call
+        .raw_arguments
+        .clone()
+        .unwrap_or_else(|| call.arguments.to_string());
     let mut item = Map::from_iter([
         ("type".into(), Value::String("function_call".into())),
         ("call_id".into(), Value::String(call.id.clone())),
