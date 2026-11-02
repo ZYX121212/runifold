@@ -39,7 +39,9 @@ fn lease() -> LeaseDuration {
 }
 
 fn crash_lease() -> LeaseDuration {
-    LeaseDuration::new(Duration::from_millis(100)).expect("test crash lease is positive")
+    // Setup performs real durable writes before the simulated crash. Give those
+    // writes scheduling headroom; expiry itself is checked explicitly below.
+    LeaseDuration::new(Duration::from_secs(5)).expect("test crash lease is positive")
 }
 
 fn task(name: &str) -> WorkflowTask {
@@ -132,6 +134,9 @@ async fn workflow_state_survives_reopen_with_interrupt_history_and_budget_projec
         .await
         .expect("claim succeeds")
         .expect("task is claimable");
+    // Reproduce setup taking longer than the former 100 ms lease, without
+    // relying on the host happening to stall during a long reliability run.
+    tokio::time::sleep(Duration::from_millis(250)).await;
     assert_eq!(
         store
             .reserve_budget(
@@ -179,7 +184,12 @@ async fn workflow_state_survives_reopen_with_interrupt_history_and_budget_projec
             .tokens,
         100
     );
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    tokio::time::sleep(Duration::from_millis(crash_lease().as_millis() + 20)).await;
+    let expired = reopened
+        .reserve_budget(claimed.lease.clone(), Budget::default(), Usage::default())
+        .await
+        .expect_err("expired owner cannot reserve budget before takeover");
+    assert_eq!(expired.kind, WorkflowStoreErrorKind::LeaseLost);
     let recovered = reopened
         .claim(worker("worker-b"), lease())
         .await

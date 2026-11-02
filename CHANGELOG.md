@@ -6,7 +6,7 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
-## [0.10.6] - 2026-11-02
+## [0.10.6] - 2026-11-03
 
 ### Fixed
 
@@ -15,6 +15,8 @@ breaking changes require a minor-version increment.
   Preserve canonical history and Tool pairing; report omitted foreign-model
   reasoning in response warnings. Reject legacy reasoning without verified origin
   metadata locally rather than forwarding it to an arbitrary model.
+- Stabilize the SQLite crash-recovery fixture under slow durable setup while
+  explicitly verifying expired owners are rejected before successor takeover.
 
 ## [0.10.5] - 2026-10-27
 
