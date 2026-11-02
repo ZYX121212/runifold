@@ -122,12 +122,19 @@ impl ModelResponse {
     ///
     /// This does not grant authority or retain execution-journal events. Provider
     /// adapters may use the metadata to restore original message boundaries.
+    /// `runifold.response.origin_model.v1` retains the physical request target
+    /// supplied by the adapter, falling back to the reported response model for
+    /// manually constructed responses. Preserve it when serializing history.
     ///
     /// # Errors
     /// Returns an error when the response has no content.
     pub fn assistant_message(&self) -> Result<crate::Message, crate::ModelError> {
         let mut message = crate::Message::new(crate::Role::Assistant, self.content.clone())?;
         message.metadata.clone_from(&self.provider_metadata);
+        message
+            .metadata
+            .entry("runifold.response.origin_model.v1".into())
+            .or_insert_with(|| serde_json::json!(&self.model));
         Ok(message)
     }
 
@@ -181,6 +188,27 @@ mod response_tests {
             provider_metadata: BTreeMap::new(),
             provider_events: Vec::new(),
         }
+    }
+
+    #[test]
+    fn assistant_history_retains_physical_origin_over_reported_model() {
+        let mut response = response(vec![ContentPart::text("hello")]);
+        let fallback = response.assistant_message().unwrap();
+        assert_eq!(
+            fallback.metadata["runifold.response.origin_model.v1"],
+            serde_json::json!(response.model)
+        );
+        let physical = ModelRef::new("gateway", "alias");
+        response.provider_metadata.insert(
+            "runifold.response.origin_model.v1".into(),
+            serde_json::json!(physical),
+        );
+        let history = response.assistant_message().unwrap();
+        assert_eq!(
+            history.metadata["runifold.response.origin_model.v1"],
+            serde_json::json!(physical)
+        );
+        assert_eq!(history.content, response.content);
     }
 
     #[test]

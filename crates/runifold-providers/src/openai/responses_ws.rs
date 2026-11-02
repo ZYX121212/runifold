@@ -571,6 +571,7 @@ impl Model for OpenAiResponsesWebSocketModel {
     ) -> ModelFuture<'_, Result<ModelEventStream, ModelError>> {
         Box::pin(async move {
             let (_, warnings) = self.client.prepare(&request)?;
+            let origin_model = request.model.clone();
             let atomic = request.selected_response_mode() == runifold_model::ResponseMode::Complete;
             let aliases = tool_dispatch_aliases(&request, self.client.provider())?;
             let lock = Arc::clone(&self.connection).lock_owned();
@@ -600,7 +601,10 @@ impl Model for OpenAiResponsesWebSocketModel {
                     // Return the socket before yielding completion: invoke() stops
                     // polling immediately when it receives the terminal event.
                     if completed && !atomic { *guard = connection.take(); }
-                    for event in event.canonical {
+                    for mut event in event.canonical {
+                        if let ModelStreamEvent::ResponseCompleted { provider_metadata, .. } = &mut event {
+                            provider_metadata.insert("runifold.response.origin_model.v1".into(), serde_json::to_value(&origin_model).expect("ModelRef is serializable"));
+                        }
                         let started = matches!(event, ModelStreamEvent::ResponseStarted { .. });
                         if atomic {
                             let _ = canonical_check.push(event.clone())?;
