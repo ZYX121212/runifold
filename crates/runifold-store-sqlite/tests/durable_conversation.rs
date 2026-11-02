@@ -92,10 +92,16 @@ async fn durable_turn_atomically_survives_reopen_and_resume() {
     let store = Arc::new(SqliteStore::open(&path).expect("SQLite store opens"));
     let model = ScriptedModel::new();
     let mut events = response_events("terminal", "persisted");
-    let metadata = BTreeMap::from([(
-        "openai.message_blocks".into(),
-        serde_json::json!([{"id":"msg_done","phase":"final_answer"}]),
-    )]);
+    let metadata = BTreeMap::from([
+        (
+            "openai.message_blocks".into(),
+            serde_json::json!([{"id":"msg_done","phase":"final_answer"}]),
+        ),
+        (
+            "runifold.response.origin_model.v1".into(),
+            serde_json::json!(ModelRef::new("gateway", "physical-alias")),
+        ),
+    ]);
     if let Some(ModelStreamEvent::ResponseCompleted {
         provider_metadata, ..
     }) = events.last_mut()
