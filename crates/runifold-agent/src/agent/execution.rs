@@ -782,6 +782,13 @@ impl Agent {
 
         let calls = tool_calls_from(&response.content);
         validate_tool_call_completion(&calls, &response.finish_reason)?;
+        if response.finish_reason == runifold_model::FinishReason::Length
+            && self.completion_requirement.retries_truncated_response()
+        {
+            self.complete_terminal_candidate(response, run, progress, checkpoint, *context)
+                .await?;
+            return Ok(None);
+        }
         if already_reviewed
             || !self
                 .turn_review
@@ -918,7 +925,16 @@ impl Agent {
                         "agent": self.name,
                         "turn": turn,
                         "kind": format!("{:?}", error.kind),
+                        "retry_safety": error.retry_safety,
+                        "diagnostics": error.diagnostic_metadata(),
+                        "route_receipt": error.metadata.get("runifold.router.receipt"),
                     }),
+                    caused_by,
+                )?;
+                consume_failed_model_usage(
+                    run,
+                    error.metadata.get("runifold.router.receipt"),
+                    context_usage(&error),
                     caused_by,
                 )?;
                 return Err(error.into());
@@ -932,7 +948,14 @@ impl Agent {
                 "turn": turn,
                 "finish_reason": response.finish_reason,
                 "usage": response.usage,
+                "route_receipt": response.provider_metadata.get("runifold.router.receipt"),
             }),
+            caused_by,
+        )?;
+        consume_failed_model_usage(
+            run,
+            response.provider_metadata.get("runifold.router.receipt"),
+            None,
             caused_by,
         )?;
         consume_budget(run, response.usage.into(), caused_by)?;
@@ -948,31 +971,45 @@ impl Agent {
         observer: &dyn AgentObserver,
     ) -> Result<ModelResponse, ModelError> {
         let context = ModelCallContext::for_run(run);
-        let cancellation = context.cancellation().clone();
-        let opening = self.model.stream(request, context);
-        let mut stream = match select(Box::pin(cancellation.cancelled()), Box::pin(opening)).await {
-            Either::Left(_) => return Err(cancelled_model_error()),
-            Either::Right((result, _)) => result?,
-        };
-        let mut accumulator = ModelStreamAccumulator::new();
-        loop {
-            let next = stream.next();
-            let event = match select(Box::pin(cancellation.cancelled()), Box::pin(next)).await {
-                Either::Left(_) => return Err(cancelled_model_error()),
-                Either::Right((Some(event), _)) => event?,
-                Either::Right((None, _)) => {
-                    return Err(ModelError::local(
-                        ModelErrorKind::Protocol,
-                        "model stream ended before a terminal response event",
-                    ));
+        let receipt_context = context.clone();
+        let result = async {
+            let cancellation = context.cancellation().clone();
+            let opening = self.model.stream(request, context);
+            let mut stream =
+                match select(Box::pin(cancellation.cancelled()), Box::pin(opening)).await {
+                    Either::Left(_) => return Err(cancelled_model_error()),
+                    Either::Right((result, _)) => result?,
+                };
+            let mut accumulator = ModelStreamAccumulator::new();
+            loop {
+                let next = stream.next();
+                let event = match select(Box::pin(cancellation.cancelled()), Box::pin(next)).await {
+                    Either::Left(_) => return Err(cancelled_model_error()),
+                    Either::Right((Some(event), _)) => event?,
+                    Either::Right((None, _)) => {
+                        return Err(ModelError::local(
+                            ModelErrorKind::Protocol,
+                            "model stream ended before a terminal response event",
+                        ));
+                    }
+                };
+                let response = accumulator.push(event.clone())?;
+                emit_agent_event(observer, AgentStreamEvent::Model { turn, event }).await;
+                if let Some(response) = response {
+                    return Ok(response);
                 }
-            };
-            let response = accumulator.push(event.clone())?;
-            emit_agent_event(observer, AgentStreamEvent::Model { turn, event }).await;
-            if let Some(response) = response {
-                return Ok(response);
             }
         }
+        .await;
+        result.map_err(|mut error: ModelError| {
+            if let Some(receipt) = receipt_context.route_receipt() {
+                error
+                    .metadata
+                    .entry("runifold.router.receipt".into())
+                    .or_insert_with(|| serde_json::json!(receipt));
+            }
+            error
+        })
     }
 
     fn validate_config(&self) -> Result<(), AgentError> {
@@ -1507,4 +1544,35 @@ fn tool_calls_from(content: &[ContentPart]) -> Vec<ToolCall> {
             _ => None,
         })
         .collect()
+}
+
+// Failed physical attempts may already have reported billable usage even when
+// the selected response succeeds. Missing usage remains unknown, never zero debt.
+fn consume_failed_model_usage(
+    run: &RunContext,
+    receipt: Option<&serde_json::Value>,
+    fallback: Option<runifold_model::ModelUsage>,
+    caused_by: Option<EventId>,
+) -> Result<(), AgentError> {
+    if let Some(receipt) = receipt.and_then(|value| {
+        serde_json::from_value::<runifold_model::ModelRouteReceipt>(value.clone()).ok()
+    }) {
+        for attempt in receipt.attempts {
+            if attempt.outcome != runifold_model::ModelRequestOutcome::Completed
+                && let Some(usage) = attempt.usage
+            {
+                consume_budget(run, usage.into(), caused_by)?;
+            }
+        }
+    } else if let Some(usage) = fallback {
+        consume_budget(run, usage.into(), caused_by)?;
+    }
+    Ok(())
+}
+
+fn context_usage(error: &ModelError) -> Option<runifold_model::ModelUsage> {
+    error
+        .metadata
+        .get("runifold.request.usage")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
 }

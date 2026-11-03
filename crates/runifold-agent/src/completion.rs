@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 pub struct CompletionRequirement {
     max_terminal_repairs: u32,
     retry_empty_response: bool,
+    #[serde(default)]
+    retry_truncated_response: bool,
 }
 
 impl CompletionRequirement {
@@ -18,6 +20,7 @@ impl CompletionRequirement {
         Self {
             max_terminal_repairs: 0,
             retry_empty_response: false,
+            retry_truncated_response: false,
         }
     }
 
@@ -36,6 +39,20 @@ impl CompletionRequirement {
         self
     }
 
+    /// Allows Length responses to consume the existing terminal repair allowance.
+    /// Partial history and usage are retained; partial Tool calls are never executed.
+    /// This continues a known completed response, never an unknown request outcome.
+    #[must_use]
+    pub const fn retry_truncated_response(mut self, enabled: bool) -> Self {
+        self.retry_truncated_response = enabled;
+        self
+    }
+
+    /// Returns whether Length completions may consume a repair turn.
+    pub const fn retries_truncated_response(self) -> bool {
+        self.retry_truncated_response
+    }
+
     /// Returns the configured terminal repair limit.
     pub const fn max_terminal_repairs(self) -> u32 {
         self.max_terminal_repairs
@@ -52,6 +69,8 @@ impl CompletionRequirement {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TerminalRequirementFailureKind {
+    /// The provider ended a response at its output length limit.
+    TruncatedResponse,
     /// No model-visible terminal content was produced.
     EmptyResponse,
     /// A structured response contained no textual JSON body.
@@ -84,6 +103,9 @@ impl TerminalRequirementFailure {
 
     pub(crate) const fn repairable(&self, policy: CompletionRequirement) -> bool {
         match self.kind {
+            TerminalRequirementFailureKind::TruncatedResponse => {
+                policy.retries_truncated_response()
+            }
             TerminalRequirementFailureKind::EmptyResponse
             | TerminalRequirementFailureKind::MissingStructuredText => {
                 policy.retries_empty_response()

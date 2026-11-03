@@ -56,7 +56,7 @@ pub use stream::{
 };
 pub use structured::{StructuredAgent, StructuredAgentError};
 pub use terminal_review::{
-    CompositeTerminalReviewMode, CompositeTerminalReviewer, TerminalReviewError,
+    CompositeTerminalReviewMode, CompositeTerminalReviewer, ReviewLimits, TerminalReviewError,
     TerminalReviewFuture, TerminalReviewPolicy, TerminalReviewRequest, TerminalReviewVerdict,
     TerminalReviewVerdictKind, TerminalReviewer, TerminalReviewerDescriptor, TerminalRuleReviewer,
     TurnReviewError, TurnReviewFuture, TurnReviewPolicy, TurnReviewRequest, TurnReviewScope,

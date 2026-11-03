@@ -261,9 +261,14 @@ fn safe_open_failure_falls_back_and_records_the_selected_route() {
     );
     let context = ModelCallContext::new();
     let logical_invocation = context.invocation_id();
+    let receipt_context = context.clone();
 
     let response = futures_executor::block_on(router.invoke(request(), context)).expect("fallback");
 
+    assert_eq!(
+        serde_json::to_value(receipt_context.route_receipt().unwrap()).unwrap(),
+        response.provider_metadata["runifold.router.receipt"]
+    );
     assert_eq!(primary.calls(), 1);
     assert_eq!(backup.calls(), 1);
     assert_eq!(response.model, ModelRef::new("backup", "model"));
@@ -817,5 +822,100 @@ fn builder_rejects_empty_and_duplicate_routes() {
     assert_eq!(
         duplicate,
         ModelRouterBuildError::DuplicateRoute("same".into())
+    );
+}
+
+#[test]
+fn native_receipt_retains_unknown_prior_attempt_usage_after_successful_fallback() {
+    let usage = crate::ModelUsage {
+        input_tokens: 9,
+        output_tokens: 4,
+        ..Default::default()
+    };
+    let mut failed = error(ModelErrorKind::Transport, RetrySafety::Unknown);
+    failed
+        .metadata
+        .insert("runifold.request.usage".into(), serde_json::json!(usage));
+    let primary = Arc::new(TestModel::new(Script::OpenError(failed)));
+    let backup = Arc::new(TestModel::new(Script::Events(completed(
+        ModelRef::new("backup", "model"),
+        "ok",
+    ))));
+    let router = router(
+        primary,
+        backup,
+        ModelFallbackPolicy::safe_only().allow_unknown(ModelErrorKind::Transport),
+    );
+    let response =
+        futures_executor::block_on(router.invoke(request(), ModelCallContext::new())).unwrap();
+    let receipt: crate::ModelRouteReceipt =
+        serde_json::from_value(response.provider_metadata["runifold.router.receipt"].clone())
+            .unwrap();
+    assert_eq!(receipt.attempts.len(), 2);
+    assert_eq!(
+        receipt.attempts[0].outcome,
+        crate::ModelRequestOutcome::Unknown
+    );
+    assert_eq!(receipt.attempts[0].usage, Some(usage));
+    assert_eq!(
+        receipt.attempts[1].outcome,
+        crate::ModelRequestOutcome::Completed
+    );
+    assert_ne!(
+        receipt.attempts[0].attempt_id,
+        receipt.attempts[1].attempt_id
+    );
+    assert!(!receipt.permits_continuation());
+}
+
+#[test]
+fn expired_native_route_receipt_proves_no_physical_dispatch() {
+    let primary = Arc::new(TestModel::new(Script::Events(completed(
+        ModelRef::new("primary", "model"),
+        "unused",
+    ))));
+    let router = ModelRouter::builder(logical())
+        .route(
+            "primary",
+            primary.clone(),
+            ModelRef::new("primary", "model"),
+        )
+        .build()
+        .unwrap();
+    let context = ModelCallContext::new()
+        .with_deadline(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
+    let error = futures_executor::block_on(router.invoke(request(), context)).unwrap_err();
+    assert_eq!(primary.calls(), 0);
+    let receipt: crate::ModelRouteReceipt =
+        serde_json::from_value(error.metadata["runifold.router.receipt"].clone()).unwrap();
+    assert!(receipt.permits_continuation());
+    assert_eq!(
+        receipt.attempts[0].outcome,
+        crate::ModelRequestOutcome::NotStarted
+    );
+    assert_eq!(
+        receipt.attempts[0].error_kind,
+        Some(ModelErrorKind::DeadlineExceeded)
+    );
+}
+
+#[test]
+fn retry_safe_without_native_admission_evidence_does_not_settle_unknown_outcome() {
+    let primary = Arc::new(TestModel::new(Script::OpenError(error(
+        ModelErrorKind::Transport,
+        RetrySafety::Safe,
+    ))));
+    let router = ModelRouter::builder(logical())
+        .route("primary", primary, ModelRef::new("primary", "model"))
+        .build()
+        .unwrap();
+    let error =
+        futures_executor::block_on(router.invoke(request(), ModelCallContext::new())).unwrap_err();
+    let receipt: crate::ModelRouteReceipt =
+        serde_json::from_value(error.metadata["runifold.router.receipt"].clone()).unwrap();
+    assert!(!receipt.permits_continuation());
+    assert_eq!(
+        receipt.attempts[0].outcome,
+        crate::ModelRequestOutcome::Unknown
     );
 }

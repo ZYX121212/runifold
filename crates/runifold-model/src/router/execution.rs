@@ -9,7 +9,10 @@ use futures_util::{
 use runifold_core::RetrySafety;
 use serde_json::{Value, json};
 
-use crate::{ModelStreamAccumulator, ResponseMode};
+use crate::{
+    ModelRequestOutcome, ModelRouteAttemptReceipt, ModelRouteReceipt, ModelStreamAccumulator,
+    ModelUsage, ResponseMode,
+};
 
 use super::{
     BreakerPermit, CircuitBreakerConfig, ModelCallContext, ModelError, ModelErrorKind,
@@ -44,9 +47,10 @@ pub(super) fn routed_stream(
                     yield Err(annotate_error(error, &request.model, failures));
                     return;
                 }
-                match start_route_attempt(route, &request, &context, &runtime).await {
+                match start_route_attempt(route, &request, &context, &runtime, &failures, route_attempt).await {
                     RouteAttempt::CircuitOpen => {
                         failures.push(circuit_open_summary(route, route_attempt));
+                        snapshot_failures(&context, &request.model, &failures);
                         continue 'routes;
                     }
                     RouteAttempt::Committed {
@@ -75,6 +79,7 @@ pub(super) fn routed_stream(
                             permit,
                             failures,
                             request.model.clone(),
+                            context.clone(),
                         );
                         while let Some(item) = committed.next().await {
                             yield item;
@@ -83,6 +88,7 @@ pub(super) fn routed_stream(
                     }
                     RouteAttempt::Failed(error) => {
                         failures.push(failure_summary(route, route_attempt, &error));
+                        snapshot_failures(&context, &request.model, &failures);
                         let retry = runtime.retry_policy.as_ref().is_some_and(|policy| {
                             route_attempt < max_attempts && policy.permits(&error)
                         });
@@ -229,7 +235,32 @@ async fn start_route_attempt(
     request: &ModelRequest,
     context: &ModelCallContext,
     runtime: &RoutingRuntime,
+    failures: &[Value],
+    route_attempt: u32,
 ) -> RouteAttempt {
+    if context.cancellation().is_cancelled()
+        || context
+            .deadline()
+            .is_some_and(|deadline| deadline <= runtime.clock.now())
+    {
+        let mut error = ModelError::local(
+            if context.cancellation().is_cancelled() {
+                ModelErrorKind::Cancelled
+            } else {
+                ModelErrorKind::DeadlineExceeded
+            },
+            "model route scope ended before provider invocation",
+        );
+        error.retry_safety = RetrySafety::Safe;
+        error
+            .metadata
+            .insert("runifold.request.provider_invoked".into(), false.into());
+        error.metadata.insert(
+            "runifold.request.remote_outcome".into(),
+            "not_started".into(),
+        );
+        return RouteAttempt::Failed(error);
+    }
     let permit = match crate::circuit::acquire(
         &route.health,
         runtime.circuit_breaker.as_ref(),
@@ -244,16 +275,30 @@ async fn start_route_attempt(
     let response_mode = routed_request.selected_response_mode();
     let attempt = context.child_attempt();
     let attempt_id = attempt.invocation_id().to_string();
+    let mut pending = completed_receipt(
+        route,
+        route_attempt,
+        &attempt_id,
+        &request.model,
+        failures,
+        None,
+    );
+    pending
+        .attempts
+        .last_mut()
+        .expect("pending receipt includes this attempt")
+        .outcome = ModelRequestOutcome::Unknown;
+    context.set_route_receipt(pending);
     let opened = route.model.stream(routed_request, attempt).await;
     let mut stream = match opened {
         Ok(stream) => stream,
         Err(error) => {
             fail_permit(permit, &error);
-            return RouteAttempt::Failed(error);
+            return RouteAttempt::Failed(attempt_error(error, &attempt_id));
         }
     };
     if response_mode == ResponseMode::Complete {
-        return validate_complete_attempt(stream, permit, attempt_id).await;
+        return validate_complete_attempt(stream, permit, attempt_id, context).await;
     }
     match stream.next().await {
         Some(Ok(first)) => RouteAttempt::Committed {
@@ -264,7 +309,7 @@ async fn start_route_attempt(
         },
         Some(Err(error)) => {
             fail_permit(permit, &error);
-            RouteAttempt::Failed(error)
+            RouteAttempt::Failed(attempt_error(error, &attempt_id))
         }
         None => {
             let error = ModelError::local(
@@ -272,7 +317,7 @@ async fn start_route_attempt(
                 "candidate model stream ended before its first event",
             );
             fail_permit(permit, &error);
-            RouteAttempt::Failed(error)
+            RouteAttempt::Failed(attempt_error(error, &attempt_id))
         }
     }
 }
@@ -281,23 +326,29 @@ async fn validate_complete_attempt(
     mut stream: ModelEventStream,
     permit: Option<BreakerPermit>,
     attempt_id: String,
+    context: &ModelCallContext,
 ) -> RouteAttempt {
     let mut accumulator = ModelStreamAccumulator::new();
     let mut events = Vec::new();
     let mut completed = false;
+    let mut usage = None;
     while let Some(item) = stream.next().await {
         let event = match item {
             Ok(event) => event,
             Err(error) => {
                 fail_permit(permit, &error);
-                return RouteAttempt::Failed(error);
+                return RouteAttempt::Failed(attempt_error_with_usage(error, &attempt_id, usage));
             }
         };
+        if let ModelStreamEvent::UsageUpdated { usage: reported } = &event {
+            usage = Some(*reported);
+            context.observe_route_usage(*reported);
+        }
         match accumulator.push(event.clone()) {
             Ok(response) => completed |= response.is_some(),
             Err(error) => {
                 fail_permit(permit, &error);
-                return RouteAttempt::Failed(error);
+                return RouteAttempt::Failed(attempt_error_with_usage(error, &attempt_id, usage));
             }
         }
         events.push(event);
@@ -308,7 +359,7 @@ async fn validate_complete_attempt(
             "complete model stream ended before a terminal response event",
         );
         fail_permit(permit, &error);
-        return RouteAttempt::Failed(error);
+        return RouteAttempt::Failed(attempt_error_with_usage(error, &attempt_id, usage));
     }
     let mut events = events.into_iter();
     let Some(first) = events.next() else {
@@ -317,7 +368,7 @@ async fn validate_complete_attempt(
             "validated complete model stream contained no events",
         );
         fail_permit(permit, &error);
-        return RouteAttempt::Failed(error);
+        return RouteAttempt::Failed(attempt_error_with_usage(error, &attempt_id, usage));
     };
     RouteAttempt::Committed {
         first: Box::new(first),
@@ -341,8 +392,10 @@ fn committed_stream(
     permit: Option<BreakerPermit>,
     mut failures: Vec<Value>,
     logical: ModelRef,
+    context: ModelCallContext,
 ) -> ModelEventStream {
     Box::pin(async_stream::stream! {
+        let mut usage = None;
         yield Ok(selected_event(
             &committed.route,
             committed.index,
@@ -353,8 +406,17 @@ fn committed_stream(
         ));
         while let Some(item) = stream.next().await {
             match item {
-                Ok(event) => {
+                Ok(mut event) => {
+                    if let ModelStreamEvent::UsageUpdated { usage: reported } = &event {
+                        usage = Some(*reported);
+                        context.observe_route_usage(*reported);
+                    }
                     let terminal = is_terminal(&event);
+                    if let ModelStreamEvent::ResponseCompleted { provider_metadata, .. } = &mut event {
+                        let receipt = completed_receipt(&committed.route, committed.route_attempt, &committed.attempt_id, &logical, &failures, usage);
+                        provider_metadata.insert("runifold.router.receipt".into(), serde_json::json!(receipt));
+                        context.set_route_receipt(receipt);
+                    }
                     yield Ok(event);
                     if terminal {
                         succeed_permit(permit);
@@ -364,11 +426,14 @@ fn committed_stream(
                 Err(mut error) => {
                     error.retry_safety = RetrySafety::UnsafeAfterVisibleOutput;
                     fail_permit(permit, &error);
+                    error = attempt_error(error, &committed.attempt_id);
+                    if let Some(usage) = usage { error.metadata.insert("runifold.request.usage".into(), serde_json::json!(usage)); }
                     failures.push(failure_summary(
                         &committed.route,
                         committed.route_attempt,
                         &error,
                     ));
+                    snapshot_failures(&context, &logical, &failures);
                     yield Err(annotate_error(error, &logical, failures));
                     return;
                 }
@@ -380,11 +445,14 @@ fn committed_stream(
         );
         error.retry_safety = RetrySafety::UnsafeAfterVisibleOutput;
         fail_permit(permit, &error);
+        error = attempt_error(error, &committed.attempt_id);
+        if let Some(usage) = usage { error.metadata.insert("runifold.request.usage".into(), serde_json::json!(usage)); }
         failures.push(failure_summary(
             &committed.route,
             committed.route_attempt,
             &error,
         ));
+        snapshot_failures(&context, &logical, &failures);
         yield Err(annotate_error(error, &logical, failures));
     })
 }
@@ -448,6 +516,8 @@ fn failure_summary(route: &ModelRoute, route_attempt: u32, error: &ModelError) -
         "retry_safety": error.retry_safety,
         "diagnostic_code": error.diagnostic_code(),
         "diagnostics": error.diagnostic_metadata(),
+        "attempt_id": error.metadata.get("runifold.router.attempt_id"),
+        "usage": error.metadata.get("runifold.request.usage").and_then(|value| serde_json::from_value::<ModelUsage>(value.clone()).ok()),
     })
 }
 
@@ -469,8 +539,108 @@ fn annotate_error(mut error: ModelError, logical: &ModelRef, failures: Vec<Value
         "runifold.router.logical_model".into(),
         serde_json::to_value(logical).expect("ModelRef is serializable"),
     );
+    let receipt = ModelRouteReceipt {
+        schema_version: 1,
+        logical_model: logical.clone(),
+        attempts: failure_receipts(&failures),
+    };
+    error
+        .metadata
+        .insert("runifold.router.receipt".into(), serde_json::json!(receipt));
     error
         .metadata
         .insert("runifold.router.failures".into(), Value::Array(failures));
     error
+}
+
+fn attempt_error(mut error: ModelError, attempt_id: &str) -> ModelError {
+    error
+        .metadata
+        .insert("runifold.router.attempt_id".into(), attempt_id.into());
+    error
+}
+
+fn failure_receipts(failures: &[Value]) -> Vec<ModelRouteAttemptReceipt> {
+    failures
+        .iter()
+        .map(|failure| {
+            let diagnostics: std::collections::BTreeMap<String, Value> = failure
+                .get("diagnostics")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default();
+            let not_started = failure["kind"] == "circuit_open"
+                || (diagnostics.get("runifold.request.provider_invoked")
+                    == Some(&Value::Bool(false))
+                    && diagnostics
+                        .get("runifold.request.remote_outcome")
+                        .and_then(Value::as_str)
+                        == Some("not_started"));
+            ModelRouteAttemptReceipt {
+                route: failure["route"].as_str().unwrap_or_default().into(),
+                target: serde_json::from_value(failure["target"].clone())
+                    .expect("runtime route target is serializable"),
+                route_attempt: serde_json::from_value(failure["route_attempt"].clone())
+                    .expect("runtime attempt number is serializable"),
+                attempt_id: failure["attempt_id"].as_str().map(str::to_owned),
+                outcome: if not_started {
+                    ModelRequestOutcome::NotStarted
+                } else {
+                    ModelRequestOutcome::Unknown
+                },
+                retry_safety: serde_json::from_value(failure["retry_safety"].clone())
+                    .unwrap_or(RetrySafety::Unknown),
+                usage: serde_json::from_value(failure["usage"].clone()).ok(),
+                error_kind: serde_json::from_value(failure["kind"].clone()).ok(),
+                diagnostics,
+            }
+        })
+        .collect()
+}
+
+fn completed_receipt(
+    route: &ModelRoute,
+    route_attempt: u32,
+    attempt_id: &str,
+    logical: &ModelRef,
+    failures: &[Value],
+    usage: Option<ModelUsage>,
+) -> ModelRouteReceipt {
+    let mut attempts = failure_receipts(failures);
+    attempts.push(ModelRouteAttemptReceipt {
+        route: route.name.clone(),
+        target: route.target.clone(),
+        route_attempt,
+        attempt_id: Some(attempt_id.into()),
+        outcome: ModelRequestOutcome::Completed,
+        retry_safety: RetrySafety::Unknown,
+        usage,
+        error_kind: None,
+        diagnostics: std::collections::BTreeMap::new(),
+    });
+    ModelRouteReceipt {
+        schema_version: 1,
+        logical_model: logical.clone(),
+        attempts,
+    }
+}
+
+fn attempt_error_with_usage(
+    mut error: ModelError,
+    attempt_id: &str,
+    usage: Option<ModelUsage>,
+) -> ModelError {
+    if let Some(usage) = usage {
+        error
+            .metadata
+            .insert("runifold.request.usage".into(), serde_json::json!(usage));
+    }
+    attempt_error(error, attempt_id)
+}
+
+fn snapshot_failures(context: &ModelCallContext, logical: &ModelRef, failures: &[Value]) {
+    context.set_route_receipt(ModelRouteReceipt {
+        schema_version: 1,
+        logical_model: logical.clone(),
+        attempts: failure_receipts(failures),
+    });
 }

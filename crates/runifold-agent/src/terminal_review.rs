@@ -18,6 +18,42 @@ const MAX_REVIEWER_NAME_BYTES: usize = 128;
 const MAX_REVIEW_ERROR_BYTES: usize = 4_096;
 const MAX_DESCRIPTOR_CONFIGURATION_BYTES: usize = 65_536;
 
+/// Explicit byte bounds for canonical review requests and repair feedback.
+///
+/// Bounds apply to serialized JSON bytes, inclusive. Oversized data is rejected
+/// before review or regeneration; no evidence is truncated or rewritten.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ReviewLimits {
+    request_bytes: usize,
+    feedback_bytes: usize,
+}
+
+impl Default for ReviewLimits {
+    fn default() -> Self {
+        Self::new(MAX_REVIEW_REQUEST_BYTES, MAX_REVIEW_FEEDBACK_BYTES)
+    }
+}
+
+impl ReviewLimits {
+    /// Sets explicit inclusive bounds. Zero denies every nonempty payload.
+    pub const fn new(request_bytes: usize, feedback_bytes: usize) -> Self {
+        Self {
+            request_bytes,
+            feedback_bytes,
+        }
+    }
+
+    /// Returns the complete serialized request bound.
+    pub const fn request_bytes(self) -> usize {
+        self.request_bytes
+    }
+
+    /// Returns the canonical JSON feedback bound.
+    pub const fn feedback_bytes(self) -> usize {
+        self.feedback_bytes
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TerminalReviewConfig {
     pub(crate) reviewer: Arc<dyn TerminalReviewer>,
@@ -120,12 +156,30 @@ impl TerminalReviewerDescriptor {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TerminalReviewPolicy {
     max_repairs: u32,
+    #[serde(default)]
+    limits: ReviewLimits,
 }
 
 impl TerminalReviewPolicy {
+    /// Sets request and feedback bounds, also enforced by the Agent.
+    /// Configure built-in reviewer adapters with the same limits.
+    #[must_use]
+    pub const fn with_limits(mut self, limits: ReviewLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Returns the review byte bounds persisted in the recovery policy.
+    pub const fn limits(self) -> ReviewLimits {
+        self.limits
+    }
+
     /// Creates a policy with an explicit maximum number of review repairs.
     pub const fn new(max_repairs: u32) -> Self {
-        Self { max_repairs }
+        Self {
+            max_repairs,
+            limits: ReviewLimits::new(MAX_REVIEW_REQUEST_BYTES, MAX_REVIEW_FEEDBACK_BYTES),
+        }
     }
 
     /// Returns the maximum number of review-triggered regeneration turns.
@@ -173,14 +227,30 @@ impl TurnReviewScope {
 pub struct TurnReviewPolicy {
     max_repairs: u32,
     scope: TurnReviewScope,
+    #[serde(default)]
+    limits: ReviewLimits,
 }
 
 impl TurnReviewPolicy {
+    /// Sets request and feedback bounds, also enforced by the Agent.
+    /// Configure built-in reviewer adapters with the same limits.
+    #[must_use]
+    pub const fn with_limits(mut self, limits: ReviewLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Returns the review byte bounds persisted in the recovery policy.
+    pub const fn limits(self) -> ReviewLimits {
+        self.limits
+    }
+
     /// Creates an intermediate-only policy with a total repair limit.
     pub const fn new(max_repairs: u32) -> Self {
         Self {
             max_repairs,
             scope: TurnReviewScope::IntermediateOnly,
+            limits: ReviewLimits::new(MAX_REVIEW_REQUEST_BYTES, MAX_REVIEW_FEEDBACK_BYTES),
         }
     }
 
@@ -225,13 +295,21 @@ impl TerminalReviewRequest {
     /// Returns [`TerminalReviewError::RequestTooLarge`] when the serialized
     /// transcript and candidate exceed 1 MiB.
     pub fn validate(&self) -> Result<(), TerminalReviewError> {
+        self.validate_with_limits(ReviewLimits::default())
+    }
+
+    /// Validates the original complete request against explicit byte bounds.
+    ///
+    /// # Errors
+    /// Returns [`TerminalReviewError::RequestTooLarge`] without altering data.
+    pub fn validate_with_limits(&self, limits: ReviewLimits) -> Result<(), TerminalReviewError> {
         let bytes = serde_json::to_vec(self)
             .map_err(|error| TerminalReviewError::InvalidVerdict(error.to_string()))?
             .len();
-        if bytes > MAX_REVIEW_REQUEST_BYTES {
+        if bytes > limits.request_bytes {
             return Err(TerminalReviewError::RequestTooLarge {
                 bytes,
-                maximum: MAX_REVIEW_REQUEST_BYTES,
+                maximum: limits.request_bytes,
             });
         }
         Ok(())
@@ -259,13 +337,21 @@ impl TurnReviewRequest {
     /// Returns [`TerminalReviewError::RequestTooLarge`] when the serialized
     /// transcript and candidate exceed 1 MiB.
     pub fn validate(&self) -> Result<(), TerminalReviewError> {
+        self.validate_with_limits(ReviewLimits::default())
+    }
+
+    /// Validates the original complete request against explicit byte bounds.
+    ///
+    /// # Errors
+    /// Returns [`TerminalReviewError::RequestTooLarge`] without altering data.
+    pub fn validate_with_limits(&self, limits: ReviewLimits) -> Result<(), TerminalReviewError> {
         let bytes = serde_json::to_vec(self)
             .map_err(|error| TerminalReviewError::InvalidVerdict(error.to_string()))?
             .len();
-        if bytes > MAX_REVIEW_REQUEST_BYTES {
+        if bytes > limits.request_bytes {
             return Err(TerminalReviewError::RequestTooLarge {
                 bytes,
-                maximum: MAX_REVIEW_REQUEST_BYTES,
+                maximum: limits.request_bytes,
             });
         }
         Ok(())
@@ -327,8 +413,19 @@ impl TerminalReviewVerdict {
     /// Returns [`TerminalReviewError::InvalidVerdict`] when feedback is null
     /// or its canonical JSON representation exceeds 64 KiB.
     pub fn repair(feedback: Value) -> Result<Self, TerminalReviewError> {
+        Self::repair_with_limits(feedback, ReviewLimits::default())
+    }
+
+    /// Creates a repair verdict preserving feedback exactly within explicit bounds.
+    ///
+    /// # Errors
+    /// Returns [`TerminalReviewError::InvalidVerdict`] for null or oversized feedback.
+    pub fn repair_with_limits(
+        feedback: Value,
+        limits: ReviewLimits,
+    ) -> Result<Self, TerminalReviewError> {
         let verdict = Self::Repair { feedback };
-        verdict.validate()?;
+        verdict.validate_with_limits(limits)?;
         Ok(verdict)
     }
 
@@ -353,6 +450,14 @@ impl TerminalReviewVerdict {
     /// Returns [`TerminalReviewError::InvalidVerdict`] for invalid feedback or
     /// rejection text.
     pub fn validate(&self) -> Result<(), TerminalReviewError> {
+        self.validate_with_limits(ReviewLimits::default())
+    }
+
+    /// Checks verdict bounds without changing the original feedback.
+    ///
+    /// # Errors
+    /// Returns [`TerminalReviewError::InvalidVerdict`] for invalid or oversized data.
+    pub fn validate_with_limits(&self, limits: ReviewLimits) -> Result<(), TerminalReviewError> {
         match self {
             Self::Approve => Ok(()),
             Self::Repair { feedback } => {
@@ -364,9 +469,10 @@ impl TerminalReviewVerdict {
                 let length = serde_json::to_vec(feedback)
                     .map_err(|error| TerminalReviewError::InvalidVerdict(error.to_string()))?
                     .len();
-                if length > MAX_REVIEW_FEEDBACK_BYTES {
+                if length > limits.feedback_bytes {
                     return Err(TerminalReviewError::InvalidVerdict(format!(
-                        "repair feedback exceeds {MAX_REVIEW_FEEDBACK_BYTES} bytes"
+                        "repair feedback exceeds {} bytes",
+                        limits.feedback_bytes
                     )));
                 }
                 Ok(())
@@ -510,9 +616,18 @@ type TurnRuleFunction =
 pub struct TurnRuleReviewer {
     descriptor: TurnReviewerDescriptor,
     rule: Arc<TurnRuleFunction>,
+    limits: ReviewLimits,
 }
 
 impl TurnRuleReviewer {
+    /// Sets explicit lossless request and feedback bounds for this adapter.
+    /// The Agent review policy must allow the same payload sizes.
+    #[must_use]
+    pub fn with_limits(mut self, limits: ReviewLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
     /// Creates a validated deterministic internal-turn reviewer.
     ///
     /// # Errors
@@ -536,6 +651,7 @@ impl TurnRuleReviewer {
         Ok(Self {
             descriptor,
             rule: Arc::new(rule),
+            limits: ReviewLimits::default(),
         })
     }
 
@@ -556,10 +672,10 @@ impl TurnReviewer for TurnRuleReviewer {
         _run: &'a RunContext,
     ) -> TurnReviewFuture<'a> {
         let verdict = request
-            .validate()
+            .validate_with_limits(self.limits)
             .and_then(|()| (self.rule)(&request))
             .and_then(|verdict| {
-                verdict.validate()?;
+                verdict.validate_with_limits(self.limits)?;
                 Ok(verdict)
             });
         Box::pin(async move { verdict })
@@ -584,9 +700,18 @@ type RuleFunction = dyn Fn(&TerminalReviewRequest) -> Result<TerminalReviewVerdi
 pub struct TerminalRuleReviewer {
     descriptor: TerminalReviewerDescriptor,
     rule: Arc<RuleFunction>,
+    limits: ReviewLimits,
 }
 
 impl TerminalRuleReviewer {
+    /// Sets explicit lossless request and feedback bounds for this adapter.
+    /// The Agent review policy must allow the same payload sizes.
+    #[must_use]
+    pub fn with_limits(mut self, limits: ReviewLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
     /// Creates a validated deterministic terminal reviewer.
     ///
     /// # Errors
@@ -611,6 +736,7 @@ impl TerminalRuleReviewer {
         Ok(Self {
             descriptor,
             rule: Arc::new(rule),
+            limits: ReviewLimits::default(),
         })
     }
 
@@ -631,10 +757,10 @@ impl TerminalReviewer for TerminalRuleReviewer {
         _run: &'a RunContext,
     ) -> TerminalReviewFuture<'a> {
         let verdict = request
-            .validate()
+            .validate_with_limits(self.limits)
             .and_then(|()| (self.rule)(&request))
             .and_then(|verdict| {
-                verdict.validate()?;
+                verdict.validate_with_limits(self.limits)?;
                 Ok(verdict)
             });
         Box::pin(async move { verdict })
@@ -676,9 +802,18 @@ pub struct CompositeTerminalReviewer {
     mode: CompositeTerminalReviewMode,
     descriptor: TerminalReviewerDescriptor,
     reviewers: Vec<TerminalReviewerEntry>,
+    limits: ReviewLimits,
 }
 
 impl CompositeTerminalReviewer {
+    /// Sets explicit lossless request and feedback bounds for this adapter.
+    /// The Agent review policy must allow the same payload sizes.
+    #[must_use]
+    pub fn with_limits(mut self, limits: ReviewLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
     /// Creates an empty composition with stable identity.
     ///
     /// Add at least one reviewer before execution.
@@ -701,6 +836,7 @@ impl CompositeTerminalReviewer {
             mode,
             descriptor,
             reviewers: Vec::new(),
+            limits: ReviewLimits::default(),
         })
     }
 
@@ -774,7 +910,7 @@ impl TerminalReviewer for CompositeTerminalReviewer {
         run: &'a RunContext,
     ) -> TerminalReviewFuture<'a> {
         Box::pin(async move {
-            request.validate()?;
+            request.validate_with_limits(self.limits)?;
             if self.reviewers.is_empty() {
                 return Err(TerminalReviewError::InvalidConfiguration(
                     "composite terminal reviewer requires at least one reviewer".into(),
@@ -787,7 +923,9 @@ impl TerminalReviewer for CompositeTerminalReviewer {
                     .review_terminal(request.clone(), run)
                     .await
                     .map_err(TerminalReviewError::bounded)?;
-                verdict.validate().map_err(TerminalReviewError::bounded)?;
+                verdict
+                    .validate_with_limits(self.limits)
+                    .map_err(TerminalReviewError::bounded)?;
                 match verdict {
                     TerminalReviewVerdict::Approve => {}
                     TerminalReviewVerdict::Reject { reason } => {
@@ -795,7 +933,10 @@ impl TerminalReviewer for CompositeTerminalReviewer {
                     }
                     TerminalReviewVerdict::Repair { feedback } => {
                         if self.mode == CompositeTerminalReviewMode::FirstFailure {
-                            return TerminalReviewVerdict::repair(feedback);
+                            return TerminalReviewVerdict::repair_with_limits(
+                                feedback,
+                                self.limits,
+                            );
                         }
                         repairs.push(json!({
                             "reviewer": entry.name,
@@ -807,10 +948,13 @@ impl TerminalReviewer for CompositeTerminalReviewer {
             if repairs.is_empty() {
                 Ok(TerminalReviewVerdict::approve())
             } else {
-                TerminalReviewVerdict::repair(json!({
-                    "kind": "composite",
-                    "reviews": repairs,
-                }))
+                TerminalReviewVerdict::repair_with_limits(
+                    json!({
+                        "kind": "composite",
+                        "reviews": repairs,
+                    }),
+                    self.limits,
+                )
             }
         })
     }
@@ -820,6 +964,7 @@ impl fmt::Debug for CompositeTerminalReviewer {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CompositeTerminalReviewer")
+            .field("limits", &self.limits)
             .field("name", &self.name)
             .field("version", &self.version)
             .field("descriptor", &self.descriptor)

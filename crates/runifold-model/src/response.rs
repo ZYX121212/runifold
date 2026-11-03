@@ -131,6 +131,9 @@ impl ModelResponse {
     pub fn assistant_message(&self) -> Result<crate::Message, crate::ModelError> {
         let mut message = crate::Message::new(crate::Role::Assistant, self.content.clone())?;
         message.metadata.clone_from(&self.provider_metadata);
+        // Physical settlement belongs to execution evidence, not conversation
+        // continuation state forwarded to a provider or later model turn.
+        message.metadata.remove("runifold.router.receipt");
         message
             .metadata
             .entry("runifold.response.origin_model.v1".into())

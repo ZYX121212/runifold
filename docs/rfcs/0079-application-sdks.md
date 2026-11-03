@@ -131,3 +131,107 @@ the installed-wheel contracts above must establish the latter.
 - https://pyo3.rs/main/ecosystem/async-await.html
 - https://github.com/PyO3/pyo3-async-runtimes
 - https://www.maturin.rs/project_layout.html
+
+## Native application capability contracts
+
+The following additions address large evidence review, bounded completion, and
+safe window continuation in the existing Rust runtime. They do not add an
+application retry engine or change business acceptance requirements.
+
+### Lossless review bounds
+
+`ReviewLimits::new(request_bytes, feedback_bytes)` specifies inclusive byte bounds
+on complete serialized request JSON and canonical repair-feedback JSON. Defaults
+remain 1 MiB and 64 KiB. There is no truncation, summarization, or automatic
+approval when a bound is exceeded. Zero denies nonempty payloads. Applications
+must choose finite bounds appropriate to their memory and model context limits;
+raising these bounds does not raise provider limits or compact history.
+
+Configure both the Agent's `TerminalReviewPolicy::with_limits` (or
+`TurnReviewPolicy::with_limits`) and each built-in review adapter's `with_limits`.
+Custom reviewers construct large verdicts with
+`TerminalReviewVerdict::repair_with_limits(original_feedback, limits)` and can
+validate requests using `validate_with_limits`. The Agent independently validates
+both inputs and returned verdicts against its configured policy, including custom
+reviewers. Compositions also validate their complete merged feedback. Checkpoint
+review policies include the limits; changing them rejects recovery against the
+old policy. Existing serialized policies deserialize with the original defaults.
+
+Feedback values, transcript messages, and candidates retain their original
+content. XML escaping used in the model-facing review instruction is reversible;
+it does not grant reviewer data system-instruction authority. A later request
+includes the accumulated transcript and feedback, so its complete request must
+also fit the configured bound.
+
+### Length completion continuation
+
+`CompletionRequirement::new().max_repairs(n).retry_truncated_response(true)` opts
+into native regeneration after a known terminal response with finish reason
+`Length`. Default behavior remains unchanged. The original partial assistant
+message is retained before the runtime repair instruction. The next model turn
+must produce a complete replacement satisfying the original request, including a
+complete structured value when structured output is configured. The runtime does
+not concatenate fragments and assert that the result is complete.
+
+Length, empty-response, and structured-output repairs consume the same existing
+`terminal_repairs` counter. There is no additional allowance. Normal turn, token,
+cost, deadline, and cancellation checks apply to every replacement. Partial usage
+is accounted before regeneration. Truncated Tool calls still fail before Tool
+execution or reviewer approval; they are never replayed as actionable calls.
+Refusals are not repairable. Unknown request outcomes are model errors and never
+enter this completion-repair path. Exhausted Length repairs return
+`AgentError::TruncatedTerminalResponse` and persist a terminal failure checkpoint;
+resume cannot reset the allowance. Completion policy is part of checkpoint
+execution identity.
+
+### Physical route settlement receipts
+
+The native router emits schema-1 `ModelRouteReceipt` under
+`runifold.router.receipt` in terminal response metadata and routing-error
+metadata. The Agent persists that same receipt as `route_receipt` on journal
+`model.completed` and `model.failed` events. These existing event names are the
+supported journal equivalent; a separate `route.completed` event is not required.
+Direct model injection without the native router has no route receipt and must
+not be interpreted as proof of settlement.
+
+Each receipt lists physical attempts in order: route, physical target, physical
+invocation identity (when dispatched or admitted to an attempt), attempt number,
+normalized error kind, retry safety, safe diagnostics, and reported usage when
+available. No prompt, research content, provider error body, or credentials are
+included. Earlier failures remain in the successful fallback receipt. Failed
+attempt usage is retained even when a later attempt succeeds, and known failed
+usage is charged to the run budget separately from the selected response.
+
+`ModelRequestOutcome` distinguishes:
+
+- `Completed`: the runtime observed a terminal response, including `Length`.
+  Physical completion alone does not establish business acceptance.
+- `NotStarted`: the router rejected an expired scope, a circuit prevented entry,
+  or scheduler admission diagnostics establish that the provider was not invoked.
+- `Unknown`: dispatch or remote completion cannot be ruled out. A real HTTP 400
+  after provider invocation remains unknown under the conservative contract.
+
+`ModelRouteReceipt::permits_continuation()` fails closed for empty receipts,
+unknown schema versions, and any unknown attempt, including earlier failures
+followed by successful fallback. `RetrySafety::Safe` alone is not settlement
+proof. Absent usage means unknown cost, not zero. Applications must additionally
+require the complete expected invocation set, enforce business acceptance, and
+preserve unknown fees. Cancellation/drop can prevent receipt delivery; a missing
+receipt must block a receipt-dependent continuation. Receipts describe local
+runtime observations, not independently verified remote billing or termination.
+
+Regression evidence is executable in
+`crates/runifold/tests/application_capability_blockers.rs`, the Agent's local
+completion/review tests, and the Model router tests. The facade regression uses a
+real native Agent and local HTTP cassette to verify successful receipt production,
+no dispatch from an expired context, a subsequent HTTP 400 blocking continuation,
+and complete Length regeneration with original evidence and cumulative usage.
+
+`ModelCallContext::route_receipt()` also exposes the native invocation snapshot.
+Cloned contexts share observations; child attempts receive independent snapshots.
+The router records a pending Unknown attempt before invoking a physical provider
+and updates observed usage and final disposition in the same canonical stream.
+The Agent and default Model collector attach this snapshot when their outer
+cancellation wins, preserving earlier failures and known usage even when the
+router cannot deliver a terminal event. Dropping a stream leaves dispatched
+attempts Unknown. This does not grant retry authority or certify remote shutdown.

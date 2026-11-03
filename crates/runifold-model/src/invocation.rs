@@ -1,4 +1,9 @@
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use futures_core::Stream;
 use futures_util::{
@@ -9,7 +14,7 @@ use runifold_core::{CancellationToken, Instant, InvocationId, RunContext, RunId}
 
 use crate::{
     ModelCapabilities, ModelError, ModelErrorKind, ModelRef, ModelRequest, ModelResponse,
-    ModelStreamAccumulator, ModelStreamEvent,
+    ModelRouteReceipt, ModelStreamAccumulator, ModelStreamEvent,
 };
 
 /// A boxed, sendable future returned by a model implementation.
@@ -44,6 +49,7 @@ pub struct ModelCallContext {
     // Internal admission lineage prevents nested wrappers from waiting on
     // capacity they already hold. It grants no execution authority.
     admission_active: bool,
+    route_receipt: Arc<Mutex<Option<ModelRouteReceipt>>>,
 }
 
 impl ModelCallContext {
@@ -55,6 +61,7 @@ impl ModelCallContext {
             deadline: None,
             cancellation: CancellationToken::new(),
             admission_active: false,
+            route_receipt: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -66,6 +73,7 @@ impl ModelCallContext {
             deadline: run.deadline(),
             cancellation: run.cancellation().child_token(),
             admission_active: false,
+            route_receipt: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -115,6 +123,47 @@ impl ModelCallContext {
         self
     }
 
+    /// Returns native physical settlement observed so far for this invocation.
+    ///
+    /// Clones of this context share the snapshot. A pending dispatched attempt
+    /// remains Unknown if the caller cancels or drops the stream. Child attempts
+    /// have independent snapshots; this grants no retry or execution authority.
+    pub fn route_receipt(&self) -> Option<ModelRouteReceipt> {
+        self.route_receipt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn set_route_receipt(&self, receipt: ModelRouteReceipt) {
+        *self
+            .route_receipt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(receipt);
+    }
+
+    pub(crate) fn observe_route_usage(&self, usage: crate::ModelUsage) {
+        if let Some(receipt) = self
+            .route_receipt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+            && let Some(attempt) = receipt.attempts.last_mut()
+        {
+            attempt.usage = Some(usage);
+        }
+    }
+
+    pub(crate) fn annotate_route_error(&self, mut error: ModelError) -> ModelError {
+        if let Some(receipt) = self.route_receipt() {
+            error
+                .metadata
+                .entry("runifold.router.receipt".into())
+                .or_insert_with(|| serde_json::json!(receipt));
+        }
+        error
+    }
+
     pub(crate) fn enter_scheduler(&mut self) -> bool {
         if self.admission_active {
             return false;
@@ -136,6 +185,7 @@ impl ModelCallContext {
             deadline: self.deadline,
             cancellation: self.cancellation.child_token(),
             admission_active: self.admission_active,
+            route_receipt: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -172,32 +222,38 @@ pub trait Model: Send + Sync {
         context: ModelCallContext,
     ) -> ModelFuture<'_, Result<ModelResponse, ModelError>> {
         Box::pin(async move {
-            let cancellation = context.cancellation().clone();
-            let stream_future = self.stream(request, context);
-            let mut stream =
-                match select(Box::pin(cancellation.cancelled()), Box::pin(stream_future)).await {
-                    Either::Left(_) => return Err(cancelled_error()),
-                    Either::Right((result, _)) => result?,
-                };
+            let receipt_context = context.clone();
+            let result = async {
+                let cancellation = context.cancellation().clone();
+                let stream_future = self.stream(request, context);
+                let mut stream =
+                    match select(Box::pin(cancellation.cancelled()), Box::pin(stream_future)).await
+                    {
+                        Either::Left(_) => return Err(cancelled_error()),
+                        Either::Right((result, _)) => result?,
+                    };
 
-            let mut accumulator = ModelStreamAccumulator::new();
-            loop {
-                let next = stream.next();
-                match select(Box::pin(cancellation.cancelled()), Box::pin(next)).await {
-                    Either::Left(_) => return Err(cancelled_error()),
-                    Either::Right((Some(event), _)) => {
-                        if let Some(response) = accumulator.push(event?)? {
-                            return Ok(response);
+                let mut accumulator = ModelStreamAccumulator::new();
+                loop {
+                    let next = stream.next();
+                    match select(Box::pin(cancellation.cancelled()), Box::pin(next)).await {
+                        Either::Left(_) => return Err(cancelled_error()),
+                        Either::Right((Some(event), _)) => {
+                            if let Some(response) = accumulator.push(event?)? {
+                                return Ok(response);
+                            }
                         }
-                    }
-                    Either::Right((None, _)) => {
-                        return Err(ModelError::local(
-                            ModelErrorKind::Protocol,
-                            "model stream ended before a terminal response event",
-                        ));
+                        Either::Right((None, _)) => {
+                            return Err(ModelError::local(
+                                ModelErrorKind::Protocol,
+                                "model stream ended before a terminal response event",
+                            ));
+                        }
                     }
                 }
             }
+            .await;
+            result.map_err(|error| receipt_context.annotate_route_error(error))
         })
     }
 }

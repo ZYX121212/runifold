@@ -6,6 +6,27 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+### Added
+
+- Explicit `ReviewLimits` for complete terminal/turn review requests and repair
+  feedback, with lossless verdict construction, adapter/runtime enforcement, and
+  checkpoint policy identity. Original 1 MiB/64 KiB defaults remain unchanged.
+- Opt-in native `CompletionRequirement::retry_truncated_response` for Length
+  completions, sharing the existing terminal repair allowance, transcript, usage,
+  deadline, cancellation, and checkpoint path. Unknown outcomes and partial Tool
+  calls remain fail-closed.
+- Versioned physical `ModelRouteReceipt` on native router responses/errors and
+  Agent journal completion/failure events, retaining prior failures and reported
+  usage. Conservative settlement distinguishes completed, undispatched, and
+  unknown attempts; safe retry metadata alone cannot authorize continuation.
+
+### Fixed
+
+- Retain native route attempts and observed usage when caller cancellation wins
+  over the final stream event, through an invocation-scoped settlement snapshot.
+- Reject expired native route contexts before provider invocation and retain
+  known failed-attempt usage in receipts and run budgets, including fallback.
+
 ## [0.10.6] - 2026-11-03
 
 ### Fixed

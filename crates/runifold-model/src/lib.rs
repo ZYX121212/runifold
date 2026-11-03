@@ -46,7 +46,8 @@ pub use retry::{
     SystemRouterSleeper,
 };
 pub use router::{
-    ModelFallbackPolicy, ModelRoute, ModelRouter, ModelRouterBuildError, ModelRouterBuilder,
+    ModelFallbackPolicy, ModelRequestOutcome, ModelRoute, ModelRouteAttemptReceipt,
+    ModelRouteReceipt, ModelRouter, ModelRouterBuildError, ModelRouterBuilder,
 };
 pub use runtime_profile::{
     BatchProfile, InteractiveProfile, ProductionProfile, ProviderRuntimeProfile,

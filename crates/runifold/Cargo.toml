@@ -75,6 +75,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+runifold-provider-testkit = { version = "0.10.6", path = "../runifold-provider-testkit" }
 runifold-testkit = { version = "0.10.6", path = "../runifold-testkit" }
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros"] }
 

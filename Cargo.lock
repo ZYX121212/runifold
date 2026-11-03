@@ -2806,6 +2806,7 @@ dependencies = [
  "runifold-mcp",
  "runifold-model",
  "runifold-observability-otel",
+ "runifold-provider-testkit",
  "runifold-providers",
  "runifold-retrieval",
  "runifold-retrieval-pgvector",

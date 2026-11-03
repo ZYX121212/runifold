@@ -80,6 +80,9 @@
       "runifold-providers": [
         "dev"
       ],
+      "runifold-provider-testkit": [
+        "cfg(not(target_arch = \"wasm32\")):dev-dependencies"
+      ],
       "runifold-testkit": [
         "cfg(not(target_arch = \"wasm32\")):dev-dependencies"
       ]
