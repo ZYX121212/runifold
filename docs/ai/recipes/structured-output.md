@@ -62,7 +62,7 @@ fn typed_agent_uses_one_type_for_schema_and_decode() {
 
 ## Production example
 
-Derive JsonSchema and Deserialize on the same output type. Production provider configuration uses the same builder. Keep local validation enabled; configure explicit bounded completion repair when needed, under the shared run budget.
+Derive JsonSchema and Deserialize on the same output type. Production provider configuration uses the same builder. Keep local validation enabled; configure explicit bounded completion repair when needed, under the shared run budget. Length regeneration is opt-in through CompletionRequirement::retry_truncated_response(true), consumes the existing max_repairs allowance, and retains partial history and usage. Unknown request outcomes never enter completion repair.
 
 Compile-tested application source ([complete file](../../../crates/runifold/examples/ai_structured.rs)):
 

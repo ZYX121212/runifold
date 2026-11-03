@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## Production example
 
-Construct ProviderRuntime once at application startup and clone it into request handlers. Use .build() to retain the Agent. Use agent.run(input, &run) when the application supplies budgets, deadlines, capabilities or journals.
+Construct ProviderRuntime once at application startup and clone it into request handlers. Use .build() to retain the Agent. Use agent.run(input, &run) when the application supplies budgets, deadlines, capabilities or journals. Safe window continuation can inspect native ModelRouteReceipt values on model.completed/model.failed journal events; require all expected invocation receipts and fail closed on unknown or missing attempts. ModelCallContext::route_receipt preserves pending native attempts across cancellation.
 
 Compile-tested application source ([complete file](../../../crates/runifold/examples/quickstart.rs)):
 

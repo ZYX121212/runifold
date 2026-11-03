@@ -943,7 +943,8 @@
       ],
       "validation": [
         "cargo test -p runifold-agent terminal_review --locked",
-        "cargo check -p runifold --example ai_reviewer --locked"
+        "cargo check -p runifold --example ai_reviewer --locked",
+        "cargo test -p runifold --test application_capability_blockers --locked"
       ],
       "applies_to": [
         "crates/runifold-agent/**"
@@ -959,7 +960,8 @@
       "source": "crates/runifold-agent/src/agent/tests.rs",
       "related": [
         "crates/runifold-agent/src/terminal_review.rs",
-        "crates/runifold-agent/src/agent/review.rs"
+        "crates/runifold-agent/src/agent/review.rs",
+        "docs/rfcs/0079-application-sdks.md"
       ],
       "source_sha256": "7c4d04b9c1cf1ce01ed57a03bee9701e4071564d54c124a5056a03265d8e3349"
     },
@@ -2140,6 +2142,7 @@
       "crates/runifold-model/Cargo.toml": "a202b6198df7d297585d582c239f119ae231f3cfcbbedd9f436e039eb01b592f",
       "crates/runifold-model/src/error.rs": "133ff163188490ea2e7e1d7028817ecbf6aa6a1d78b7be791c59921c44374c48",
       "crates/runifold-model/src/invocation.rs": "6c6ebfb90488e7be9b0daddbc5b280f1ef217e7f447233ca58118e72e15a6711",
+      "crates/runifold-model/src/router.rs": "8110331e044ee69471cc966d448a1332d6ee8782333fab07f30fc87d8602b549",
       "crates/runifold-model/src/runtime_profile.rs": "6eb046e321dcfcc00559890f8b115aec85822addb18cfea6edbad978a0c3d5f5",
       "crates/runifold-model/src/scheduling.rs": "20b534437d6397c389e0b5b315a7a011abf907da9e76f7879d83a4e869cd5b31",
       "crates/runifold-model/src/scheduling/model.rs": "54bc8e6421b01deb871daf8a8e4459d560fd837334cae752a1c2e5675ec33779",
@@ -2186,7 +2189,7 @@
       "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
       "docs/PROVIDERS.md": "d505b0522fc9f0fd2eb5c2ae8993540e21bc9ff636807666863dee3771101864",
       "docs/RELEASING.md": "02fd47aad8cfb04a2ad4ca38f88f1b7629f0768b3b41257ee507324b97ee2ebf",
-      "docs/ai/catalog.json": "d4ba08353ae8d11d4bc8bfc7b2ebcaf9010ee9c9848e5959d6fd34db877a3e3a",
+      "docs/ai/catalog.json": "2fdb93866be35d9d6c999de62159e02ef83662df72274fefeb0f9985119d6123",
       "docs/rfcs/0013-agent-callable-effects.md": "ee1dd43df9d5859e93a5b5f93dd01f6634b5e5e4dcbb07c16d887f4a5d89ef17",
       "docs/rfcs/0016-typed-function-tools.md": "5de77af96529a348709b4e271fedc10d3280bd53723a8a48e7ed9250fa6f2599",
       "docs/rfcs/0017-tool-state-and-errors.md": "c1844189849fa7a8dc4b35739e7097416ba10584b2fe4a7878379e2bf2f4ce76",
@@ -2208,6 +2211,6 @@
       "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
       "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
     },
-    "digest": "264f293c2138de4b92125823d342dac06ff64c0b054415f94c643dde126af662"
+    "digest": "41245bff78df4f846edd5b2efc8b7cd47acce544ca8b5c0f05ab5015b8b54f3f"
   }
 }

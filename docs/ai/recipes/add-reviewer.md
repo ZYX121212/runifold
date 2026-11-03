@@ -79,7 +79,7 @@ fn terminal_reviewer_approves_before_candidate_commit() {
 
 ## Production example
 
-Give the reviewer a stable name and version. Replace the approval closure with your rule and grant only required reviewer capabilities. Use a bounded policy for repairs. Use TurnReviewer for pre-call plan review; terminal review happens after candidate generation and cannot undo an executed write.
+Give the reviewer a stable name and version. Replace the approval closure with your rule and grant only required reviewer capabilities. Use a bounded policy for repairs. Use TurnReviewer for pre-call plan review; terminal review happens after candidate generation and cannot undo an executed write. For complete evidence larger than the default 1 MiB request or 64 KiB feedback bounds, configure ReviewLimits on both the review policy and built-in adapters, and construct verdicts with repair_with_limits. Never truncate evidence or turn an oversized repair into approval.
 
 Compile-tested application source ([complete file](../../../crates/runifold/examples/ai_reviewer.rs)):
 
@@ -137,9 +137,11 @@ For a downstream application use its own package/test name after copying the pat
 ```sh
 cargo test -p runifold-agent terminal_review --locked
 cargo check -p runifold --example ai_reviewer --locked
+cargo test -p runifold --test application_capability_blockers --locked
 ```
 
 ## Related types and contracts
 
 - [crates/runifold-agent/src/terminal_review.rs](../../../crates/runifold-agent/src/terminal_review.rs)
 - [crates/runifold-agent/src/agent/review.rs](../../../crates/runifold-agent/src/agent/review.rs)
+- [docs/rfcs/0079-application-sdks.md](../../../docs/rfcs/0079-application-sdks.md)

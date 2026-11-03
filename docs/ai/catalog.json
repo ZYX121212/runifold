@@ -220,11 +220,11 @@
       "id": "create-agent",
       "title": "Create an Agent",
       "audience": "application",
-      "api": "ProviderModelExt \u2192 ProviderRuntime \u2192 AgentBuilder \u2192 Agent",
+      "api": "ProviderModelExt → ProviderRuntime → AgentBuilder → Agent",
       "source": "crates/runifold/examples/quickstart.rs",
       "start": "use runifold::ProviderModelExt;",
       "end": null,
-      "production": "Construct ProviderRuntime once at application startup and clone it into request handlers. Use .build() to retain the Agent. Use agent.run(input, &run) when the application supplies budgets, deadlines, capabilities or journals.",
+      "production": "Construct ProviderRuntime once at application startup and clone it into request handlers. Use .build() to retain the Agent. Use agent.run(input, &run) when the application supplies budgets, deadlines, capabilities or journals. Safe window continuation can inspect native ModelRouteReceipt values on model.completed/model.failed journal events; require all expected invocation receipts and fail closed on unknown or missing attempts. ModelCallContext::route_receipt preserves pending native attempts across cancellation.",
       "do_not": [
         "Do not rebuild ProviderRuntime per HTTP request: clones share route health and retry state.",
         "Do not implement another model/tool loop."
@@ -254,13 +254,13 @@
         "runifold::AgentBuilder"
       ],
       "production_source": "crates/runifold/examples/quickstart.rs",
-      "runtime_path": "ProviderRuntime \u2192 AgentBuilder \u2192 Agent \u2192 canonical execute_state \u2192 model/callables \u2192 validated outcome"
+      "runtime_path": "ProviderRuntime → AgentBuilder → Agent → canonical execute_state → model/callables → validated outcome"
     },
     {
       "id": "add-tool",
       "title": "Add a typed Tool",
       "audience": "application",
-      "api": "#[runifold::tool] \u2192 generated <name>_tool() \u2192 AgentBuilder::tool",
+      "api": "#[runifold::tool] → generated <name>_tool() → AgentBuilder::tool",
       "source": "crates/runifold/tests/typed_tool_macro.rs",
       "start": "#[derive(Deserialize, JsonSchema)]\nstruct AddInput",
       "end": "#[derive(Deserialize, JsonSchema)]\nstruct ScaleInput",
@@ -306,17 +306,17 @@
         "runifold::tool"
       ],
       "production_source": "crates/runifold/examples/ai_tool.rs",
-      "runtime_path": "Agent callable preflight \u2192 EffectExecutor \u2192 ToolRegistry::invoke \u2192 Tool::invoke \u2192 output validation \u2192 canonical transcript"
+      "runtime_path": "Agent callable preflight → EffectExecutor → ToolRegistry::invoke → Tool::invoke → output validation → canonical transcript"
     },
     {
       "id": "structured-output",
       "title": "Return typed structured output",
       "audience": "application",
-      "api": "AgentBuilder::build_structured::<T> \u2192 StructuredAgent<T>::run",
+      "api": "AgentBuilder::build_structured::<T> → StructuredAgent<T>::run",
       "source": "crates/runifold-agent/src/structured.rs",
       "start": "    fn typed_agent_uses_one_type_for_schema_and_decode()",
       "end": "    #[test]\n    fn typed_agent_fails",
-      "production": "Derive JsonSchema and Deserialize on the same output type. Production provider configuration uses the same builder. Keep local validation enabled; configure explicit bounded completion repair when needed, under the shared run budget.",
+      "production": "Derive JsonSchema and Deserialize on the same output type. Production provider configuration uses the same builder. Keep local validation enabled; configure explicit bounded completion repair when needed, under the shared run budget. Length regeneration is opt-in through CompletionRequirement::retry_truncated_response(true), consumes the existing max_repairs allowance, and retains partial history and usage. Unknown request outcomes never enter completion repair.",
       "do_not": [
         "Do not treat provider schema acceptance as proof of valid output.",
         "Do not independently choose a different decoder type or silently relax strictness."
@@ -345,13 +345,13 @@
         "runifold::StructuredAgent"
       ],
       "production_source": "crates/runifold/examples/ai_structured.rs",
-      "runtime_path": "Canonical Agent loop \u2192 candidate \u2192 local completion validation / bounded repair \u2192 typed outcome"
+      "runtime_path": "Canonical Agent loop → candidate → local completion validation / bounded repair → typed outcome"
     },
     {
       "id": "stream-agent",
       "title": "Stream an Agent",
       "audience": "application",
-      "api": "Agent::stream \u2192 AgentStreamEvent",
+      "api": "Agent::stream → AgentStreamEvent",
       "source": "crates/runifold-agent/src/agent/tests.rs",
       "start": "fn streaming_drives_the_canonical_model_tool_loop_in_order()",
       "end": "#[test]\nfn streaming_applies_backpressure",
@@ -387,13 +387,13 @@
         "runifold::AgentStreamEvent"
       ],
       "production_source": "crates/runifold/examples/ai_stream.rs",
-      "runtime_path": "Agent::stream \u2192 canonical Agent engine \u2192 buffered observer \u2192 model/callable/usage events \u2192 Completed or Err"
+      "runtime_path": "Agent::stream → canonical Agent engine → buffered observer → model/callable/usage events → Completed or Err"
     },
     {
       "id": "durable-conversation",
       "title": "Persist a conversation and replay a request",
       "audience": "application",
-      "api": "AgentSession::new \u2192 AgentSession::run",
+      "api": "AgentSession::new → AgentSession::run",
       "source": "crates/runifold/examples/durable_session.rs",
       "start": "    let session = AgentSession::new(",
       "end": "    println!(",
@@ -428,7 +428,7 @@
         "runifold::RunContext"
       ],
       "production_source": "crates/runifold/examples/durable_session.rs",
-      "runtime_path": "AgentSession admission \u2192 stable request/checkpoint identity \u2192 canonical Agent/effects \u2192 conversation commit \u2192 request replay"
+      "runtime_path": "AgentSession admission → stable request/checkpoint identity → canonical Agent/effects → conversation commit → request replay"
     },
     {
       "id": "add-provider",
@@ -464,7 +464,7 @@
       "validation_profile": "runifold-providers",
       "difficulty": "advanced",
       "uses": [],
-      "runtime_path": "ModelRequest \u2192 adapter wire projection \u2192 transport \u2192 canonical stream accumulator \u2192 ModelResponse"
+      "runtime_path": "ModelRequest → adapter wire projection → transport → canonical stream accumulator → ModelResponse"
     },
     {
       "id": "add-reviewer",
@@ -474,7 +474,7 @@
       "source": "crates/runifold-agent/src/agent/tests.rs",
       "start": "fn terminal_reviewer_approves_before_candidate_commit()",
       "end": "#[test]\nfn terminal_reviewer_repairs",
-      "production": "Give the reviewer a stable name and version. Replace the approval closure with your rule and grant only required reviewer capabilities. Use a bounded policy for repairs. Use TurnReviewer for pre-call plan review; terminal review happens after candidate generation and cannot undo an executed write.",
+      "production": "Give the reviewer a stable name and version. Replace the approval closure with your rule and grant only required reviewer capabilities. Use a bounded policy for repairs. Use TurnReviewer for pre-call plan review; terminal review happens after candidate generation and cannot undo an executed write. For complete evidence larger than the default 1 MiB request or 64 KiB feedback bounds, configure ReviewLimits on both the review policy and built-in adapters, and construct verdicts with repair_with_limits. Never truncate evidence or turn an oversized repair into approval.",
       "do_not": [
         "Do not use post-hoc terminal review as authorization for an earlier Tool write.",
         "Do not bypass local structured output validation.",
@@ -482,11 +482,13 @@
       ],
       "validation": [
         "cargo test -p runifold-agent terminal_review --locked",
-        "cargo check -p runifold --example ai_reviewer --locked"
+        "cargo check -p runifold --example ai_reviewer --locked",
+        "cargo test -p runifold --test application_capability_blockers --locked"
       ],
       "related": [
         "crates/runifold-agent/src/terminal_review.rs",
-        "crates/runifold-agent/src/agent/review.rs"
+        "crates/runifold-agent/src/agent/review.rs",
+        "docs/rfcs/0079-application-sdks.md"
       ],
       "requirements": [
         "runifold with runtime",
@@ -503,7 +505,7 @@
         "runifold::AgentBuilder"
       ],
       "production_source": "crates/runifold/examples/ai_reviewer.rs",
-      "runtime_path": "Candidate \u2192 local terminal validation \u2192 attenuated reviewer \u2192 approve / bounded repair / reject \u2192 completion commit"
+      "runtime_path": "Candidate → local terminal validation → attenuated reviewer → approve / bounded repair / reject → completion commit"
     },
     {
       "id": "add-effect",
@@ -540,13 +542,13 @@
       "uses": [
         "runifold::EffectExecutor"
       ],
-      "runtime_path": "Capability preflight \u2192 stable effect identity \u2192 persisted Started \u2192 handler / reconciliation \u2192 persisted Completed \u2192 replay"
+      "runtime_path": "Capability preflight → stable effect identity → persisted Started → handler / reconciliation → persisted Completed → replay"
     },
     {
       "id": "add-workflow-step",
       "title": "Compose workflow steps",
       "audience": "application",
-      "api": "Workflow::builder \u2192 agent \u2192 build",
+      "api": "Workflow::builder → agent → build",
       "source": "crates/runifold/examples/workflow_chain.rs",
       "start": "fn main()",
       "end": null,
@@ -578,7 +580,7 @@
         "runifold::Agent"
       ],
       "production_source": "crates/runifold/examples/workflow_chain.rs",
-      "runtime_path": "Workflow definition \u2192 durable worker / step execution \u2192 explicit child authority \u2192 canonical Agent \u2192 persisted step progress"
+      "runtime_path": "Workflow definition → durable worker / step execution → explicit child authority → canonical Agent → persisted step progress"
     },
     {
       "id": "test-provider",
@@ -614,7 +616,7 @@
       "validation_profile": "runifold-providers",
       "difficulty": "advanced",
       "uses": [],
-      "runtime_path": "CassetteServer expected request \u2192 real loopback transport \u2192 adapter \u2192 canonical success/error conformance checks"
+      "runtime_path": "CassetteServer expected request → real loopback transport → adapter → canonical success/error conformance checks"
     },
     {
       "id": "conversation",
@@ -648,13 +650,13 @@
       "uses": [
         "runifold::Agent"
       ],
-      "runtime_path": "Load conversation \u2192 bounded context selection \u2192 canonical Agent run \u2192 optimistic atomic transcript append"
+      "runtime_path": "Load conversation → bounded context selection → canonical Agent run → optimistic atomic transcript append"
     },
     {
       "id": "add-retriever",
       "title": "Add retrieval context",
       "audience": "application",
-      "api": "AgentBuilder::dynamic_context \u2192 Retriever",
+      "api": "AgentBuilder::dynamic_context → Retriever",
       "source": "crates/runifold-agent/src/agent/tests.rs",
       "start": "fn retrieved_context_is_untrusted_user_data_before_the_original_prompt()",
       "end": "#[test]\nfn explicit_run_denies",
@@ -686,13 +688,13 @@
         "runifold::Retriever"
       ],
       "production_source": "crates/runifold/examples/ai_retrieval.rs",
-      "runtime_path": "Agent context preparation \u2192 retrieval capability check \u2192 Retriever::retrieve \u2192 untrusted user context \u2192 model invocation"
+      "runtime_path": "Agent context preparation → retrieval capability check → Retriever::retrieve → untrusted user context → model invocation"
     },
     {
       "id": "modify-agent-loop",
       "title": "Modify the canonical Agent loop",
       "audience": "contributor",
-      "api": "agent/execution.rs \u2192 review \u2192 callable \u2192 completion",
+      "api": "agent/execution.rs → review → callable → completion",
       "source": "crates/runifold-agent/src/agent/tests.rs",
       "start": "fn completes_a_model_tool_model_loop()",
       "end": "#[test]\nfn agent_preserves",
@@ -723,13 +725,13 @@
       "uses": [
         "runifold::Agent"
       ],
-      "runtime_path": "Initial state \u2192 canonical execute_state \u2192 model \u2192 turn review \u2192 callable effects \u2192 completion / terminal review"
+      "runtime_path": "Initial state → canonical execute_state → model → turn review → callable effects → completion / terminal review"
     },
     {
       "id": "public-api-change",
       "title": "Change a public API",
       "audience": "contributor",
-      "api": "Owning crate export \u2192 facade export \u2192 executable contract",
+      "api": "Owning crate export → facade export → executable contract",
       "source": "crates/runifold-agent/src/agent/tests.rs",
       "start": "fn ergonomic_prompt_grants_registered_tools_and_returns_text()",
       "end": "#[test]\nfn prompt_text_is",
@@ -759,13 +761,13 @@
       "uses": [
         "runifold::Agent"
       ],
-      "runtime_path": "Public caller \u2192 owning crate API \u2192 existing canonical implementation; facade re-exports preserve that path"
+      "runtime_path": "Public caller → owning crate API → existing canonical implementation; facade re-exports preserve that path"
     },
     {
       "id": "schedule-model-requests",
       "title": "Share model request capacity across Agents",
       "audience": "application",
-      "api": "ModelScheduler \u2192 ProviderModelExt::scheduled \u2192 ProviderRuntime \u2192 Agent",
+      "api": "ModelScheduler → ProviderModelExt::scheduled → ProviderRuntime → Agent",
       "source": "crates/runifold/examples/shared_model_capacity.rs",
       "start": "use std::",
       "end": null,
@@ -821,7 +823,7 @@
         "runifold::ModelTokenSettlement"
       ],
       "production_source": "crates/runifold/examples/shared_model_capacity.rs",
-      "runtime_path": "Agent \u2192 ProviderRuntime/ModelRouter \u2192 physical attempt \u2192 ScheduledModel atomic admission \u2192 provider stream \u2192 settlement and release"
+      "runtime_path": "Agent → ProviderRuntime/ModelRouter → physical attempt → ScheduledModel atomic admission → provider stream → settlement and release"
     },
     {
       "id": "manage-context",
@@ -906,7 +908,7 @@
         "runifold::RunContext"
       ],
       "production_source": "crates/runifold/examples/quickstart.rs",
-      "runtime_path": "ProviderRuntime \u2192 AgentBuilder \u2192 Agent \u2192 canonical execute_state \u2192 model/callables \u2192 validated outcome"
+      "runtime_path": "ProviderRuntime → AgentBuilder → Agent → canonical execute_state → model/callables → validated outcome"
     }
   ],
   "symbols": [
@@ -1107,6 +1109,48 @@
       "source": "crates/runifold-agent/src/agent/context.rs",
       "name": "SerializedBytesCounter",
       "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ReviewLimits",
+      "source": "crates/runifold-agent/src/terminal_review.rs",
+      "name": "ReviewLimits",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::CompletionRequirement",
+      "source": "crates/runifold-agent/src/completion.rs",
+      "name": "CompletionRequirement",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::CompletionRequirement::retry_truncated_response",
+      "source": "crates/runifold-agent/src/completion.rs",
+      "name": "retry_truncated_response",
+      "kind": "fn"
+    },
+    {
+      "symbol": "runifold::ModelRouteReceipt",
+      "source": "crates/runifold-model/src/router.rs",
+      "name": "ModelRouteReceipt",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ModelRouteAttemptReceipt",
+      "source": "crates/runifold-model/src/router.rs",
+      "name": "ModelRouteAttemptReceipt",
+      "kind": "struct"
+    },
+    {
+      "symbol": "runifold::ModelRequestOutcome",
+      "source": "crates/runifold-model/src/router.rs",
+      "name": "ModelRequestOutcome",
+      "kind": "enum"
+    },
+    {
+      "symbol": "runifold::ModelCallContext::route_receipt",
+      "source": "crates/runifold-model/src/invocation.rs",
+      "name": "route_receipt",
+      "kind": "fn"
     }
   ]
 }
