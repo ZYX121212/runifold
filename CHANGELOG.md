@@ -6,6 +6,8 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-11-03
+
 ### Added
 
 - Explicit `ReviewLimits` for complete terminal/turn review requests and repair

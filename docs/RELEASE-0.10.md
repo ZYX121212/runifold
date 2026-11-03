@@ -8,6 +8,20 @@ public contracts; incompatible changes require a new minor version and migration
 notes. This release does not promise 1.x API stability or a long-term support
 window for older minors.
 
+## Patch 0.10.7: application completion and settlement
+
+This patch adds explicitly bounded, lossless review payloads; opt-in Length
+completion regeneration using the existing repair allowance; and native physical
+route settlement receipts, including cancellation snapshots and prior failures.
+Applications must configure review limits and continuation explicitly, adopt the
+native receipt contract, and rerun their original acceptance tests. Defaults keep
+the previous size and retry policies. These runtime changes do not establish
+research quality or authorize experiments before application acceptance.
+
+See [the application contract](rfcs/0079-application-sdks.md#native-application-capability-contracts)
+and [the changelog](../CHANGELOG.md). The previous reasoning-origin repair is
+retained below for applications upgrading from earlier patches.
+
 ## Patch 0.10.6: model-scoped Responses continuation
 
 OpenAI Responses private reasoning is scoped to the physical request model,
