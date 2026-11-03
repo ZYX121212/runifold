@@ -2184,7 +2184,7 @@
         "crates/runifold/examples/shared_model_capacity.rs": "6f464740f426c31272930d875492ca5cb4c55486306d54a9de98d09e08389d43",
         "crates/runifold/examples/workflow_chain.rs": "12f5ddfc7875587674b52f52dd85a463322e475dcbb71abdf611709598a52a9d",
         "crates/runifold/src/lib.rs": "d69b86989aade89d60301afb762e207f54c030dc6089e947ab661a0321b8381a",
-        "crates/runifold/tests/ai_api_contract.rs": "026c56ef51b15f9289758afb7f245519a34d3b3bb1402870bef00577cd56f976",
+        "crates/runifold/tests/ai_api_contract.rs": "b6cfa0971fa55a693f3a1dfca6881c54e6c1b68abc350c234082ec4816102845",
         "crates/runifold/tests/request_stability.rs": "6837cb4328449282cf1c0e79138728092c560fe9344c43a0c51eef2e1fa799db",
         "crates/runifold/tests/typed_tool_macro.rs": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be",
         "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
@@ -2212,7 +2212,7 @@
         "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
         "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
       },
-      "digest": "41245bff78df4f846edd5b2efc8b7cd47acce544ca8b5c0f05ab5015b8b54f3f"
+      "digest": "0666e9a2ffc6ac5a3849d994d97a469e91c567902dbeeabb565d7e24905bc8f8"
     }
   },
   "documents": {

@@ -170,6 +170,8 @@ fn application_completion_and_lossless_review_contracts_are_public() {
         .retry_truncated_response(true);
     assert!(completion.retries_truncated_response());
     assert_eq!(completion.max_terminal_repairs(), 1);
+    let _: fn(&runifold::ModelCallContext) -> Option<runifold::ModelRouteReceipt> =
+        runifold::ModelCallContext::route_receipt;
     let _ = std::any::type_name::<(
         runifold::ModelRouteReceipt,
         runifold::ModelRouteAttemptReceipt,
