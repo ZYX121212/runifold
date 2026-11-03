@@ -35,6 +35,7 @@ exercises public or protocol boundaries. Keep extensions within this ownership.
 - `runifold-mcp`: normal
 - `runifold-model`: normal
 - `runifold-observability-otel`: normal
+- `runifold-provider-testkit`: cfg(not(target_arch = "wasm32")):dev-dependencies
 - `runifold-providers`: dev
 - `runifold-retrieval`: normal
 - `runifold-retrieval-pgvector`: normal

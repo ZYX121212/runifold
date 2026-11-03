@@ -21,6 +21,9 @@ pub(super) trait CompletionValidatorImpl: Send + Sync {
 
 pub(crate) fn failure_error(failure: &TerminalRequirementFailure, attempts: u32) -> AgentError {
     match failure.kind {
+        TerminalRequirementFailureKind::TruncatedResponse => {
+            AgentError::TruncatedTerminalResponse { attempts }
+        }
         TerminalRequirementFailureKind::EmptyResponse => {
             AgentError::EmptyTerminalResponse { attempts }
         }
@@ -51,6 +54,10 @@ pub(crate) fn failure_error(failure: &TerminalRequirementFailure, attempts: u32)
 
 pub(super) fn repair_instruction(failure: &TerminalRequirementFailure) -> String {
     let diagnostic = match failure.kind {
+        TerminalRequirementFailureKind::TruncatedResponse => json!({
+            "kind": failure.kind,
+            "instruction": "The previous response reached its output limit. Produce a complete replacement satisfying the original request. Preserve the original evidence. Do not repeat completed tool calls or execute partial tool calls."
+        }),
         TerminalRequirementFailureKind::EmptyResponse
         | TerminalRequirementFailureKind::MissingStructuredText => json!({
             "kind": failure.kind,
@@ -99,6 +106,7 @@ pub(super) fn repair_message(failure: &TerminalRequirementFailure) -> Message {
     message
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct TerminalCompletionContext<'a> {
     pub(super) caused_by: Option<EventId>,
     pub(super) observer: &'a dyn AgentObserver,
@@ -114,7 +122,10 @@ impl Agent {
         checkpoint: &mut Option<&mut CheckpointCursor>,
         context: TerminalCompletionContext<'_>,
     ) -> Result<Option<AgentOutcome>, AgentError> {
-        let failure = match self.completion_validator.validate(&response) {
+        let failure = match self
+            .completion_validator
+            .validate(&response, self.completion_requirement)
+        {
             Ok(()) => {
                 if self.terminal_review.is_some() {
                     let attempt =
@@ -291,7 +302,22 @@ impl CompletionValidator {
     pub(super) fn validate(
         &self,
         response: &ModelResponse,
+        requirement: crate::CompletionRequirement,
     ) -> Result<(), TerminalRequirementFailure> {
+        if response.finish_reason == runifold_model::FinishReason::Length
+            && requirement.retries_truncated_response()
+        {
+            let kind = if response
+                .content
+                .iter()
+                .any(|part| matches!(part, ContentPart::Refusal { .. }))
+            {
+                TerminalRequirementFailureKind::Refusal
+            } else {
+                TerminalRequirementFailureKind::TruncatedResponse
+            };
+            return Err(TerminalRequirementFailure::new(kind));
+        }
         self.0.validate(response)
     }
 }

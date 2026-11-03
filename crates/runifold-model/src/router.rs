@@ -17,6 +17,76 @@ mod execution;
 use capabilities::intersect_capabilities;
 use execution::{RoutingRuntime, routed_stream};
 
+/// Runtime-produced disposition of one physical route attempt.
+///
+/// Unknown means dispatch or remote termination cannot be ruled out, even when
+/// retry policy explicitly authorized another attempt.
+#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ModelRequestOutcome {
+    /// A terminal response was observed for this attempt.
+    Completed,
+    /// Trusted local admission prevented invoking the provider.
+    NotStarted,
+    /// The remote outcome is unknown.
+    Unknown,
+}
+
+/// Payload-free settlement evidence for a physical route attempt.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct ModelRouteAttemptReceipt {
+    /// Stable route name.
+    pub route: String,
+    /// Physical provider-qualified model.
+    pub target: ModelRef,
+    /// One-based attempt number within this route.
+    pub route_attempt: u32,
+    /// Runtime-generated physical invocation identity, absent for circuit rejection.
+    pub attempt_id: Option<String>,
+    /// Authoritative disposition; retry safety alone does not establish settlement.
+    pub outcome: ModelRequestOutcome,
+    /// Retry safety reported for this attempt.
+    pub retry_safety: RetrySafety,
+    /// Reported cumulative usage, if any; absence never means zero cost.
+    pub usage: Option<crate::ModelUsage>,
+    /// Normalized failure category, absent on completion.
+    pub error_kind: Option<ModelErrorKind>,
+    /// Sanitized operational diagnostics without error messages or private payloads.
+    pub diagnostics: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Versioned native route settlement, preserved in response/error metadata and
+/// the Agent journal's `model.completed`/`model.failed` payload under `route_receipt`.
+///
+/// Successful responses and errors use the `runifold.router.receipt` metadata key.
+/// This is physical settlement evidence, not business approval or billing proof.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct ModelRouteReceipt {
+    /// Receipt schema version, currently 1.
+    pub schema_version: u32,
+    /// Logical model requested by the caller.
+    pub logical_model: ModelRef,
+    /// Every attempted route, including prior failures in dispatch order.
+    pub attempts: Vec<ModelRouteAttemptReceipt>,
+}
+
+impl ModelRouteReceipt {
+    /// Returns whether every attempt is settled or authoritatively undispatched.
+    /// Unknown schema versions and empty receipts fail closed. Applications must
+    /// also require the complete expected set of native invocation receipts.
+    pub fn permits_continuation(&self) -> bool {
+        self.schema_version == 1
+            && !self.attempts.is_empty()
+            && self.attempts.iter().all(|attempt| {
+                matches!(
+                    attempt.outcome,
+                    ModelRequestOutcome::Completed | ModelRequestOutcome::NotStarted
+                )
+            })
+    }
+}
+
 /// One named physical endpoint eligible for a logical model invocation.
 #[derive(Clone)]
 pub struct ModelRoute {

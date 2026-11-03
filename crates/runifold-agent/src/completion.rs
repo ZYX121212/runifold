@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 pub struct CompletionRequirement {
     max_terminal_repairs: u32,
     retry_empty_response: bool,
+    #[serde(default)]
+    retry_truncated_response: bool,
 }
 
 impl CompletionRequirement {
@@ -18,6 +20,7 @@ impl CompletionRequirement {
         Self {
             max_terminal_repairs: 0,
             retry_empty_response: false,
+            retry_truncated_response: false,
         }
     }
 
@@ -34,6 +37,20 @@ impl CompletionRequirement {
     pub const fn retry_empty_response(mut self, enabled: bool) -> Self {
         self.retry_empty_response = enabled;
         self
+    }
+
+    /// Allows Length responses to consume the existing terminal repair allowance.
+    /// Partial history and usage are retained; partial Tool calls are never executed.
+    /// This continues a known completed response, never an unknown request outcome.
+    #[must_use]
+    pub const fn retry_truncated_response(mut self, enabled: bool) -> Self {
+        self.retry_truncated_response = enabled;
+        self
+    }
+
+    /// Returns whether Length completions may consume a repair turn.
+    pub const fn retries_truncated_response(self) -> bool {
+        self.retry_truncated_response
     }
 
     /// Returns the configured terminal repair limit.
@@ -60,6 +77,8 @@ pub enum TerminalRequirementFailureKind {
     InvalidStructuredOutput,
     /// The provider returned an explicit refusal.
     Refusal,
+    /// The provider ended a response at its output length limit.
+    TruncatedResponse,
 }
 
 /// Safe, bounded diagnostic for a rejected terminal candidate.
@@ -84,6 +103,9 @@ impl TerminalRequirementFailure {
 
     pub(crate) const fn repairable(&self, policy: CompletionRequirement) -> bool {
         match self.kind {
+            TerminalRequirementFailureKind::TruncatedResponse => {
+                policy.retries_truncated_response()
+            }
             TerminalRequirementFailureKind::EmptyResponse
             | TerminalRequirementFailureKind::MissingStructuredText => {
                 policy.retries_empty_response()

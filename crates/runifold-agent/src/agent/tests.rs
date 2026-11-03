@@ -3146,3 +3146,370 @@ fn concurrent_tool_failure_drains_siblings_before_returning() {
 fn concurrent_tools_share_the_same_atomic_budget() {
     verify_tool_concurrency(2, false, Some(1));
 }
+
+#[test]
+fn large_review_requests_and_feedback_preserve_original_evidence() {
+    let limits = crate::ReviewLimits::new(8 * 1024 * 1024, 2 * 1024 * 1024);
+    let original = json!({"pages": ["原始证据🦀\n".repeat(18_000)], "receipt": "unchanged"});
+    assert!(TerminalReviewVerdict::repair(original.clone()).is_err());
+    let verdict = TerminalReviewVerdict::repair_with_limits(original.clone(), limits).unwrap();
+    assert_eq!(
+        serde_json::to_value(&verdict).unwrap()["feedback"],
+        original
+    );
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "candidate",
+        vec![ContentPart::text("draft")],
+        FinishReason::Stop,
+    ));
+    model.enqueue(response_events(
+        "fixed",
+        vec![ContentPart::text("complete")],
+        FinishReason::Stop,
+    ));
+    let feedback = original.clone();
+    let reviewer = TerminalRuleReviewer::new("evidence", "v1", move |request| {
+        assert!(message_text(&request.transcript[0]).len() > 1_048_576);
+        if request.attempt == 1 {
+            TerminalReviewVerdict::repair_with_limits(feedback.clone(), limits)
+        } else {
+            Ok(TerminalReviewVerdict::approve())
+        }
+    })
+    .unwrap()
+    .with_limits(limits);
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .terminal_reviewer(
+        reviewer,
+        TerminalReviewPolicy::new(1).with_limits(limits),
+        CapabilitySet::new(),
+    );
+    let run = root_run(Budget::default());
+    let outcome = futures_executor::block_on(agent.run("input".repeat(250_000), &run)).unwrap();
+    assert_eq!(outcome.text(), "complete");
+    let requests = model.recorded_requests();
+    let repair = requests[1]
+        .messages
+        .iter()
+        .find(|message| {
+            message
+                .metadata
+                .contains_key("runifold.terminal_review_repair")
+        })
+        .unwrap();
+    assert!(message_text(repair).contains(&serde_json::to_string(&original).unwrap()));
+}
+
+#[test]
+fn explicit_review_bounds_are_inclusive_and_runtime_enforced() {
+    let original = json!({"evidence": "原始🦀".repeat(12_000)});
+    let bytes = serde_json::to_vec(&original).unwrap().len();
+    let limits = crate::ReviewLimits::new(2_000_000, bytes);
+    assert!(TerminalReviewVerdict::repair_with_limits(original.clone(), limits).is_ok());
+    assert!(
+        TerminalReviewVerdict::repair_with_limits(
+            original.clone(),
+            crate::ReviewLimits::new(2_000_000, bytes - 1)
+        )
+        .is_err()
+    );
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "candidate",
+        vec![ContentPart::text("draft")],
+        FinishReason::Stop,
+    ));
+    let reviewer = TerminalRuleReviewer::new("evidence", "v1", move |_| {
+        TerminalReviewVerdict::repair_with_limits(original.clone(), limits)
+    })
+    .unwrap()
+    .with_limits(limits);
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .terminal_reviewer(reviewer, TerminalReviewPolicy::new(1), CapabilitySet::new());
+    assert!(matches!(
+        futures_executor::block_on(agent.run("start", &root_run(Budget::default()))),
+        Err(AgentError::TerminalReview(
+            TerminalReviewError::InvalidVerdict(_)
+        ))
+    ));
+    assert_eq!(model.recorded_requests().len(), 1);
+}
+
+#[test]
+fn five_native_deliveries_continue_length_with_original_history_and_usage() {
+    for specialist in 0..5 {
+        let model = ScriptedModel::new();
+        let original = format!("original evidence from specialist {specialist} 🦀");
+        let mut partial = response_events(
+            "partial",
+            vec![ContentPart::text(&original)],
+            FinishReason::Length,
+        );
+        partial.insert(
+            1,
+            ModelStreamEvent::UsageUpdated {
+                usage: runifold_model::ModelUsage {
+                    input_tokens: 7,
+                    output_tokens: 11,
+                    ..Default::default()
+                },
+            },
+        );
+        model.enqueue(partial);
+        model.enqueue(response_events(
+            "done",
+            vec![ContentPart::text("complete delivery")],
+            FinishReason::Stop,
+        ));
+        let run = root_run(Budget::default());
+        let agent = Agent::new(
+            "specialist",
+            Arc::new(model.clone()),
+            ModelRef::new("test", "scripted"),
+        )
+        .completion_requirement(
+            CompletionRequirement::new()
+                .max_repairs(1)
+                .retry_truncated_response(true),
+        );
+        let outcome = futures_executor::block_on(agent.run("independent discovery", &run)).unwrap();
+        assert_eq!(outcome.response.finish_reason, FinishReason::Stop);
+        assert_eq!(outcome.turns, 2);
+        assert_eq!(run.budget().usage().tokens, 18);
+        let requests = model.recorded_requests();
+        assert!(requests[1].messages.iter().any(|message| message.role == Role::Assistant && message_text(message) == original));
+    }
+}
+
+#[test]
+fn length_and_empty_completion_share_one_repair_allowance() {
+    for reasons in [
+        [FinishReason::Length, FinishReason::Stop],
+        [FinishReason::Stop, FinishReason::Length],
+    ] {
+        let model = ScriptedModel::new();
+        for reason in reasons {
+            model.enqueue(response_events("rejected", Vec::new(), reason));
+        }
+        let agent = Agent::new(
+            "worker",
+            Arc::new(model.clone()),
+            ModelRef::new("test", "scripted"),
+        )
+        .completion_requirement(
+            CompletionRequirement::new()
+                .max_repairs(1)
+                .retry_empty_response(true)
+                .retry_truncated_response(true),
+        );
+        let result = futures_executor::block_on(agent.run("start", &root_run(Budget::default())));
+        assert!(matches!(
+            result,
+            Err(AgentError::EmptyTerminalResponse { attempts: 1 }
+                | AgentError::TruncatedTerminalResponse { attempts: 1 })
+        ));
+        assert_eq!(model.recorded_requests().len(), 2);
+    }
+}
+
+#[test]
+fn length_continuation_never_retries_unknown_request_errors() {
+    let model = ScriptedModel::new();
+    model.enqueue_error(ModelError::local(
+        ModelErrorKind::Provider,
+        "unknown physical outcome",
+    ));
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .completion_requirement(
+        CompletionRequirement::new()
+            .max_repairs(3)
+            .retry_truncated_response(true),
+    );
+    assert!(matches!(
+        futures_executor::block_on(agent.run("start", &root_run(Budget::default()))),
+        Err(AgentError::Model(_))
+    ));
+    assert_eq!(model.recorded_requests().len(), 1);
+}
+
+#[test]
+fn exhausted_length_completion_is_persisted_and_cannot_reset_on_resume() {
+    let model = ScriptedModel::new();
+    for _ in 0..2 {
+        model.enqueue(response_events(
+            "partial",
+            vec![ContentPart::text("partial evidence")],
+            FinishReason::Length,
+        ));
+    }
+    let requirement = CompletionRequirement::new()
+        .max_repairs(1)
+        .retry_truncated_response(true);
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .completion_requirement(requirement);
+    let checkpoint = AgentCheckpoint::new(Arc::new(InMemoryCheckpointStore::new()));
+    let run = root_run(Budget::default());
+    let result = futures_executor::block_on(agent.run_checkpointed("research", &run, &checkpoint));
+    assert!(matches!(
+        result,
+        Err(AgentError::TruncatedTerminalResponse { attempts: 1 })
+    ));
+    for policy in [
+        ResumePolicy::RejectAmbiguous,
+        ResumePolicy::RetryInterruptedTurn,
+    ] {
+        assert!(matches!(
+            futures_executor::block_on(agent.resume(&checkpoint, &run, policy)),
+            Err(AgentError::TruncatedTerminalResponse { attempts: 1 })
+        ));
+    }
+    let changed = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .completion_requirement(requirement.max_repairs(2));
+    assert!(matches!(
+        futures_executor::block_on(changed.resume(
+            &checkpoint,
+            &run,
+            ResumePolicy::RejectAmbiguous
+        )),
+        Err(AgentError::Checkpoint(_))
+    ));
+    assert_eq!(model.recorded_requests().len(), 2);
+}
+
+#[test]
+fn cancellation_at_length_repair_boundary_makes_no_second_request() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "partial",
+        vec![ContentPart::text("original")],
+        FinishReason::Length,
+    ));
+    let run = root_run(Budget::default());
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .completion_requirement(
+        CompletionRequirement::new()
+            .max_repairs(1)
+            .retry_truncated_response(true),
+    );
+    futures_executor::block_on(async {
+        let mut stream = agent.stream("research", &run);
+        let mut cancelled = false;
+        let mut failed = false;
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(AgentStreamEvent::TerminalRepairScheduled { .. }) => {
+                    run.cancellation().cancel();
+                    cancelled = true;
+                }
+                Err(AgentError::Model(error)) => {
+                    assert_eq!(error.kind, ModelErrorKind::Cancelled);
+                    failed = true;
+                }
+                Err(error) => panic!("unexpected error: {error}"),
+                _ => {}
+            }
+        }
+        assert!(cancelled && failed);
+    });
+    assert_eq!(model.recorded_requests().len(), 1);
+}
+
+#[test]
+fn length_with_refusal_or_tool_calls_is_never_regenerated_or_executed() {
+    for part in [
+        ContentPart::Refusal {
+            text: "refused".into(),
+        },
+        tool_call("partial", "echo", json!({"value":1})),
+    ] {
+        let model = ScriptedModel::new();
+        model.enqueue(response_events("partial", vec![part], FinishReason::Length));
+        let agent = Agent::new(
+            "worker",
+            Arc::new(model.clone()),
+            ModelRef::new("test", "scripted"),
+        )
+        .completion_requirement(
+            CompletionRequirement::new()
+                .max_repairs(2)
+                .retry_truncated_response(true),
+        );
+        let run = root_run(Budget::default());
+        assert!(futures_executor::block_on(agent.run("research", &run)).is_err());
+        assert_eq!(model.recorded_requests().len(), 1);
+        assert_eq!(run.budget().usage().tool_calls, 0);
+    }
+}
+
+#[test]
+fn checkpoint_rejects_changed_review_limits_before_model_dispatch() {
+    let model = ScriptedModel::new();
+    model.enqueue(response_events(
+        "candidate",
+        vec![ContentPart::text("draft")],
+        FinishReason::Stop,
+    ));
+    let reviewer = TerminalRuleReviewer::new("evidence", "v1", |_| {
+        TerminalReviewVerdict::repair(json!({"repair":true}))
+    })
+    .unwrap();
+    let agent = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .terminal_reviewer(
+        reviewer.clone(),
+        TerminalReviewPolicy::new(0),
+        CapabilitySet::new(),
+    );
+    let checkpoint = AgentCheckpoint::new(Arc::new(InMemoryCheckpointStore::new()));
+    let run = root_run(Budget::default());
+    assert!(
+        futures_executor::block_on(agent.run_checkpointed("research", &run, &checkpoint)).is_err()
+    );
+    let changed = Agent::new(
+        "worker",
+        Arc::new(model.clone()),
+        ModelRef::new("test", "scripted"),
+    )
+    .terminal_reviewer(
+        reviewer,
+        TerminalReviewPolicy::new(0).with_limits(crate::ReviewLimits::new(2_000_000, 100_000)),
+        CapabilitySet::new(),
+    );
+    assert!(matches!(
+        futures_executor::block_on(changed.resume(
+            &checkpoint,
+            &run,
+            ResumePolicy::RejectAmbiguous
+        )),
+        Err(AgentError::Checkpoint(_))
+    ));
+    assert_eq!(model.recorded_requests().len(), 1);
+}

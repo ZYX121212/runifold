@@ -15,6 +15,12 @@ use crate::{GatewayError, GatewayErrorKind, TerminalReviewError};
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum AgentError {
+    /// Opt-in Length continuation exhausted the shared terminal repair allowance.
+    #[error("terminal response remained truncated after {attempts} repair attempts")]
+    TruncatedTerminalResponse {
+        /// Terminal repair turns already consumed, including other completion repairs.
+        attempts: u32,
+    },
     /// Per-call context construction failed before model dispatch.
     #[error("agent context failed: {0}")]
     Context(#[from] crate::ContextError),
@@ -260,6 +266,7 @@ impl AgentError {
             | Self::TurnReviewExhausted { .. }
             | Self::Protocol(_)
             | Self::ToolRequirementUnsatisfied { .. }
+            | Self::TruncatedTerminalResponse { .. }
             | Self::EmptyTerminalResponse { .. }
             | Self::StructuredOutputUnsatisfied { .. }
             | Self::ToolOutputNotVisible { .. } => RunErrorKind::Protocol,

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "runifold",
-  "version": "0.10.6",
+  "version": "0.10.7",
   "rust_version": "1.88",
   "generated_by": "python3 scripts/ai-knowledge.py --write",
   "architecture": {
@@ -131,6 +131,9 @@
         ],
         "runifold-providers": [
           "dev"
+        ],
+        "runifold-provider-testkit": [
+          "cfg(not(target_arch = \"wasm32\")):dev-dependencies"
         ],
         "runifold-testkit": [
           "cfg(not(target_arch = \"wasm32\")):dev-dependencies"
@@ -865,7 +868,7 @@
         "docs/rfcs/0018-agent-streaming.md",
         "crates/runifold-agent/src/stream.rs"
       ],
-      "source_sha256": "e79b1937a921b3b6954290993c16f11f06f51712bcfe3627ea5ef8f0d04d187e"
+      "source_sha256": "7c4d04b9c1cf1ce01ed57a03bee9701e4071564d54c124a5056a03265d8e3349"
     },
     "durable-conversation": {
       "title": "Persist a conversation and replay a request",
@@ -940,7 +943,8 @@
       ],
       "validation": [
         "cargo test -p runifold-agent terminal_review --locked",
-        "cargo check -p runifold --example ai_reviewer --locked"
+        "cargo check -p runifold --example ai_reviewer --locked",
+        "cargo test -p runifold --test application_capability_blockers --locked"
       ],
       "applies_to": [
         "crates/runifold-agent/**"
@@ -956,9 +960,10 @@
       "source": "crates/runifold-agent/src/agent/tests.rs",
       "related": [
         "crates/runifold-agent/src/terminal_review.rs",
-        "crates/runifold-agent/src/agent/review.rs"
+        "crates/runifold-agent/src/agent/review.rs",
+        "docs/rfcs/0079-application-sdks.md"
       ],
-      "source_sha256": "e79b1937a921b3b6954290993c16f11f06f51712bcfe3627ea5ef8f0d04d187e"
+      "source_sha256": "7c4d04b9c1cf1ce01ed57a03bee9701e4071564d54c124a5056a03265d8e3349"
     },
     "add-effect": {
       "title": "Add recoverable external work",
@@ -1076,7 +1081,7 @@
         "crates/runifold-agent/src/conversation.rs",
         "docs/ai/recipes/durable-conversation.md"
       ],
-      "source_sha256": "e79b1937a921b3b6954290993c16f11f06f51712bcfe3627ea5ef8f0d04d187e"
+      "source_sha256": "7c4d04b9c1cf1ce01ed57a03bee9701e4071564d54c124a5056a03265d8e3349"
     },
     "add-retriever": {
       "title": "Add retrieval context",
@@ -1107,7 +1112,7 @@
         "crates/runifold-agent/src/builder.rs",
         "docs/rfcs/0040-provider-neutral-retrieval.md"
       ],
-      "source_sha256": "e79b1937a921b3b6954290993c16f11f06f51712bcfe3627ea5ef8f0d04d187e"
+      "source_sha256": "7c4d04b9c1cf1ce01ed57a03bee9701e4071564d54c124a5056a03265d8e3349"
     },
     "modify-agent-loop": {
       "title": "Modify the canonical Agent loop",
@@ -1138,7 +1143,7 @@
         "crates/runifold-agent/src/agent/callable.rs",
         "crates/runifold-agent/src/agent/completion.rs"
       ],
-      "source_sha256": "e79b1937a921b3b6954290993c16f11f06f51712bcfe3627ea5ef8f0d04d187e"
+      "source_sha256": "7c4d04b9c1cf1ce01ed57a03bee9701e4071564d54c124a5056a03265d8e3349"
     },
     "public-api-change": {
       "title": "Change a public API",
@@ -1168,7 +1173,7 @@
         "scripts/semver-check.sh",
         "crates/runifold/src/lib.rs"
       ],
-      "source_sha256": "e79b1937a921b3b6954290993c16f11f06f51712bcfe3627ea5ef8f0d04d187e"
+      "source_sha256": "7c4d04b9c1cf1ce01ed57a03bee9701e4071564d54c124a5056a03265d8e3349"
     },
     "schedule-model-requests": {
       "title": "Share model request capacity across Agents",
@@ -2099,29 +2104,29 @@
     "algorithm": "sha256",
     "inputs": {
       "AGENTS.md": "92eb34f1c9844e7805e47e30ce69595fc053cd236bffcd70e6083b5f74dd53ae",
-      "Cargo.toml": "18417b293ae2a0ff3be58c63632df19ae68153c07d561a9f5c6ab9171fed7d5a",
+      "Cargo.toml": "ab7c0118b4e86a1aecf748572f9b19c753649d5bd984bf17f478754915ab2e0c",
       "ai/architecture.json": "b76f844d22f9b5020b79ad402d9d2985bb732e13958322cf4e778713b2212343",
       "ai/diagnostics.json": "169381e6d46c8c79a62094c9af94f64455d066829f10742312177e4202cef999",
       "ai/schemas/runifold-ai.schema.json": "acac3f6396e0f24809d4ee26501c3aaa54421857c296b6a7c2dc195e26aaee60",
       "ai/validation.json": "ba19551e6bb98b5e176af0ade0e15a8d5395db021d17cda45f39f51e131701bb",
       "bindings/python/README.md": "74a257901de95b2586a787e31eb930e5c1b187abd9d3c49ec84198f9c1b781e9",
-      "crates/runifold-agent/Cargo.toml": "6f551feeeb5720615221aca552ae889498b03d5674860612ff5d375aa7231249",
+      "crates/runifold-agent/Cargo.toml": "b046c6a17bfe09f72352908b50c08827236daae334784849b05e14e0dd8ec516",
       "crates/runifold-agent/src/agent.rs": "2876fa4c697314e713442025cf9d2098967e2ea500c54d0494570bba8ad52c24",
       "crates/runifold-agent/src/agent/callable.rs": "8eaa6dabdd3ae4b503ac461964dfb5b55a39732f6d829544d03d366de37f6d48",
-      "crates/runifold-agent/src/agent/completion.rs": "9da41f2f8b9812539bb5ec60bfd3bab6d732c46a37d370d577132e1fb3e00b87",
+      "crates/runifold-agent/src/agent/completion.rs": "6c6896889b397f4093aff973954c8a748afb5ad801697e54bc320cad6b31db9a",
       "crates/runifold-agent/src/agent/context.rs": "230e2eb1274d81b68d7c193abdeb07d5b8ff061747bed8ecd73d4bf3c1536621",
       "crates/runifold-agent/src/agent/context_runtime.rs": "05fab3235e322af7c65349fae1539c6a22c1e4cab5aecff8f96a4ecad6f89463",
-      "crates/runifold-agent/src/agent/execution.rs": "9b2b9dc4d3c1d3700b1ce51155364b8539dc6f9b7a92e1e1fec441c97f6926f4",
-      "crates/runifold-agent/src/agent/review.rs": "81c0c4d2c6d22699b586609d4ce3b9c6f995e15682bd2c350dbf1f936cc145bb",
-      "crates/runifold-agent/src/agent/tests.rs": "e79b1937a921b3b6954290993c16f11f06f51712bcfe3627ea5ef8f0d04d187e",
+      "crates/runifold-agent/src/agent/execution.rs": "f76b10189fadf800a5e8275c0a2c9caf33b4ab41db3bf0f41a2ec064a31fa0cb",
+      "crates/runifold-agent/src/agent/review.rs": "e9ec27386816980ab6456747986ec90f9ee74efa54292e0c4aeb38c592368b8d",
+      "crates/runifold-agent/src/agent/tests.rs": "7c4d04b9c1cf1ce01ed57a03bee9701e4071564d54c124a5056a03265d8e3349",
       "crates/runifold-agent/src/builder.rs": "f8e1f726de924cb3eda89f880b643918d5f30e4de6dbe643d0cf30fb70813244",
-      "crates/runifold-agent/src/completion.rs": "916d182744f008ef4fbfae5456e7e3ddef3ea21481fea854c45f211215bad0c9",
+      "crates/runifold-agent/src/completion.rs": "3ab0662f38233d5df4cc0ad483f8c0c1b5e8b29e7f72b53bdf5f1d4caba82a82",
       "crates/runifold-agent/src/conversation.rs": "e7e419710d621d21b7e92a1dcb6893b77b247a049cc7c3738ebb21124d4c754a",
       "crates/runifold-agent/src/conversation/session.rs": "d02737c56062d4383f713189de890fd81757f1ae330c6d820e3558b2d1d8a388",
       "crates/runifold-agent/src/stream.rs": "06e92995fd56e29c072496c7ee1097243711bb0d89045d2e31af0be578e31ee5",
       "crates/runifold-agent/src/structured.rs": "4ec453cfc042ed3dbc3b11306378c22da94de6b8a35a83762d9690c195153421",
-      "crates/runifold-agent/src/terminal_review.rs": "b978dad7a359ce4fbac87ef5b15396a18bc722c80cc9698c8de604a39d05028f",
-      "crates/runifold-cli/Cargo.toml": "01f403bc014869ad0a737e8d6dfaa7adb5b43f597b109cc86df3ef3bbc5a4a56",
+      "crates/runifold-agent/src/terminal_review.rs": "5b08f0afe1b91449a1274907616e1da62356d0522b72dc18ee90d7b6cefd8a16",
+      "crates/runifold-cli/Cargo.toml": "398b23b020870ac94aa9e4db1e8944da8da8057d206f6c281ab04a4defba26b2",
       "crates/runifold-cli/src/ai/environment.rs": "c895023cdbdbbe7a4cdfd05724adb9212b2b857af1942232ef12e13acd6cb0b5",
       "crates/runifold-core/Cargo.toml": "7ce8ea845fc8096c087c902e00d3062934f7657c284de29c640f348ac3899fee",
       "crates/runifold-core/src/context.rs": "a8ff0cde83b71c70195a28e0be0d4b3cd2dc2a93a143d1e2cdf8bb71f407fa36",
@@ -2130,21 +2135,22 @@
       "crates/runifold-effect/src/error.rs": "942a13f435f98c73f24a0cb3882f6f8402c389b67402fa69534fb771af1a9541",
       "crates/runifold-effect/src/executor.rs": "d24510702f78fff64e277e337607580dc8c13d2c54fec5f05503e7306c711073",
       "crates/runifold-effect/src/handler.rs": "03d62ef77fba83f4b79476aad1b9ba4faef8cac42271451a84a876335278424c",
-      "crates/runifold-eval-cli/Cargo.toml": "009c3a0e9d41e27c3ba921639d77b8d9f2e76826d0c45ac73ebffc963d807291",
+      "crates/runifold-eval-cli/Cargo.toml": "861136733d04598401503dc2bc561580bbdfc62c5df19595814678451b888ac3",
       "crates/runifold-macros/Cargo.toml": "f70455b858a7124a116a12434faa4a99fc256589193586bef1ce9f55dfbd7ac5",
       "crates/runifold-macros/src/lib.rs": "6dedc818ba245c9908b9d92805a94b1c75c0d3373077dece1b0947b8d2dc4d10",
-      "crates/runifold-mcp/Cargo.toml": "c3f172ad3f8f6346ba1531d29d82843e5e9a202aeae9e46abfe92320bae931a1",
+      "crates/runifold-mcp/Cargo.toml": "81a7974381869018d0d6c9e513e958889b0e7d52dfa7c0ab20bbc4dc7e622e72",
       "crates/runifold-model/Cargo.toml": "a202b6198df7d297585d582c239f119ae231f3cfcbbedd9f436e039eb01b592f",
       "crates/runifold-model/src/error.rs": "133ff163188490ea2e7e1d7028817ecbf6aa6a1d78b7be791c59921c44374c48",
-      "crates/runifold-model/src/invocation.rs": "39ae686ba9e77555cee40547fba58a9b870c570802e1f5cf678a56b5638821f5",
+      "crates/runifold-model/src/invocation.rs": "6c6ebfb90488e7be9b0daddbc5b280f1ef217e7f447233ca58118e72e15a6711",
+      "crates/runifold-model/src/router.rs": "8110331e044ee69471cc966d448a1332d6ee8782333fab07f30fc87d8602b549",
       "crates/runifold-model/src/runtime_profile.rs": "6eb046e321dcfcc00559890f8b115aec85822addb18cfea6edbad978a0c3d5f5",
       "crates/runifold-model/src/scheduling.rs": "20b534437d6397c389e0b5b315a7a011abf907da9e76f7879d83a4e869cd5b31",
-      "crates/runifold-model/src/scheduling/model.rs": "bc30355f861ee9ca1c38f430bcb9f294b166422840553435df0aecfa3a7ea110",
+      "crates/runifold-model/src/scheduling/model.rs": "54bc8e6421b01deb871daf8a8e4459d560fd837334cae752a1c2e5675ec33779",
       "crates/runifold-model/src/scheduling/state.rs": "e17c80cee180130ace466c8b97697e563320cb4d163b6ad3d37c3fdf1f8f896a",
       "crates/runifold-model/src/scheduling/tests_lifecycle.rs": "295f71f33addc016b871d66f713791e40e84649ac38ec2a122e9405a998574f8",
-      "crates/runifold-observability-otel/Cargo.toml": "91eb807088d3846484bac4d15eb98a91626203d95229b263b945cf7e2828072e",
+      "crates/runifold-observability-otel/Cargo.toml": "c9a7f2729b5ed8817dfe0c1c9eaf7da74413e235a105053851f597f082bb4ab1",
       "crates/runifold-ops/Cargo.toml": "919f145025f4c38b9c5545c4c421f15f11a1626bfebb2974dccc799243df0c8a",
-      "crates/runifold-provider-testkit/Cargo.toml": "ee868dbe0d7832d78327ed75f7864fdb5f4c82ec305c48704f486a9106d61631",
+      "crates/runifold-provider-testkit/Cargo.toml": "e84c861878d19af7db804548c64beb8ccbd032372e47c9a415d124a2d8de04c2",
       "crates/runifold-provider-testkit/src/conformance.rs": "1656a086c91028c9cc0d1e78d2bdbec498833d50804b4d9a6cdcc254cd3239f3",
       "crates/runifold-providers/Cargo.toml": "5b2ebda440fb7cea9c1f42d328dfdac1f24e85fb389f2994e0c6a2378ba9a681",
       "crates/runifold-providers/src/anthropic.rs": "9745d39be70afd199b8ee303d7993e0ad9100b99f6d51497dcc4c53ac66d4865",
@@ -2155,15 +2161,15 @@
       "crates/runifold-retrieval-text/Cargo.toml": "9d56fb9745b1326b48309a0ad687b7560e82969900770190106a5fe2c8819ca3",
       "crates/runifold-retrieval/Cargo.toml": "f2d849527b0fe1c20d0c6e49334f03c8321b9f2f805e38eca579eebc8156ec1e",
       "crates/runifold-retrieval/src/retriever.rs": "39e7c94105b142231d0a6749a82f9b24c2c8acc53c378c4880f8a8b9fe768259",
-      "crates/runifold-store-postgres/Cargo.toml": "8b38dd81e922bece6550e20829238d3778927908f756ac11e67632b4f30994a9",
-      "crates/runifold-store-sqlite/Cargo.toml": "b13a076d5d509a602e81fd8b520fcb7221b4733d071691e24baebab482769f42",
+      "crates/runifold-store-postgres/Cargo.toml": "5c7b123bb4b4ea11e72cdac017ca252a6c6d7e1d71c333fc7d0f71a8f8eeacbb",
+      "crates/runifold-store-sqlite/Cargo.toml": "1f65d6aaa7e20a620989d495c2e5388976e7e309a67938a59aeb877baa61e15d",
       "crates/runifold-testkit/Cargo.toml": "8513274b4e545ad7c51220417434ba7fe5c11cbdb80c50aa20c19bd13fb5753d",
       "crates/runifold-tool/Cargo.toml": "469ab923ddfe99c264cdc00410c5a064bcc19d866f01425eafd3bf82b5e6a8ab",
       "crates/runifold-tool/src/context.rs": "745e3ff5f02022efd7a7dd46814e39cc281f8b592e537d504610aa2032f83d31",
       "crates/runifold-tool/src/error.rs": "7f1704a0de3628b4e52cbf78d210b4e1ed4b584f9e74f51e5bf1a6dc5ad7251a",
       "crates/runifold-tool/src/registry.rs": "4bd49d13c9716848b76a9f2bf1b239753df8ba96dcdad0d3e930f8878a272588",
       "crates/runifold-workflow/Cargo.toml": "867809da9aac25caae43f90740b9db415c7857c08adb64607014cc276dfec7a2",
-      "crates/runifold/Cargo.toml": "923059d9d5ff16f6fc539b34a7a51a5a2edde9c88221663a5a69ee5795a5c680",
+      "crates/runifold/Cargo.toml": "88e96c185aaf0a6ba7389273091ee2d3621c96c0bd8be290ae13c064637c7f26",
       "crates/runifold/examples/ai_retrieval.rs": "37db3138beed08432b9e5bc7c550f319b54296fc4dba85146813de1e605ca48f",
       "crates/runifold/examples/ai_reviewer.rs": "7e6da57c73dc8e623a10d350cd88f6d4b1adace786337363125610aa6d3f7148",
       "crates/runifold/examples/ai_stream.rs": "f1ffff65ccde696aaba235f84778ee493358f9debdfefdaebe800fff53997bd4",
@@ -2176,14 +2182,14 @@
       "crates/runifold/examples/quickstart.rs": "91158dd54cdd7d7bd9264de62c66dd7743f19dfb43f25193864e139c74c8de9e",
       "crates/runifold/examples/shared_model_capacity.rs": "6f464740f426c31272930d875492ca5cb4c55486306d54a9de98d09e08389d43",
       "crates/runifold/examples/workflow_chain.rs": "12f5ddfc7875587674b52f52dd85a463322e475dcbb71abdf611709598a52a9d",
-      "crates/runifold/src/lib.rs": "21c0804642086422d3a60e721fac08f837d058b17fcace7ccde6fe8598d2660b",
-      "crates/runifold/tests/ai_api_contract.rs": "c89d962e8006a9cc0663e4256be1908480adfa55e14c7a0d21c5dd229855be5a",
+      "crates/runifold/src/lib.rs": "d69b86989aade89d60301afb762e207f54c030dc6089e947ab661a0321b8381a",
+      "crates/runifold/tests/ai_api_contract.rs": "d93b2336776339ddaecf6f3282e679ddfe5282eee38cbc3ec9a3747a0920925f",
       "crates/runifold/tests/request_stability.rs": "6837cb4328449282cf1c0e79138728092c560fe9344c43a0c51eef2e1fa799db",
       "crates/runifold/tests/typed_tool_macro.rs": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be",
       "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
       "docs/PROVIDERS.md": "d505b0522fc9f0fd2eb5c2ae8993540e21bc9ff636807666863dee3771101864",
       "docs/RELEASING.md": "02fd47aad8cfb04a2ad4ca38f88f1b7629f0768b3b41257ee507324b97ee2ebf",
-      "docs/ai/catalog.json": "d4ba08353ae8d11d4bc8bfc7b2ebcaf9010ee9c9848e5959d6fd34db877a3e3a",
+      "docs/ai/catalog.json": "2fdb93866be35d9d6c999de62159e02ef83662df72274fefeb0f9985119d6123",
       "docs/rfcs/0013-agent-callable-effects.md": "ee1dd43df9d5859e93a5b5f93dd01f6634b5e5e4dcbb07c16d887f4a5d89ef17",
       "docs/rfcs/0016-typed-function-tools.md": "5de77af96529a348709b4e271fedc10d3280bd53723a8a48e7ed9250fa6f2599",
       "docs/rfcs/0017-tool-state-and-errors.md": "c1844189849fa7a8dc4b35739e7097416ba10584b2fe4a7878379e2bf2f4ce76",
@@ -2200,11 +2206,11 @@
       "docs/rfcs/0073-production-agent-sessions.md": "f65fa4aa23c567e7b80981fe42a04cde7b167dbf99d6fdbb1a34c3343c16f6ed",
       "docs/rfcs/0075-shared-model-request-scheduling.md": "ffb475c93832ca0b752a9afab856a3aa87835d61ac395f1aa34e0417a85102ac",
       "docs/rfcs/0078-budgeted-agent-context.md": "506607b90709ce57fbc392e33f8d024f46203825ff4da0bedd1b39cf23f624f8",
-      "docs/rfcs/0079-application-sdks.md": "95b8b19374f1513d0845127e5ba9b83a8144a2af111b593a0eae117afba6dd47",
+      "docs/rfcs/0079-application-sdks.md": "edfa2e462539b0f0807c254778f621efdc269414229bf06d808b543b5f8eaea1",
       "scripts/ai-check.py": "0eed3e3cc4db13cc0c51983690d5949260e0f9b9b80ce18e4e376f29567bb89d",
       "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
       "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
     },
-    "digest": "636f1f0e33b1d3b00fac2345a5b8794fbe7f83fd70a2c2847dd94b43de1aba93"
+    "digest": "066ea682c33670ffba07f90970c58664741e43035ccefcc700efbcc5898d1346"
   }
 }

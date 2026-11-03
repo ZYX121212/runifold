@@ -145,3 +145,51 @@ fn context_management_symbols_and_budget_contract_are_public() {
     assert_eq!(error.run_error_kind(), RunErrorKind::BudgetExceeded);
     assert_eq!(error.retry_safety(), RetrySafety::Unknown);
 }
+
+#[test]
+fn application_completion_and_lossless_review_contracts_are_public() {
+    let limits = runifold::ReviewLimits::new(8 * 1024 * 1024, 2 * 1024 * 1024);
+    let original = serde_json::json!({"original_evidence": "原始🦀".repeat(20_000)});
+    let verdict =
+        runifold::TerminalReviewVerdict::repair_with_limits(original.clone(), limits).unwrap();
+    assert_eq!(serde_json::to_value(verdict).unwrap()["feedback"], original);
+    assert_eq!(
+        runifold::TerminalReviewPolicy::new(1)
+            .with_limits(limits)
+            .limits(),
+        limits
+    );
+    assert_eq!(
+        runifold::TurnReviewPolicy::new(1)
+            .with_limits(limits)
+            .limits(),
+        limits
+    );
+    let completion = runifold::CompletionRequirement::new()
+        .max_repairs(1)
+        .retry_truncated_response(true);
+    assert!(completion.retries_truncated_response());
+    assert_eq!(completion.max_terminal_repairs(), 1);
+    let _: fn(&runifold::ModelCallContext) -> Option<runifold::ModelRouteReceipt> =
+        runifold::ModelCallContext::route_receipt;
+    let _ = std::any::type_name::<(
+        runifold::ModelRouteReceipt,
+        runifold::ModelRouteAttemptReceipt,
+        runifold::ModelRequestOutcome,
+    )>();
+}
+
+#[test]
+fn terminal_failure_discriminants_preserve_the_published_numeric_contract() {
+    use runifold::TerminalRequirementFailureKind;
+    assert_eq!(TerminalRequirementFailureKind::EmptyResponse as isize, 0);
+    assert_eq!(
+        TerminalRequirementFailureKind::MissingStructuredText as isize,
+        1
+    );
+    assert_eq!(
+        TerminalRequirementFailureKind::InvalidStructuredOutput as isize,
+        2
+    );
+    assert_eq!(TerminalRequirementFailureKind::Refusal as isize, 3);
+}

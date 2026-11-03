@@ -256,6 +256,11 @@ impl ScheduledStream {
             error.retry_safety = RetrySafety::UnsafeAfterVisibleOutput;
         }
         self.finish(false);
+        if let Some(usage) = self.usage {
+            error
+                .metadata
+                .insert("runifold.request.usage".into(), serde_json::json!(usage));
+        }
         let error =
             self.diagnostics
                 .failure(error, self.scheduler.shared.clock.now(), self.visible);

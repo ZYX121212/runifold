@@ -54,7 +54,9 @@ impl Agent {
             transcript: progress.transcript.clone(),
             candidate: response.clone(),
         };
-        request.validate().map_err(AgentError::TurnReview)?;
+        request
+            .validate_with_limits(review.policy.limits())
+            .map_err(AgentError::TurnReview)?;
         let mut child = run.child(review.capabilities.clone()).map_err(|error| {
             AgentError::TurnReviewAuthorityEscalation {
                 capability: error.capability,
@@ -173,7 +175,7 @@ impl Agent {
             .map_err(crate::TerminalReviewError::bounded)
             .and_then(|verdict| {
                 verdict
-                    .validate()
+                    .validate_with_limits(review.policy.limits())
                     .map_err(crate::TerminalReviewError::bounded)?;
                 Ok(verdict)
             });
@@ -306,7 +308,7 @@ impl Agent {
             transcript: progress.transcript.clone(),
             candidate: response.clone(),
         };
-        request.validate()?;
+        request.validate_with_limits(review.policy.limits())?;
         let mut child = run.child(review.capabilities.clone()).map_err(|error| {
             AgentError::TerminalReviewAuthorityEscalation {
                 capability: error.capability,
@@ -412,7 +414,7 @@ impl Agent {
             .map_err(crate::TerminalReviewError::bounded)
             .and_then(|verdict| {
                 verdict
-                    .validate()
+                    .validate_with_limits(review.policy.limits())
                     .map_err(crate::TerminalReviewError::bounded)?;
                 Ok(verdict)
             });
