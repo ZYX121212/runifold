@@ -178,3 +178,18 @@ fn application_completion_and_lossless_review_contracts_are_public() {
         runifold::ModelRequestOutcome,
     )>();
 }
+
+#[test]
+fn terminal_failure_discriminants_preserve_the_published_numeric_contract() {
+    use runifold::TerminalRequirementFailureKind;
+    assert_eq!(TerminalRequirementFailureKind::EmptyResponse as isize, 0);
+    assert_eq!(
+        TerminalRequirementFailureKind::MissingStructuredText as isize,
+        1
+    );
+    assert_eq!(
+        TerminalRequirementFailureKind::InvalidStructuredOutput as isize,
+        2
+    );
+    assert_eq!(TerminalRequirementFailureKind::Refusal as isize, 3);
+}

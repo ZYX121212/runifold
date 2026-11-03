@@ -243,14 +243,14 @@
     "runifold::CompletionRequirement": {
       "source": "crates/runifold-agent/src/completion.rs",
       "declaration": "pub struct CompletionRequirement",
-      "source_sha256": "659681a3c52a0846b6949df0ed2509888f8e350085a127bfdf3922361a97be6d",
+      "source_sha256": "3ab0662f38233d5df4cc0ad483f8c0c1b5e8b29e7f72b53bdf5f1d4caba82a82",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
     "runifold::CompletionRequirement::retry_truncated_response": {
       "source": "crates/runifold-agent/src/completion.rs",
       "declaration": "pub const fn retry_truncated_response(mut self, enabled: bool) -> Self",
-      "source_sha256": "659681a3c52a0846b6949df0ed2509888f8e350085a127bfdf3922361a97be6d",
+      "source_sha256": "3ab0662f38233d5df4cc0ad483f8c0c1b5e8b29e7f72b53bdf5f1d4caba82a82",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },

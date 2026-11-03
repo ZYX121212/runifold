@@ -2121,7 +2121,7 @@
         "crates/runifold-agent/src/agent/review.rs": "e9ec27386816980ab6456747986ec90f9ee74efa54292e0c4aeb38c592368b8d",
         "crates/runifold-agent/src/agent/tests.rs": "7c4d04b9c1cf1ce01ed57a03bee9701e4071564d54c124a5056a03265d8e3349",
         "crates/runifold-agent/src/builder.rs": "f8e1f726de924cb3eda89f880b643918d5f30e4de6dbe643d0cf30fb70813244",
-        "crates/runifold-agent/src/completion.rs": "659681a3c52a0846b6949df0ed2509888f8e350085a127bfdf3922361a97be6d",
+        "crates/runifold-agent/src/completion.rs": "3ab0662f38233d5df4cc0ad483f8c0c1b5e8b29e7f72b53bdf5f1d4caba82a82",
         "crates/runifold-agent/src/conversation.rs": "e7e419710d621d21b7e92a1dcb6893b77b247a049cc7c3738ebb21124d4c754a",
         "crates/runifold-agent/src/conversation/session.rs": "d02737c56062d4383f713189de890fd81757f1ae330c6d820e3558b2d1d8a388",
         "crates/runifold-agent/src/stream.rs": "06e92995fd56e29c072496c7ee1097243711bb0d89045d2e31af0be578e31ee5",
@@ -2184,7 +2184,7 @@
         "crates/runifold/examples/shared_model_capacity.rs": "6f464740f426c31272930d875492ca5cb4c55486306d54a9de98d09e08389d43",
         "crates/runifold/examples/workflow_chain.rs": "12f5ddfc7875587674b52f52dd85a463322e475dcbb71abdf611709598a52a9d",
         "crates/runifold/src/lib.rs": "d69b86989aade89d60301afb762e207f54c030dc6089e947ab661a0321b8381a",
-        "crates/runifold/tests/ai_api_contract.rs": "b6cfa0971fa55a693f3a1dfca6881c54e6c1b68abc350c234082ec4816102845",
+        "crates/runifold/tests/ai_api_contract.rs": "d93b2336776339ddaecf6f3282e679ddfe5282eee38cbc3ec9a3747a0920925f",
         "crates/runifold/tests/request_stability.rs": "6837cb4328449282cf1c0e79138728092c560fe9344c43a0c51eef2e1fa799db",
         "crates/runifold/tests/typed_tool_macro.rs": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be",
         "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
@@ -2212,7 +2212,7 @@
         "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
         "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
       },
-      "digest": "0666e9a2ffc6ac5a3849d994d97a469e91c567902dbeeabb565d7e24905bc8f8"
+      "digest": "066ea682c33670ffba07f90970c58664741e43035ccefcc700efbcc5898d1346"
     }
   },
   "documents": {
@@ -2476,14 +2476,14 @@
     "runifold::CompletionRequirement": {
       "source": "crates/runifold-agent/src/completion.rs",
       "declaration": "pub struct CompletionRequirement",
-      "source_sha256": "659681a3c52a0846b6949df0ed2509888f8e350085a127bfdf3922361a97be6d",
+      "source_sha256": "3ab0662f38233d5df4cc0ad483f8c0c1b5e8b29e7f72b53bdf5f1d4caba82a82",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },
     "runifold::CompletionRequirement::retry_truncated_response": {
       "source": "crates/runifold-agent/src/completion.rs",
       "declaration": "pub const fn retry_truncated_response(mut self, enabled: bool) -> Self",
-      "source_sha256": "659681a3c52a0846b6949df0ed2509888f8e350085a127bfdf3922361a97be6d",
+      "source_sha256": "3ab0662f38233d5df4cc0ad483f8c0c1b5e8b29e7f72b53bdf5f1d4caba82a82",
       "verification": "source_declaration_plus_compile_contract",
       "compile_contract": "crates/runifold/tests/ai_api_contract.rs"
     },

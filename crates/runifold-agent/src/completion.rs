@@ -69,8 +69,6 @@ impl CompletionRequirement {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TerminalRequirementFailureKind {
-    /// The provider ended a response at its output length limit.
-    TruncatedResponse,
     /// No model-visible terminal content was produced.
     EmptyResponse,
     /// A structured response contained no textual JSON body.
@@ -79,6 +77,8 @@ pub enum TerminalRequirementFailureKind {
     InvalidStructuredOutput,
     /// The provider returned an explicit refusal.
     Refusal,
+    /// The provider ended a response at its output length limit.
+    TruncatedResponse,
 }
 
 /// Safe, bounded diagnostic for a rejected terminal candidate.
