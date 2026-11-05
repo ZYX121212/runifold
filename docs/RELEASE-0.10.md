@@ -171,3 +171,10 @@ The reason is untrusted private text (bounded to 16 KiB with an explicit
 truncation marker); ordinary Display, safe diagnostics, route receipts and
 durable RunError normalization exclude it. No opt-in is needed to retain
 or explicitly inspect the reason.
+
+## 0.10.9 publication and maintenance policy
+
+0.10.9 includes the HTTP diagnostics fix from the unpublished 0.10.8 tag.
+Rust 1.88 remains supported. Two exact-version unmaintained notices have
+maintainer-approved exceptions through 2026-12-05 00:00 UTC; no vulnerability
+or other warning is excepted. See RELEASING.md for the executable audit gate.

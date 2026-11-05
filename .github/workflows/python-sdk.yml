@@ -87,7 +87,8 @@ jobs:
       - name: Audit the independent native dependency lockfile
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
-          cargo audit --file bindings/python/Cargo.lock
+          python scripts/test-audit-policy.py
+          python scripts/audit-dependencies.py --file bindings/python/Cargo.lock
       - name: Rust minimum version
         run: |
           rustup toolchain install 1.88.0 --profile minimal

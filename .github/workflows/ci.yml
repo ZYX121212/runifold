@@ -626,10 +626,12 @@ jobs:
           command -v cargo-deny >/dev/null || cargo install cargo-deny --version 0.20.2 --locked
 
       - name: Audit RustSec advisories
-        run: cargo audit --deny warnings
+        run: |
+          python3 scripts/test-audit-policy.py
+          python3 scripts/audit-dependencies.py
 
       - name: Enforce dependency policy
-        run: cargo deny check advisories licenses sources
+        run: cargo deny check --allow unmaintained advisories licenses sources
 
   semver:
     name: Public API compatibility

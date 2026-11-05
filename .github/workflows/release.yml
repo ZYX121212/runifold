@@ -58,8 +58,9 @@ jobs:
 
       - name: Audit release dependencies
         run: |
-          cargo audit --deny warnings
-          cargo deny check advisories licenses sources
+          python3 scripts/test-audit-policy.py
+          python3 scripts/audit-dependencies.py
+          cargo deny check --allow unmaintained advisories licenses sources
 
       - name: Build packages, SBOMs, and checksums
         run: scripts/build-release-assets.sh

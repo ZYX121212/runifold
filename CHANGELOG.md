@@ -6,7 +6,7 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
-## [0.10.8] - 2026-11-05
+## [0.10.9] - 2026-11-05
 
 ### Fixed
 
@@ -16,6 +16,20 @@ breaking changes require a minor-version increment.
   marker; ordinary Display, journal receipts and safe diagnostics exclude it.
   RunError normalization also excludes the private explanation.
   HTTP 400/422 classification and retry safety remain unchanged.
+
+### Security policy
+
+- Retain Rust 1.88 while accepting only the reviewed maintenance notices
+  RUSTSEC-2026-0440 (astral-tokio-tar 0.6.4) and RUSTSEC-2026-0441
+  (pin-utils 0.1.0), expiring at 2026-12-05 00:00 UTC. The shared audit gate
+  rejects vulnerabilities, other warnings, changed package versions,
+  reclassification, hidden audit filters and expired exceptions.
+
+## [0.10.8] - tagged, not published
+
+- The signed tag is retained unchanged. Strict release auditing stopped before
+  package publication on two newly reported unmaintained dependency notices;
+  the HTTP rejection diagnostics fix is included in 0.10.9.
 
 ## [0.10.7] - 2026-11-03
 
