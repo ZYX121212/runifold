@@ -2188,7 +2188,7 @@
       "crates/runifold/tests/typed_tool_macro.rs": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be",
       "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
       "docs/PROVIDERS.md": "d505b0522fc9f0fd2eb5c2ae8993540e21bc9ff636807666863dee3771101864",
-      "docs/RELEASING.md": "bb274797caace15ed276072ff41146bbe17f354af939e328c0fb7460a3896bf1",
+      "docs/RELEASING.md": "e0273d7964c0714e8aab7e45c4d4941392d12dc455ad48ad93165ce8ef8f3e9a",
       "docs/ai/catalog.json": "4ca246f1d48a09400083f5e5fc9489bbe7fb310120039b7e384a5c45f0894242",
       "docs/rfcs/0013-agent-callable-effects.md": "ee1dd43df9d5859e93a5b5f93dd01f6634b5e5e4dcbb07c16d887f4a5d89ef17",
       "docs/rfcs/0016-typed-function-tools.md": "5de77af96529a348709b4e271fedc10d3280bd53723a8a48e7ed9250fa6f2599",
@@ -2211,6 +2211,6 @@
       "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
       "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
     },
-    "digest": "1fcae0ee9b573adb7f22b4aa73ede7c95a3a37cd6a7d2b90f4acd7270c6f45c2"
+    "digest": "0f68e1c1b0df7c85618bc9d13412eb40631b680c7d3c6b03ec6572c3afb1d9b3"
   }
 }

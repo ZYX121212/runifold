@@ -35,6 +35,16 @@ class AuditPolicyTest(unittest.TestCase):
         self.config = tomllib.loads((ROOT / "advisory-exceptions.toml").read_text())
         self.allowed = POLICY.exceptions(self.config, TODAY)
 
+    def test_secondary_maintenance_lint_cannot_bypass_the_canonical_gate(self):
+        for name in ["ci.yml", "release.yml"]:
+            text = (ROOT / ".github/workflows" / name).read_text()
+            primary = "python3 scripts/audit-dependencies.py"
+            secondary = "cargo deny check --allow unmaintained advisories licenses sources"
+            self.assertIn(primary, text)
+            self.assertIn(secondary, text)
+            self.assertLess(text.index(primary), text.index(secondary))
+            self.assertNotIn("--ignore", text)
+
     def test_exact_reviewed_maintenance_notices_are_accepted(self):
         data = report()
         data["warnings"]["unmaintained"] = [warning(i, e["package"], e["version"])

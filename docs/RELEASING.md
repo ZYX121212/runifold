@@ -144,7 +144,10 @@ and project ownership are external prerequisites, not proof of publication.
 Run `python3 scripts/test-audit-policy.py` and
 `python3 scripts/audit-dependencies.py` for the canonical strict RustSec gate.
 CI, tagged releases and the independent Python lockfile use the same gate;
-license and source checks remain enforced by `cargo deny`.
+license, source and vulnerability checks remain enforced by `cargo deny`.
+Its secondary unmaintained lint is delegated to the preceding canonical gate
+(`--allow unmaintained`), which permits only the two exact reviewed notices.
+Neither tool receives an ignored advisory ID.
 
 Maintainer approval on 2026-11-05 permits only RUSTSEC-2026-0440 for
 astral-tokio-tar 0.6.4 (database-test provisioning) and RUSTSEC-2026-0441 for

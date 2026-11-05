@@ -631,7 +631,7 @@ jobs:
           python3 scripts/audit-dependencies.py
 
       - name: Enforce dependency policy
-        run: cargo deny check advisories licenses sources
+        run: cargo deny check --allow unmaintained advisories licenses sources
 
   semver:
     name: Public API compatibility
