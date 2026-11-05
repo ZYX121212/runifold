@@ -313,7 +313,14 @@ impl AgentError {
     /// Normalizes this failure into the public run-level policy contract.
     pub fn to_run_error(&self) -> RunError {
         let metadata = match self {
-            Self::Model(error) => error.metadata.clone(),
+            Self::Model(error) => {
+                let mut metadata = error.metadata.clone();
+                // Run errors may be persisted by durable workflows. Keep explicit
+                // upstream inspection text on the original ModelError only.
+                metadata.remove("provider.error.message");
+                metadata.remove("provider.error.message_truncated");
+                metadata
+            }
             _ => BTreeMap::new(),
         };
         RunError {

@@ -193,3 +193,25 @@ fn terminal_failure_discriminants_preserve_the_published_numeric_contract() {
     );
     assert_eq!(TerminalRequirementFailureKind::Refusal as isize, 3);
 }
+
+#[test]
+fn model_error_exposes_explicit_private_provider_reason() {
+    let mut error = ModelError::local(ModelErrorKind::Provider, "HTTP 400");
+    assert_eq!(error.provider_message(), None);
+    error.metadata.insert(
+        "provider.error.message".into(),
+        "unsupported parameter: temperature".into(),
+    );
+    assert_eq!(
+        error.provider_message(),
+        Some("unsupported parameter: temperature")
+    );
+    assert!(!error.to_string().contains("temperature"));
+    assert!(
+        !error
+            .diagnostic_metadata()
+            .contains_key("provider.error.message")
+    );
+    let run_error = runifold::AgentError::Model(error).to_run_error();
+    assert!(!run_error.metadata.contains_key("provider.error.message"));
+}

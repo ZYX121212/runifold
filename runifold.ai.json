@@ -2140,7 +2140,7 @@
       "crates/runifold-macros/src/lib.rs": "6dedc818ba245c9908b9d92805a94b1c75c0d3373077dece1b0947b8d2dc4d10",
       "crates/runifold-mcp/Cargo.toml": "81a7974381869018d0d6c9e513e958889b0e7d52dfa7c0ab20bbc4dc7e622e72",
       "crates/runifold-model/Cargo.toml": "a202b6198df7d297585d582c239f119ae231f3cfcbbedd9f436e039eb01b592f",
-      "crates/runifold-model/src/error.rs": "133ff163188490ea2e7e1d7028817ecbf6aa6a1d78b7be791c59921c44374c48",
+      "crates/runifold-model/src/error.rs": "1a5758fb368b43e7247a89e5efc8cc49c31d1dd7964eb8470653de04ca7319c8",
       "crates/runifold-model/src/invocation.rs": "6c6ebfb90488e7be9b0daddbc5b280f1ef217e7f447233ca58118e72e15a6711",
       "crates/runifold-model/src/router.rs": "8110331e044ee69471cc966d448a1332d6ee8782333fab07f30fc87d8602b549",
       "crates/runifold-model/src/runtime_profile.rs": "6eb046e321dcfcc00559890f8b115aec85822addb18cfea6edbad978a0c3d5f5",
@@ -2183,13 +2183,13 @@
       "crates/runifold/examples/shared_model_capacity.rs": "6f464740f426c31272930d875492ca5cb4c55486306d54a9de98d09e08389d43",
       "crates/runifold/examples/workflow_chain.rs": "12f5ddfc7875587674b52f52dd85a463322e475dcbb71abdf611709598a52a9d",
       "crates/runifold/src/lib.rs": "d69b86989aade89d60301afb762e207f54c030dc6089e947ab661a0321b8381a",
-      "crates/runifold/tests/ai_api_contract.rs": "d93b2336776339ddaecf6f3282e679ddfe5282eee38cbc3ec9a3747a0920925f",
+      "crates/runifold/tests/ai_api_contract.rs": "3725755bb83bc07d89b5c3d9dd208cd6df1c898b6998f49342cb5bfab89482b3",
       "crates/runifold/tests/request_stability.rs": "6837cb4328449282cf1c0e79138728092c560fe9344c43a0c51eef2e1fa799db",
       "crates/runifold/tests/typed_tool_macro.rs": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be",
       "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
       "docs/PROVIDERS.md": "d505b0522fc9f0fd2eb5c2ae8993540e21bc9ff636807666863dee3771101864",
       "docs/RELEASING.md": "02fd47aad8cfb04a2ad4ca38f88f1b7629f0768b3b41257ee507324b97ee2ebf",
-      "docs/ai/catalog.json": "2fdb93866be35d9d6c999de62159e02ef83662df72274fefeb0f9985119d6123",
+      "docs/ai/catalog.json": "4ca246f1d48a09400083f5e5fc9489bbe7fb310120039b7e384a5c45f0894242",
       "docs/rfcs/0013-agent-callable-effects.md": "ee1dd43df9d5859e93a5b5f93dd01f6634b5e5e4dcbb07c16d887f4a5d89ef17",
       "docs/rfcs/0016-typed-function-tools.md": "5de77af96529a348709b4e271fedc10d3280bd53723a8a48e7ed9250fa6f2599",
       "docs/rfcs/0017-tool-state-and-errors.md": "c1844189849fa7a8dc4b35739e7097416ba10584b2fe4a7878379e2bf2f4ce76",
@@ -2206,11 +2206,11 @@
       "docs/rfcs/0073-production-agent-sessions.md": "f65fa4aa23c567e7b80981fe42a04cde7b167dbf99d6fdbb1a34c3343c16f6ed",
       "docs/rfcs/0075-shared-model-request-scheduling.md": "ffb475c93832ca0b752a9afab856a3aa87835d61ac395f1aa34e0417a85102ac",
       "docs/rfcs/0078-budgeted-agent-context.md": "506607b90709ce57fbc392e33f8d024f46203825ff4da0bedd1b39cf23f624f8",
-      "docs/rfcs/0079-application-sdks.md": "edfa2e462539b0f0807c254778f621efdc269414229bf06d808b543b5f8eaea1",
+      "docs/rfcs/0079-application-sdks.md": "6b9532c180fe2d0a20de0162689b5f5ed7507ec9fb4cf5326544461ec90d2f06",
       "scripts/ai-check.py": "0eed3e3cc4db13cc0c51983690d5949260e0f9b9b80ce18e4e376f29567bb89d",
       "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
       "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
     },
-    "digest": "066ea682c33670ffba07f90970c58664741e43035ccefcc700efbcc5898d1346"
+    "digest": "7b49b7d62ddfcbf7284bb69d83cb1d71643160546b8b219918fd24661a40a334"
   }
 }
