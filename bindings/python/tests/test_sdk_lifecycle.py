@@ -7,16 +7,30 @@ import warnings
 import pytest
 from runifold import Client, RetrySafety, RunifoldError, ToolContext, tool
 from runifold.testing import recorded_requests, scripted_client, text, tool_call
-from test_native_sdk import eventually
 
 
 async def test_second_result_consumer_does_not_cancel_owner():
-    async with scripted_client(text("kept"), delay_ms=20) as client:
-        run = client.agent("owner").start("hello")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    @tool(effect="pure")
+    async def hold() -> str:
+        entered.set()
+        await release.wait()
+        return "released"
+
+    async with scripted_client(tool_call("hold", {}), text("kept")) as client:
+        run = client.agent("owner", tools=[hold]).start("hello")
         owner = asyncio.create_task(run.result())
-        await eventually(lambda: client.snapshot()["model"]["pools"][0]["active"] == 1)
-        with pytest.raises(RuntimeError, match="consumer"):
-            await run.result()
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            # Yield to the scheduled owner while the real Tool keeps the Run
+            # pending. Model admission alone does not prove consumer ownership.
+            await asyncio.sleep(0)
+            with pytest.raises(RuntimeError, match="consumer"):
+                await run.result()
+        finally:
+            release.set()
         assert (await owner).text == "kept"
         assert (await run.result()).text == "kept"
 
