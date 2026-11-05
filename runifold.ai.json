@@ -2183,7 +2183,7 @@
       "crates/runifold/examples/shared_model_capacity.rs": "6f464740f426c31272930d875492ca5cb4c55486306d54a9de98d09e08389d43",
       "crates/runifold/examples/workflow_chain.rs": "12f5ddfc7875587674b52f52dd85a463322e475dcbb71abdf611709598a52a9d",
       "crates/runifold/src/lib.rs": "d69b86989aade89d60301afb762e207f54c030dc6089e947ab661a0321b8381a",
-      "crates/runifold/tests/ai_api_contract.rs": "80891d5101404cadb70c499fe34944fea3d32da2e2e6084e1db2e8c8195d125e",
+      "crates/runifold/tests/ai_api_contract.rs": "3725755bb83bc07d89b5c3d9dd208cd6df1c898b6998f49342cb5bfab89482b3",
       "crates/runifold/tests/request_stability.rs": "6837cb4328449282cf1c0e79138728092c560fe9344c43a0c51eef2e1fa799db",
       "crates/runifold/tests/typed_tool_macro.rs": "0aca38188cc6693a3364dbc36ba5f90b691eb52df47c6da57eb7b6a37c14c6be",
       "docs/CHARTER.md": "5f0b183fb0346eb60db4ed7231d86dbcf0e6c814751023c21ec2075ff41e22e3",
@@ -2206,11 +2206,11 @@
       "docs/rfcs/0073-production-agent-sessions.md": "f65fa4aa23c567e7b80981fe42a04cde7b167dbf99d6fdbb1a34c3343c16f6ed",
       "docs/rfcs/0075-shared-model-request-scheduling.md": "ffb475c93832ca0b752a9afab856a3aa87835d61ac395f1aa34e0417a85102ac",
       "docs/rfcs/0078-budgeted-agent-context.md": "506607b90709ce57fbc392e33f8d024f46203825ff4da0bedd1b39cf23f624f8",
-      "docs/rfcs/0079-application-sdks.md": "77abe955a51c46e79c15f03bc4f38de26a996178b5717db018ee9daf8727f425",
+      "docs/rfcs/0079-application-sdks.md": "6b9532c180fe2d0a20de0162689b5f5ed7507ec9fb4cf5326544461ec90d2f06",
       "scripts/ai-check.py": "0eed3e3cc4db13cc0c51983690d5949260e0f9b9b80ce18e4e376f29567bb89d",
       "scripts/ai-knowledge.py": "947f19584fff22ca2e44d6896be1508572b565f1e81e5f236baec56407f97903",
       "scripts/semver-check.sh": "60a692547704ed88371a85e5325c51ccb08fefa3d10a04cd98ec41d0d2a9c400"
     },
-    "digest": "3e8edb3cf40ea989ab84a5bd475b97a9c2d37fd13644302922088c712df9bc8b"
+    "digest": "7b49b7d62ddfcbf7284bb69d83cb1d71643160546b8b219918fd24661a40a334"
   }
 }

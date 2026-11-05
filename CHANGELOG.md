@@ -12,6 +12,7 @@ breaking changes require a minor-version increment.
   Gemini and Ollama model requests through `ModelError::provider_message()`.
   Explicit private inspection retains up to 16 KiB of UTF-8 text with a truncation
   marker; ordinary Display, journal receipts and safe diagnostics exclude it.
+  RunError normalization also excludes the private explanation.
   HTTP 400/422 classification and retry safety remain unchanged.
 
 ## [0.10.7] - 2026-11-03

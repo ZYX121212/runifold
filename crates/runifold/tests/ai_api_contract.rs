@@ -212,4 +212,6 @@ fn model_error_exposes_explicit_private_provider_reason() {
             .diagnostic_metadata()
             .contains_key("provider.error.message")
     );
+    let run_error = runifold::AgentError::Model(error).to_run_error();
+    assert!(!run_error.metadata.contains_key("provider.error.message"));
 }

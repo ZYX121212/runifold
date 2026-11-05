@@ -243,7 +243,8 @@ OpenAI-compatible and Anthropic protocols return `error.message`, Gemini returns
 these fields in private `provider.error.message` metadata, exposed by
 `ModelError::provider_message()`. This is untrusted upstream text and may echo
 private request data. It is intentionally excluded from Display, safe diagnostics
-and route receipts. Complete error Debug/serialization includes private metadata.
+and route receipts. `AgentError::to_run_error` removes it before durable error
+normalization. Complete ModelError Debug/serialization includes private metadata.
 No configuration is needed to retain or explicitly read the reason:
 
 ```rust,ignore
