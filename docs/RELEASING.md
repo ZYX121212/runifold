@@ -138,3 +138,26 @@ exact version confirmation, verifies tag/source/version and the complete asset
 checksum set, checks distribution metadata, then publishes those exact archives
 with OIDC. It never rebuilds a package while publishing. PyPI credentials/trust
 and project ownership are external prerequisites, not proof of publication.
+
+## Expiring maintenance-only audit exceptions
+
+Run `python3 scripts/test-audit-policy.py` and
+`python3 scripts/audit-dependencies.py` for the canonical strict RustSec gate.
+CI, tagged releases and the independent Python lockfile use the same gate;
+license and source checks remain enforced by `cargo deny`.
+
+Maintainer approval on 2026-11-05 permits only RUSTSEC-2026-0440 for
+astral-tokio-tar 0.6.4 (database-test provisioning) and RUSTSEC-2026-0441 for
+pin-utils 0.1.0 (the Rust-1.88-compatible Smithy dependency). The policy is in
+`advisory-exceptions.toml` and expires at 2026-12-05 00:00 UTC. Expired or
+premature exceptions fail even when no current finding uses them; remove or
+explicitly re-review the policy rather than silently renewing it.
+
+The gate requests the complete unignored audit JSON with all warnings enabled.
+It never passes `--ignore`: any vulnerability remains fatal, including a
+reviewed advisory later reclassified as a vulnerability. Other warning kinds,
+unknown advisories, changed package versions, hidden filters, audit failures
+and malformed reports also fail. Exceptions cannot exceed 30 days.
+
+The v0.10.8 tag remains immutable after its audit rejection; publish the
+forward-fix version rather than moving or rebuilding that tag.

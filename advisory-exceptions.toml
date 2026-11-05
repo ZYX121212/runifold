@@ -1,0 +1,21 @@
+schema_version = 1
+
+# Maintainer-approved on 2026-11-05. These are maintenance notices, not
+# vulnerability waivers. The audit gate enforces exact versions and UTC expiry.
+[[exceptions]]
+id = "RUSTSEC-2026-0440"
+package = "astral-tokio-tar"
+version = "0.6.4"
+kind = "unmaintained"
+approved_on = "2026-11-05"
+expires = "2026-12-05"
+reason = "Indirect database-test dependency through testcontainers. Retain the existing real-container test coverage while a maintained upstream replacement is evaluated."
+
+[[exceptions]]
+id = "RUSTSEC-2026-0441"
+package = "pin-utils"
+version = "0.1.0"
+kind = "unmaintained"
+approved_on = "2026-11-05"
+expires = "2026-12-05"
+reason = "Indirect optional Bedrock dependency through aws-smithy-types 1.4.3. Newer official Smithy versions require Rust 1.91+, while Runifold retains Rust 1.88."
