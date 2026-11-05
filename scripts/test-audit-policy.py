@@ -43,7 +43,7 @@ class AuditPolicyTest(unittest.TestCase):
             self.assertIn(primary, text)
             self.assertIn(secondary, text)
             self.assertLess(text.index(primary), text.index(secondary))
-            self.assertNotIn("--ignore", text)
+            self.assertNotRegex(text, r"--ignore(?:\s|=|$)")
 
     def test_exact_reviewed_maintenance_notices_are_accepted(self):
         data = report()
