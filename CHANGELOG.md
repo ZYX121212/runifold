@@ -6,6 +6,8 @@ breaking changes require a minor-version increment.
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-11-05
+
 ### Fixed
 
 - Preserve server-provided HTTP failure reasons for OpenAI-compatible, Anthropic,
