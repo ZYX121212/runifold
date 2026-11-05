@@ -1,5 +1,40 @@
 //! Conservative retry-safety classification shared by HTTP providers.
 
+/// Retains upstream text only in explicit, private diagnostic metadata.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai"
+))]
+pub(crate) fn retain_error_message(
+    error: &mut runifold_model::ModelError,
+    detail: &serde_json::Value,
+) {
+    const LIMIT: usize = 16 * 1024;
+    let Some(message) = detail
+        .as_str()
+        .or_else(|| detail.get("message").and_then(serde_json::Value::as_str))
+    else {
+        return;
+    };
+    if message.is_empty() {
+        return;
+    }
+    let mut end = message.len().min(LIMIT);
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    error
+        .metadata
+        .insert("provider.error.message".into(), message[..end].into());
+    if end < message.len() {
+        error
+            .metadata
+            .insert("provider.error.message_truncated".into(), true.into());
+    }
+}
+
 #[cfg(any(
     feature = "anthropic",
     feature = "gemini",
@@ -19,7 +54,9 @@ pub(crate) fn http_failure_message(status: StatusCode) -> String {
     let action = match status.as_u16() {
         401 => "verify provider authentication",
         403 => "verify provider access policy",
-        400 | 422 => "review the request and structured error classification",
+        400 | 422 => {
+            "review the request; inspect ModelError::provider_message() for the upstream reason"
+        }
         429 => "honor retry timing and review shared provider limits",
         500..=599 => "inspect provider availability; remote execution and usage may be unknown",
         _ => "inspect the status and structured error classification",
@@ -104,6 +141,43 @@ pub(crate) fn classify_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(any(
+        feature = "anthropic",
+        feature = "gemini",
+        feature = "ollama",
+        feature = "openai"
+    ))]
+    fn upstream_message_is_bounded_and_absent_fields_do_not_invent_a_reason() {
+        use runifold_model::{ModelError, ModelErrorKind};
+        use serde_json::json;
+        for payload in [
+            json!(null),
+            json!({}),
+            json!({"message":42}),
+            json!({"message":""}),
+        ] {
+            let mut error = ModelError::local(ModelErrorKind::Provider, "safe");
+            retain_error_message(&mut error, &payload);
+            assert_eq!(error.provider_message(), None);
+        }
+        let message = "中".repeat(6000);
+        let mut error = ModelError::local(ModelErrorKind::Provider, "safe");
+        retain_error_message(&mut error, &json!({"message":message}));
+        let retained = error
+            .provider_message()
+            .expect("upstream message was supplied");
+        assert_eq!(retained.len(), 16383);
+        assert!(message.starts_with(retained));
+        assert_eq!(error.metadata["provider.error.message_truncated"], true);
+        assert_eq!(error.to_string(), "Provider: safe");
+        assert!(
+            !error
+                .diagnostic_metadata()
+                .contains_key("provider.error.message")
+        );
+    }
 
     #[test]
     fn browser_timeouts_round_up_without_overflowing_the_fetch_timer() {

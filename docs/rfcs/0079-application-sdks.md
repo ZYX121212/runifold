@@ -235,3 +235,30 @@ The Agent and default Model collector attach this snapshot when their outer
 cancellation wins, preserving earlier failures and known usage even when the
 router cannot deliver a terminal event. Dropping a stream leaves dispatched
 attempts Unknown. This does not grant retry authority or certify remote shutdown.
+
+### Inspecting HTTP rejection reasons
+
+OpenAI-compatible and Anthropic protocols return `error.message`, Gemini returns
+`error.message`, and Ollama returns an `error` string. Model HTTP adapters retain
+these fields in private `provider.error.message` metadata, exposed by
+`ModelError::provider_message()`. This is untrusted upstream text and may echo
+private request data. It is intentionally excluded from Display, safe diagnostics
+and route receipts. Complete error Debug/serialization includes private metadata.
+No configuration is needed to retain or explicitly read the reason:
+
+```rust,ignore
+if let Some(reason) = error.provider_message() {
+    // Inspect locally or show in an access-controlled diagnostic view.
+    // Do not forward to shared logs, telemetry or model history.
+}
+```
+
+Messages are limited to 16 KiB at a UTF-8 boundary. The metadata flag
+`provider.error.message_truncated` explicitly identifies shortening. Empty,
+non-string, missing and non-JSON error bodies produce `None`; the SDK never
+invents a server reason. HTTP status and retry authority remain independent.
+
+Protocol references: [OpenAI errors](https://developers.openai.com/api/docs/guides/error-codes),
+[Claude error shapes](https://platform.claude.com/docs/en/api/errors),
+[Gemini errors](https://ai.google.dev/gemini-api/docs/api-errors),
+[Ollama errors](https://docs.ollama.com/api/errors).

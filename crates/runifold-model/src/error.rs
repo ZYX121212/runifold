@@ -48,6 +48,20 @@ pub struct ModelError {
 }
 
 impl ModelError {
+    /// Returns untrusted provider explanation text for explicit local inspection.
+    ///
+    /// This may contain echoed prompts, credentials or other private data. Do not
+    /// forward it to ordinary logs, telemetry, journals or model history. HTTP
+    /// adapters retain at most 16 KiB on a UTF-8 boundary and mark truncation in
+    /// `provider.error.message_truncated`. Missing, malformed or empty messages
+    /// return `None`. Display and `diagnostic_metadata()` exclude this text;
+    /// serialization and Debug of the complete error include private metadata.
+    pub fn provider_message(&self) -> Option<&str> {
+        self.metadata
+            .get("provider.error.message")
+            .and_then(Value::as_str)
+    }
+
     /// Projects bounded operational metadata without messages or private payloads.
     ///
     /// Only validated numeric fields, lifecycle facts, and recognized provider

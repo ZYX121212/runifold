@@ -222,11 +222,14 @@ async fn http_error(
         Either::Left(_) => return Err(cancelled()),
         Either::Right((result, _)) => result.map_err(|error| transport(&error, deadline))?,
     };
-    // Consume the response for transport completion without reflecting its body.
-    drop(text);
+    let payload = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
     let message = crate::reliability::http_failure_message(status);
     let mut error = ModelError::local(ModelErrorKind::Provider, message);
     error.provider = Some("ollama".into());
+    crate::reliability::retain_error_message(
+        &mut error,
+        payload.get("error").unwrap_or(&Value::Null),
+    );
     crate::reliability::classify_status(status, &mut error);
     error
         .metadata

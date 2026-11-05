@@ -52,10 +52,15 @@ fn client(provider: &str, server: &CassetteServer) -> Box<dyn Model> {
 #[tokio::test]
 async fn http_error_bodies_are_not_reflected_in_display_and_retry_safety_is_preserved() {
     for (provider, model, path) in CASES {
-        for status in [429, 503] {
-            let response = ScriptedResponse::json(status, &json!({"error":{
-                "message":PRIVATE, "type":"server_error", "code":"provider_unavailable", "status":"UNAVAILABLE"
-            }})).unwrap();
+        for status in [400, 422, 429, 503] {
+            let payload = if provider == "ollama" {
+                json!({"error":PRIVATE})
+            } else {
+                json!({"error":{
+                    "message":PRIVATE, "type":"server_error", "code":"provider_unavailable", "status":"UNAVAILABLE"
+                }})
+            };
+            let response = ScriptedResponse::json(status, &payload).unwrap();
             let server =
                 CassetteServer::start(vec![HttpExchange::new("POST", path, response)]).unwrap();
             let error = client(provider, &server)
@@ -65,6 +70,7 @@ async fn http_error_bodies_are_not_reflected_in_display_and_retry_safety_is_pres
                 )
                 .await
                 .unwrap_err();
+            assert_eq!(error.provider_message(), Some(PRIVATE));
             assert_eq!(error.kind, ModelErrorKind::Provider);
             assert_eq!(error.metadata["http.status"], status);
             assert_eq!(
@@ -126,5 +132,36 @@ async fn streamed_provider_error_messages_are_not_reflected_in_display() {
         assert_eq!(error.kind, ModelErrorKind::Provider);
         assert!(!error.to_string().contains(PRIVATE));
         assert_eq!(error.retry_safety, RetrySafety::Unknown);
+    }
+}
+
+#[tokio::test]
+async fn http_400_without_a_protocol_message_does_not_invent_one() {
+    for (provider, model, path) in CASES {
+        for body in [
+            "{}",
+            r#"{"error":{"message":42}}"#,
+            "<html>bad request</html>",
+        ] {
+            let server = CassetteServer::start(vec![HttpExchange::new(
+                "POST",
+                path,
+                ScriptedResponse {
+                    status: 400,
+                    ..ScriptedResponse::ok(vec![ResponseChunk::text(body)])
+                },
+            )])
+            .unwrap();
+            let error = client(provider, &server)
+                .invoke(
+                    ModelRequest::new(ModelRef::new(provider, model), Message::user("fixture")),
+                    ModelCallContext::new(),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.metadata["http.status"], 400);
+            assert_eq!(error.provider_message(), None);
+            assert_eq!(error.retry_safety, RetrySafety::Unknown);
+        }
     }
 }

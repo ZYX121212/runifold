@@ -224,6 +224,7 @@ async fn http_error(
     error
         .metadata
         .insert("http.status".into(), Value::from(status.as_u16()));
+    crate::reliability::retain_error_message(&mut error, detail);
     if let Some(value) = detail.get("status") {
         error
             .metadata

@@ -343,6 +343,7 @@ fn http_error(
             Value::from(u64::try_from(retry_after.as_millis()).unwrap_or(u64::MAX)),
         );
     }
+    crate::reliability::retain_error_message(&mut model_error, error);
     if let Some(error_type) = error.get("type") {
         model_error
             .metadata
