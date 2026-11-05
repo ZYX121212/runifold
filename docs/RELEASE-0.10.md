@@ -162,3 +162,12 @@ Durable event cursors, background execution independent of subscription,
 automatic external fencing, a general approval service, automatic checkpoint
 migration and arbitrary multi-Agent scheduling remain future work. Their absence
 does not weaken the narrower contracts above; applications must not assume them.
+
+## 0.10.8 HTTP rejection diagnostics
+
+Model HTTP adapters preserve protocol-provided error reasons through
+`ModelError::provider_message()`. HTTP 400/422 hints point to that accessor.
+The reason is untrusted private text (bounded to 16 KiB with an explicit
+truncation marker); ordinary Display, safe diagnostics, route receipts and
+durable RunError normalization exclude it. No opt-in is needed to retain
+or explicitly inspect the reason.
